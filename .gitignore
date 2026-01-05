@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+.benv/
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project Specific
+data/database/*.db
+data/exports/*
+data/cache/*
+!data/database/.keep
+!data/exports/.keep
+!data/cache/.keep
+
+# Models (large files)
+data/models/*
+!data/models/.keep
+!data/models/README.md
+
+# Environment variables
+.env
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Obsidian vault (user specific)
+*.obsidian/

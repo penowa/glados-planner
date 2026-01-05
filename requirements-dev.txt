@@ -1,0 +1,14 @@
+# requirements-dev.txt
+-r requirements.txt
+
+# Additional dev tools
+jupyter==1.0.0
+ipython==8.18.1
+ipdb==0.13.13
+autopep8==2.0.4
+flake8==6.1.0
+bandit==1.7.5
+safety==2.3.5
+pytest-benchmark==4.0.0
+pytest-mock==3.12.0
+pytest-xdist==3.5.0

@@ -1,0 +1,41 @@
+# Philosophy Planner - Configuration
+
+app:
+  name: "Philosophy Planner"
+  version: "0.1.0"
+  debug: true
+  log_level: "INFO"
+
+paths:
+  vault: "~/Documents/Obsidian/Philosophy_Vault"  # Update this path
+  data_dir: "./data"
+  models_dir: "./data/models"
+  exports_dir: "./data/exports"
+
+database:
+  url: "sqlite:///data/database/philosophy.db"
+  echo: false
+
+llm:
+  model_path: "./data/models/philosophy-llama-7b.Q4_K_M.gguf"
+  n_ctx: 2048
+  n_gpu_layers: 0  # Set based on your GPU
+  temperature: 0.7
+  top_p: 0.95
+
+obsidian:
+  templates_dir: "./config/templates"
+  auto_sync: true
+  sync_interval: 300  # seconds
+
+pomodoro:
+  work_duration: 25
+  short_break: 5
+  long_break: 15
+  sessions_before_long_break: 4
+
+features:
+  enable_llm: true
+  enable_obsidian_sync: true
+  enable_pomodoro: true
+  enable_translation: false
