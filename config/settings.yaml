@@ -1,32 +1,103 @@
-# Philosophy Planner - Configuration
-
+# config/settings.yaml
 app:
-  name: "Philosophy Planner"
-  version: "0.1.0"
+  name: "Glados Planner"
+  version: "0.4.0"
   debug: true
   log_level: "INFO"
 
 paths:
-  vault: "~/Documents/Obsidian/Philosophy_Vault"  # Update this path
+  vault: "~/Documentos/Obsidian/Philosophy_Vault"
   data_dir: "./data"
   models_dir: "./data/models"
   exports_dir: "./data/exports"
+  cache_dir: "./data/cache"
 
 database:
   url: "sqlite:///data/database/philosophy.db"
   echo: false
 
+# Seção LLM completa
 llm:
-  model_path: "./data/models/philosophy-llama-7b.Q4_K_M.gguf"
+  # Configurações do modelo TinyLlama 1.1B
+  model_name: "TinyLlama-1.1B-Chat-v1.0"
+  model_path: "./data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
   n_ctx: 2048
-  n_gpu_layers: 0  # Set based on your GPU
-  temperature: 0.7
-  top_p: 0.95
+  n_gpu_layers: 0
+  temperature: 0.8
+  top_p: 0.9
+  repeat_penalty: 1.1
+  max_tokens: 512
+  
+  # Otimizações para CPU
+  cpu:
+    threads: 4
+    batch_size: 128
+    use_mlock: true
+  
+  # Personalidade GLaDOS
+  glados:
+    user_name: "Helio"
+    glados_name: "GLaDOS"
+    gender: "feminino"
+    personality_intensity: 0.7
+    enable_sarcasm: true
+    enable_brain_metaphor: true
+    
+    # Comportamento por área do vault
+    area_behavior:
+      meta:
+        sarcasm_level: 0.6
+        formality: 0.9
+      leituras:
+        sarcasm_level: 0.7
+        formality: 0.8
+      conceitos:
+        sarcasm_level: 0.8
+        formality: 0.9
+      disciplinas:
+        sarcasm_level: 0.6
+        formality: 0.8
+      pessoal:
+        sarcasm_level: 0.3
+        formality: 0.4
+      geral:
+        sarcasm_level: 0.5
+        formality: 0.7
+    
+    # Configurações de resposta
+    response:
+      include_intro_comment: true
+      include_signature: true
+      max_response_length: 1000
 
 obsidian:
   templates_dir: "./config/templates"
   auto_sync: true
-  sync_interval: 300  # seconds
+  sync_interval: 300
+  
+  # Estrutura validada do vault
+  vault_structure:
+    - "00-META/"
+    - "01-LEITURAS/"
+    - "02-DISCIPLINAS/"
+    - "03-PRODUÇÃO/"
+    - "04-AGENDA/"
+    - "05-CONCEITOS/"
+    - "06-RECURSOS/"
+    - "07-PESSOAL/"
+    - "08-ARCHIVE/"
+  
+  # Mapeamento de regiões cerebrais
+  brain_regions:
+    "00-META": "sistema"
+    "01-LEITURAS": "memoria_longo_prazo"
+    "02-DISCIPLINAS": "cortex_pre_frontal"
+    "03-PRODUÇÃO": "criatividade"
+    "04-AGENDA": "memoria_operacional"
+    "05-CONCEITOS": "conceitos_consolidados"
+    "06-RECURSOS": "procedimentos"
+    "07-PESSOAL": "autobiografica"
+    "08-ARCHIVE": "arquivo"
 
 pomodoro:
   work_duration: 25
@@ -39,3 +110,16 @@ features:
   enable_obsidian_sync: true
   enable_pomodoro: true
   enable_translation: false
+  enable_glados_personality: true
+  enable_vault_as_brain: true
+
+cache:
+  enabled: true
+  max_size: 100
+  ttl: 3600
+  preload_vault: false
+
+development:
+  log_llm_prompts: false
+  log_vault_access: false
+  simulate_llm: false
