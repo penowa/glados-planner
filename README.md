@@ -1,4 +1,4 @@
-# 📚 Philosophy Planner
+Glados Planner
 
 <div align="center">
 
