@@ -4,17 +4,24 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from typing import Generator
+from pathlib import Path
 
 from ..config.settings import settings
 
+# CORREÇÃO: Usar settings.paths.data_dir em vez de settings.data_dir
+data_dir = Path(settings.paths.data_dir)
+database_dir = data_dir / "database"
+
 # Cria diretório do banco de dados se não existir
-settings.data_dir.mkdir(parents=True, exist_ok=True)
-(settings.data_dir / "database").mkdir(parents=True, exist_ok=True)
+data_dir.mkdir(parents=True, exist_ok=True)
+database_dir.mkdir(parents=True, exist_ok=True)
 
 # Engine e Session
 engine = create_engine(
-    settings.database_url,
-    echo=settings.database_echo,
+    # CORREÇÃO: Usar settings.database.url em vez de settings.database_url
+    settings.database.url,
+    # CORREÇÃO: Usar settings.database.echo em vez de settings.database_echo
+    echo=settings.database.echo,
     connect_args={"check_same_thread": False}  # Para SQLite
 )
 
