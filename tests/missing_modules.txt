@@ -1,0 +1,11 @@
+Módulos documentados mas não implementados:
+
+- src.core.llm.local_llm
+- src.core.database.obsidian_sync
+- src.core.modules.reading_manager
+- src.core.modules.agenda_manager
+- src.cli.commands.data_commands
+- src.core.modules.translation_module
+- src.core.modules.pomodoro_timer
+- src.core.modules.writing_assistant
+- src.core.modules.review_system
