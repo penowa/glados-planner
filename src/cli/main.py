@@ -58,13 +58,13 @@ console = Console()
 
 # Incluir subcomandos apenas se existirem
 if HAS_GLADOS:
-    app.add_typer(glados_app, name="glados", help="[cyan]Comandos do cérebro GLaDOS[/cyan]")
+    app.add_typer(glados_app, name="glados", help="[blue]Comandos do cérebro GLaDOS[/blue]")
 
 if HAS_DATA_COMMANDS:
-    app.add_typer(data_app, name="data", help="[green]Comandos de gestão de dados[/green]")
+    app.add_typer(data_app, name="data", help="[blue]Comandos de gestão de dados[/blue]")
 
 if HAS_OBSIDIAN_COMMANDS:
-    app.add_typer(obsidian_app, name="obsidian", help="[yellow]Comandos de integração Obsidian[/yellow]")
+    app.add_typer(obsidian_app, name="obsidian", help="[blue]Comandos de integração Obsidian[/blue]")
 
 # Global state (to be properly managed later)
 vault_manager = None
@@ -80,7 +80,7 @@ GLADOS_COMMENTS = [
     "Iniciando protocolos de assistência. Por 'assistência', quero dizer 'observação condescendente'.",
     "Carregando... enquanto isso, tente lembrar por que você começou a estudar filosofia.",
     "Sistema pronto. Espero que você tenha trazido café, porque vou precisar.",
-    "Analisando seu progresso... ah, sim. Exatamente o que eu esperava."
+    "Analisando seu progresso... ah, yes. Exatamente o que eu esperava."
 ]
 
 def show_welcome(verbose: bool = False, silent: bool = False):
@@ -90,21 +90,21 @@ def show_welcome(verbose: bool = False, silent: bool = False):
         return
     
     console.print(Panel.fit(
-        "🤖 [bold magenta]GLaDOS Planner[/bold magenta]",
+        "🤖 [bold blue]GLaDOS Planner[/bold blue]",
         subtitle="[dim]Sistema de Gestão Acadêmica Filosófica[/dim]",
-        border_style="magenta",
+        border_style="blue",
         box=ROUNDED
     ))
     
     if verbose:
-        console.print("[bold yellow]🔍 Modo verboso ativado[/bold yellow]")
+        console.print("[bold orange1]🔍 Modo verboso ativado[/bold orange1]")
         console.print("[dim]Eu vou te contar tudo. Absolutamente tudo. Você pediu.[/dim]")
     
-    console.print("\n[dim]Use [cyan]glados --help[/cyan] para ver todos os comandos.[/dim]")
-    console.print("[dim]Ou use [green]glados init[/green] para começar.[/dim]\n")
+    console.print("\n[dim]Use [blue]glados --help[/blue] para ver todos os comandos.[/dim]")
+    console.print("[dim]Ou use [blue]glados init[/blue] para começar.[/dim]\n")
     
     comment = random.choice(GLADOS_COMMENTS)
-    console.print(f"[italic cyan]\"{comment}\"[/italic cyan]")
+    console.print(f"[italic blue]\"{comment}\"[/italic blue]")
     console.print("[dim]— GLaDOS[/dim]\n")
 
 @app.callback()
@@ -126,12 +126,12 @@ def main(
         return
     
     if verbose and not silent:
-        console.print("[bold yellow]🔍 Modo verboso ativado[/bold yellow]")
+        console.print("[bold orange1]🔍 Modo verboso ativado[/bold orange1]")
         console.print("[dim]Eu vou te contar tudo. Absolutamente tudo. Você pediu.[/dim]")
     
     if not silent:
         comment = random.choice(GLADOS_COMMENTS)
-        console.print(f"\n[italic cyan]\"{comment}\"[/italic cyan]")
+        console.print(f"\n[italic blue]\"{comment}\"[/italic blue]")
         console.print("[dim]— GLaDOS[/dim]\n")
 
 @app.command()
@@ -152,9 +152,9 @@ def init(
     
     if not silent:
         console.print(Panel.fit(
-            "🚀 [bold magenta]Inicializando GLaDOS Planner[/bold magenta]",
+            "🚀 [bold blue]Inicializando GLaDOS Planner[/bold blue]",
             subtitle="[dim]Isso pode demorar um pouco. Ou não. Depende de quantos erros você cometeu.[/dim]",
-            border_style="magenta",
+            border_style="blue",
             box=ROUNDED
         ))
     else:
@@ -170,7 +170,7 @@ def init(
         console=console,
     ) as progress:
         # Task 1: Initialize database
-        task1 = progress.add_task("[cyan]Inicializando banco de dados...", total=None)
+        task1 = progress.add_task("[blue]Inicializando banco de dados...", total=None)
         try:
             init_db()
             progress.update(task1, completed=True)
@@ -184,7 +184,7 @@ def init(
             raise typer.Exit(1)
         
         # Task 2: Setup vault manager
-        task2 = progress.add_task("[cyan]Configurando gerenciador do vault...", total=None)
+        task2 = progress.add_task("[blue]Configurando gerenciador do vault...", total=None)
         global vault_manager
         try:
             vault_manager = VaultManager(vault_path)
@@ -193,14 +193,14 @@ def init(
             progress.update(task2, completed=True)
             if not silent:
                 console.print(f"[green]✓[/green] [dim]Gerenciador do vault configurado[/dim]")
-                console.print(f"[dim]   Encontrei seu cérebro externo em: [cyan]{vault_path}[/cyan][/dim]")
+                console.print(f"[dim]   Encontrei seu cérebro externo em: [blue]{vault_path}[/blue][/dim]")
         except Exception as e:
-            console.print(f"[yellow]⚠️  Aviso: {e}[/yellow]")
+            console.print(f"[orange1]⚠️  Aviso: {e}[/orange1]")
             if not silent:
-                console.print("[yellow]   Você pode configurar o vault posteriormente. Ou não. Depende de você.[/yellow]")
+                console.print("[orange1]   Você pode configurar o vault posteriormente. Ou não. Depende de você.[/orange1]")
         
         # Task 3: Verificar módulos
-        task3 = progress.add_task("[cyan]Verificando módulos...", total=None)
+        task3 = progress.add_task("[blue]Verificando módulos...", total=None)
         progress.update(task3, completed=True)
         
         # Verificar quais módulos estão disponíveis
@@ -251,8 +251,8 @@ def init(
     # Mostrar tabela de status dos módulos
     if not silent:
         table = Table(title="📦 Status dos Módulos", box=ROUNDED, border_style="blue")
-        table.add_column("Módulo", style="cyan", no_wrap=True)
-        table.add_column("Status", justify="center")
+        table.add_column("Módulo", style="blue", no_wrap=True)
+        table.add_column("Status", justify="center", style="orange1")
         
         for module, status in modules_status:
             table.add_row(module, status)
@@ -260,7 +260,7 @@ def init(
         console.print("\n")
         console.print(table)
     
-    # Mensagem de sucesso - CORRIGIDA: não concatenar string com Panel
+    # Mensagem de sucesso
     if not silent:
         console.print("\n")
         console.print(Panel.fit(
@@ -274,10 +274,10 @@ def init(
     
     if not silent:
         console.print("\n[bold]Próximos passos (caso você precise de instruções):[/bold]")
-        console.print("1. [cyan]glados glados consultar[/cyan] 'O que é filosofia?' - Teste meu cérebro")
-        console.print("2. [green]glados data leituras[/green] - Gerencie suas leituras")
-        console.print("3. [yellow]glados obsidian vault-status[/yellow] - Veja seu vault do Obsidian")
-        console.print("4. [magenta]glados status[/magenta] - Verifique o status completo do sistema")
+        console.print("1. [blue]glados glados consultar[/blue] 'O que é filosofia?' - Teste meu cérebro")
+        console.print("2. [blue]glados data leituras[/blue] - Gerencie suas leituras")
+        console.print("3. [blue]glados obsidian vault-status[/blue] - Veja seu vault do Obsidian")
+        console.print("4. [blue]glados status[/blue] - Verifique o status completo do sistema")
         console.print("\n[dim]Ou apenas comece a digitar comandos. Vamos ver no que dá.[/dim]")
 
 @app.command()
@@ -292,22 +292,23 @@ def version():
     
     try:
         v = version("glados-planner")
-        version_text = Text(f"GLaDOS Planner v{v}", style="bold magenta")
+        version_text = Text(f"GLaDOS Planner v{v}", style="bold blue")
     except PackageNotFoundError:
-        version_text = Text(f"GLaDOS Planner v{settings.app.version} (desenvolvimento)", style="bold yellow")
+        version_text = Text(f"GLaDOS Planner v{settings.app.version} (desenvolvimento)", style="bold orange1")
     
     console.print(Panel.fit(
         version_text,
         title="📦 Versão",
-        border_style="cyan",
+        border_style="blue",
         box=ROUNDED
     ))
     
-    console.print(f"[dim]Ambiente: {settings.app.environment}[/dim]")
-    console.print(f"[dim]Configuração: {settings.paths.config}[/dim]")
+    environment = "Desenvolvimento" if settings.app.debug else "Produção"
+    console.print(f"[dim]Ambiente: {environment}[/dim]")
+    console.print(f"[dim]Banco de dados: {settings.database.url}[/dim]")
     
     if HAS_GLADOS:
-        console.print(f"\n[dim]Usuário registrado: [cyan]{settings.llm.glados.user_name}[/cyan][/dim]")
+        console.print(f"\n[dim]Usuário registrado: [blue]{settings.llm.glados.user_name}[/blue][/dim]")
         console.print("[dim]Sim, eu sei quem você é. Não é como se você pudesse se esconder.[/dim]")
 
 @app.command()
@@ -320,15 +321,15 @@ def status():
     from src.core.config.settings import settings
     
     console.print(Panel.fit(
-        "📊 [bold]Status do Sistema GLaDOS Planner[/bold]",
+        "📊 [bold blue]Status do Sistema GLaDOS Planner[/bold blue]",
         subtitle="[dim]Analisando... analisando... ah, yes. Exatamente o que eu esperava.[/dim]",
-        border_style="cyan",
+        border_style="blue",
         box=ROUNDED
     ))
     
-    table = Table(title="Componentes do Sistema", box=ROUNDED)
-    table.add_column("Componente", style="cyan", no_wrap=True)
-    table.add_column("Status", justify="center")
+    table = Table(title="[blue]Componentes do Sistema[/blue]", box=ROUNDED)
+    table.add_column("Componente", style="blue", no_wrap=True)
+    table.add_column("Status", justify="center", style="orange1")
     table.add_column("Detalhes", style="dim")
     
     # Database status
@@ -336,23 +337,23 @@ def status():
         db = SessionLocal()
         from sqlalchemy import text
         db.execute(text("SELECT 1"))
-        db_status = "✅"
+        db_status = "[green]✅[/green]"
         db_details = "Conectado e funcionando"
     except Exception as e:
-        db_status = "❌"
+        db_status = "[red]❌[/red]"
         db_details = f"Desconectado: {str(e)[:50]}"
     
     # Vault status
     try:
         vault_manager = VaultManager(settings.paths.vault)
         if vault_manager.is_connected():
-            vault_status = "✅"
+            vault_status = "[green]✅[/green]"
             vault_details = "Vault conectado"
         else:
-            vault_status = "⚠️"
+            vault_status = "[orange1]⚠️[/orange1]"
             vault_details = "Não conectado"
     except Exception as e:
-        vault_status = "❌"
+        vault_status = "[red]❌[/red]"
         vault_details = f"Erro: {str(e)[:50]}"
     
     # Módulos status
@@ -363,7 +364,7 @@ def status():
     }
     
     for name, has_module in modules.items():
-        status = "✅" if has_module else "❌"
+        status = "[green]✅[/green]" if has_module else "[red]❌[/red]"
         details = "Disponível" if has_module else "Não encontrado"
         table.add_row(name, status, details)
     
@@ -375,13 +376,14 @@ def status():
     
     # Informações adicionais
     console.print("\n[bold]📋 Informações do Sistema:[/bold]")
-    console.print(f"  • Versão: [cyan]{settings.app.version}[/cyan]")
-    console.print(f"  • Ambiente: [yellow]{settings.app.environment}[/yellow]")
+    console.print(f"  • Versão: [blue]{settings.app.version}[/blue]")
+    environment = "Desenvolvimento" if settings.app.debug else "Produção"
+    console.print(f"  • Ambiente: [orange1]{environment}[/orange1]")
     console.print(f"  • Vault: [dim]{settings.paths.vault}[/dim]")
-    console.print(f"  • Configurações: [dim]{settings.paths.config}[/dim]")
+    console.print(f"  • Modelo LLM: [dim]{settings.llm.model_name}[/dim]")
     
     if HAS_GLADOS:
-        console.print(f"  • Usuário GLaDOS: [cyan]{settings.llm.glados.user_name}[/cyan]")
+        console.print(f"  • Usuário GLaDOS: [blue]{settings.llm.glados.user_name}[/blue]")
         console.print("  [dim]Sim, eu me lembro do seu nome. Não se sinta especial.[/dim]")
     
     # Estatísticas (se disponíveis)
@@ -393,8 +395,8 @@ def status():
             if isinstance(stats, dict) and "total_books" in stats:
                 console.print("\n[bold]📚 Estatísticas de Leitura:[/bold]")
                 console.print(f"  • Livros registrados: [green]{stats.get('total_books', 0)}[/green]")
-                console.print(f"  • Livros concluídos: [cyan]{stats.get('completed_books', 0)}[/cyan]")
-                console.print(f"  • Em progresso: [yellow]{stats.get('books_in_progress', 0)}[/yellow]")
+                console.print(f"  • Livros concluídos: [blue]{stats.get('completed_books', 0)}[/blue]")
+                console.print(f"  • Em progresso: [orange1]{stats.get('books_in_progress', 0)}[/orange1]")
     except:
         pass
     
@@ -408,45 +410,45 @@ def modules():
     Para quando você esquece quantas formas diferentes eu tenho de ajudá-lo.
     """
     console.print(Panel.fit(
-        "📦 [bold cyan]Módulos do GLaDOS Planner[/bold cyan]",
+        "📦 [bold blue]Módulos do GLaDOS Planner[/bold blue]",
         subtitle="[dim]Cada um mais útil que o outro. Relativamente falando.[/dim]",
-        border_style="cyan",
+        border_style="blue",
         box=ROUNDED
     ))
     
     # Módulos principais
     core_modules = [
-        ("🤖 [cyan]Cérebro GLaDOS[/cyan]", 
+        ("🤖 [blue]Cérebro GLaDOS[/blue]", 
          "Sistema de IA com personalidade única e... opiniões", 
-         "[dim]glados glados[/dim] [cyan]comando[/cyan]"),
+         "[dim]glados glados[/dim] [blue]comando[/blue]"),
         
-        ("📚 [green]Gerenciador de Leituras[/green]", 
+        ("📚 [blue]Gerenciador de Leituras[/blue]", 
          "Acompanha seu progresso de leitura (ou falta dele)", 
-         "[dim]glados data leituras[/dim] [green]comando[/green]"),
+         "[dim]glados data leituras[/dim] [blue]comando[/blue]"),
         
-        ("📅 [yellow]Agenda Acadêmica[/yellow]", 
+        ("📅 [blue]Agenda Acadêmica[/blue]", 
          "Gerencia prazos, porque você esquece", 
-         "[dim]glados data agenda[/dim] [yellow]comando[/yellow]"),
+         "[dim]glados data agenda[/dim] [blue]comando[/blue]"),
         
-        ("🌐 [magenta]Tradutor Filosófico[/magenta]", 
+        ("🌐 [blue]Tradutor Filosófico[/blue]", 
          "Traduz termos filosóficos (grego, latim, alemão)", 
-         "[dim]glados data traduzir[/dim] [magenta]termo[/magenta]"),
+         "[dim]glados data traduzir[/dim] [blue]termo[/blue]"),
         
         ("⏱️  [blue]Pomodoro Timer[/blue]", 
          "Técnica Pomodoro com citações filosóficas", 
          "[dim]glados data pomodoro[/dim] [blue]comando[/blue]"),
         
-        ("✍️  [green]Assistente de Escrita[/green]", 
+        ("✍️  [blue]Assistente de Escrita[/blue]", 
          "Auxilia na escrita acadêmica (com críticas construtivas)", 
-         "[dim]glados data escrever[/dim] [green]comando[/green]"),
+         "[dim]glados data escrever[/dim] [blue]comando[/blue]"),
         
-        ("🔄 [cyan]Sistema de Revisão[/cyan]", 
+        ("🔄 [blue]Sistema de Revisão[/blue]", 
          "Revisão espaçada com flashcards e quizzes", 
-         "[dim]glados data revisar[/dim] [cyan]comando[/cyan]"),
+         "[dim]glados data revisar[/dim] [blue]comando[/blue]"),
         
-        ("🔗 [yellow]Integração Obsidian[/yellow]", 
+        ("🔗 [blue]Integração Obsidian[/blue]", 
          "Sincroniza com seu vault do Obsidian", 
-         "[dim]glados obsidian[/dim] [yellow]comando[/yellow]"),
+         "[dim]glados obsidian[/dim] [blue]comando[/blue]"),
     ]
     
     for name, description, command in core_modules:
@@ -464,13 +466,12 @@ def modules():
     ]
     
     for name, available, module in availability:
-        status = "✅ Disponível" if available else "❌ Não encontrado"
-        style = "green" if available else "red"
-        console.print(f"  • {name}: [{style}]{status}[/{style}]")
+        status = "[green]✅ Disponível[/green]" if available else "[red]❌ Não encontrado[/red]"
+        console.print(f"  • {name}: {status}")
         if not available:
             console.print(f"    [dim]Módulo '{module}' não está disponível no momento[/dim]")
     
-    console.print("\n[dim]Use [cyan]glados --help[/cyan] para mais detalhes sobre cada comando.[/dim]")
+    console.print("\n[dim]Use [blue]glados --help[/blue] para mais detalhes sobre cada comando.[/dim]")
     console.print("[dim]Ou apenas tente adivinhar. Eu adoro ver você tentar.[/dim]")
 
 @app.command()
@@ -504,11 +505,11 @@ def setup_vault(
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task1 = progress.add_task("[cyan]Criando estrutura...", total=None)
+            task1 = progress.add_task("[blue]Criando estrutura...", total=None)
             result = vault_manager.create_structure()
             progress.update(task1, completed=True)
             
-            task2 = progress.add_task("[cyan]Aplicando template...", total=None)
+            task2 = progress.add_task("[blue]Aplicando template...", total=None)
             # Aqui poderíamos aplicar templates específicos
             progress.update(task2, completed=True)
         
@@ -516,20 +517,20 @@ def setup_vault(
             if not silent:
                 console.print(Panel.fit(
                     f"✅ [bold green]Vault configurado com sucesso![/bold green]",
-                    subtitle=f"[dim]Local: [cyan]{vault_path}[/cyan][/dim]",
+                    subtitle=f"[dim]Local: [blue]{vault_path}[/blue][/dim]",
                     border_style="green",
                     box=ROUNDED
                 ))
             
             console.print("\n[bold]📁 Estrutura criada:[/bold]")
             for folder in vault_manager.expected_folders:
-                console.print(f"  • [cyan]{folder}[/cyan]")
+                console.print(f"  • [blue]{folder}[/blue]")
             
             if not silent:
                 console.print("\n[dim]Agora você tem um lugar organizado para suas notas.[/dim]")
                 console.print("[dim]Tente mantê-lo assim. Eu estarei observando.[/dim]")
         else:
-            console.print("[yellow]⚠️  Vault já existe ou houve erro na criação[/yellow]")
+            console.print("[orange1]⚠️  Vault já existe ou houve erro na criação[/orange1]")
             console.print("[dim]Talvez você já tenha começado. Ou talvez tenha bagunçado algo.[/dim]")
     
     except Exception as e:
@@ -561,9 +562,9 @@ def backup(
     
     if not silent:
         console.print(Panel.fit(
-            "💾 [bold yellow]Criando backup do sistema[/bold yellow]",
+            "💾 [bold blue]Criando backup do sistema[/bold blue]",
             subtitle="[dim]Salvando seu progresso. Você sabe, caso você apague algo.[/dim]",
-            border_style="yellow",
+            border_style="blue",
             box=ROUNDED
         ))
     
@@ -576,7 +577,7 @@ def backup(
     backup_dir.mkdir(parents=True, exist_ok=True)
     
     with Progress() as progress:
-        task = progress.add_task("[cyan]Criando backup...", total=100)
+        task = progress.add_task("[blue]Criando backup...", total=100)
         
         # Backup do vault
         try:
@@ -584,14 +585,14 @@ def backup(
             vault_path = Path(settings.paths.vault).expanduser()
             if vault_path.exists():
                 vault_backup = backup_dir / "vault"
-                progress.update(task, advance=30, description="[cyan]Copiando vault...")
+                progress.update(task, advance=30, description="[blue]Copiando vault...")
                 shutil.copytree(vault_path, vault_backup)
                 if not silent:
                     console.print("[dim]   ✓ Vault copiado[/dim]")
             else:
-                console.print("[yellow]⚠️  Vault não encontrado, pulando...[/yellow]")
+                console.print("[orange1]⚠️  Vault não encontrado, pulando...[/orange1]")
         except Exception as e:
-            console.print(f"[yellow]⚠️  Erro ao copiar vault: {e}[/yellow]")
+            console.print(f"[orange1]⚠️  Erro ao copiar vault: {e}[/orange1]")
         
         # Backup do banco de dados
         if include_database:
@@ -600,23 +601,23 @@ def backup(
                 if db_path.exists():
                     db_backup = backup_dir / "database"
                     db_backup.mkdir(exist_ok=True)
-                    progress.update(task, advance=30, description="[cyan]Copiando banco de dados...")
+                    progress.update(task, advance=30, description="[blue]Copiando banco de dados...")
                     shutil.copy2(db_path, db_backup / "philosophy.db")
                     if not silent:
                         console.print("[dim]   ✓ Banco de dados copiado[/dim]")
             except Exception as e:
-                console.print(f"[yellow]⚠️  Erro ao copiar banco de dados: {e}[/yellow]")
+                console.print(f"[orange1]⚠️  Erro ao copiar banco de dados: {e}[/orange1]")
         
         # Backup das configurações
         try:
             config_backup = backup_dir / "config"
             config_backup.mkdir(exist_ok=True)
-            progress.update(task, advance=20, description="[cyan]Copiando configurações...")
+            progress.update(task, advance=20, description="[blue]Copiando configurações...")
             shutil.copytree("config", config_backup, dirs_exist_ok=True)
             if not silent:
                 console.print("[dim]   ✓ Configurações copiadas[/dim]")
         except Exception as e:
-            console.print(f"[yellow]⚠️  Erro ao copiar configurações: {e}[/yellow]")
+            console.print(f"[orange1]⚠️  Erro ao copiar configurações: {e}[/orange1]")
         
         # Criar arquivo de metadados
         metadata = {
@@ -638,7 +639,7 @@ def backup(
     
     console.print(Panel.fit(
         f"✅ [bold green]Backup criado com sucesso![/bold green]",
-        subtitle=f"[dim]Local: [cyan]{output_path}[/cyan]\nTamanho: [yellow]{total_size:.2f} MB[/yellow][/dim]",
+        subtitle=f"[dim]Local: [blue]{output_path}[/blue]\nTamanho: [orange1]{total_size:.2f} MB[/orange1][/dim]",
         border_style="green",
         box=ROUNDED
     ))
@@ -656,44 +657,44 @@ def diagnostico():
     (Spoiler: provavelmente foi você)
     """
     console.print(Panel.fit(
-        "🔍 [bold red]Diagnóstico do Sistema GLaDOS[/bold red]",
+        "🔍 [bold blue]Diagnóstico do Sistema GLaDOS[/bold blue]",
         subtitle="[dim]Analisando todos os componentes. Prepare-se para más notícias.[/dim]",
-        border_style="red",
+        border_style="blue",
         box=ROUNDED
     ))
     
     from src.core.config.settings import settings
     
     diagnostic_table = Table(title="Resultados do Diagnóstico", box=ROUNDED)
-    diagnostic_table.add_column("Teste", style="cyan")
-    diagnostic_table.add_column("Status", justify="center")
+    diagnostic_table.add_column("Teste", style="blue")
+    diagnostic_table.add_column("Status", justify="center", style="orange1")
     diagnostic_table.add_column("Detalhes", style="dim")
     
     # Teste 1: Configurações
     try:
         settings.app.version
-        diagnostic_table.add_row("Configurações", "✅", f"Versão {settings.app.version}")
+        diagnostic_table.add_row("Configurações", "[green]✅[/green]", f"Versão {settings.app.version}")
     except Exception as e:
-        diagnostic_table.add_row("Configurações", "❌", f"Erro: {str(e)[:50]}")
+        diagnostic_table.add_row("Configurações", "[red]❌[/red]", f"Erro: {str(e)[:50]}")
     
     # Teste 2: Banco de dados
     try:
         db = SessionLocal()
         from sqlalchemy import text
         db.execute(text("SELECT 1"))
-        diagnostic_table.add_row("Banco de Dados", "✅", "Conectado com sucesso")
+        diagnostic_table.add_row("Banco de Dados", "[green]✅[/green]", "Conectado com sucesso")
     except Exception as e:
-        diagnostic_table.add_row("Banco de Dados", "❌", f"Erro: {str(e)[:50]}")
+        diagnostic_table.add_row("Banco de Dados", "[red]❌[/red]", f"Erro: {str(e)[:50]}")
     
     # Teste 3: Vault
     try:
         vault_manager = VaultManager(settings.paths.vault)
         if vault_manager.is_connected():
-            diagnostic_table.add_row("Obsidian Vault", "✅", f"Conectado: {vault_manager.vault_path}")
+            diagnostic_table.add_row("Obsidian Vault", "[green]✅[/green]", f"Conectado: {vault_manager.vault_path}")
         else:
-            diagnostic_table.add_row("Obsidian Vault", "⚠️", "Vault não conectado")
+            diagnostic_table.add_row("Obsidian Vault", "[orange1]⚠️[/orange1]", "Vault não conectado")
     except Exception as e:
-        diagnostic_table.add_row("Obsidian Vault", "❌", f"Erro: {str(e)[:50]}")
+        diagnostic_table.add_row("Obsidian Vault", "[red]❌[/red]", f"Erro: {str(e)[:50]}")
     
     # Teste 4: Módulos
     modules_to_test = [
@@ -706,11 +707,11 @@ def diagnostico():
     for module_name, module_path in modules_to_test:
         try:
             __import__(module_path)
-            diagnostic_table.add_row(module_name, "✅", "Importado com sucesso")
+            diagnostic_table.add_row(module_name, "[green]✅[/green]", "Importado com sucesso")
         except ImportError as e:
-            diagnostic_table.add_row(module_name, "❌", f"Falha na importação")
+            diagnostic_table.add_row(module_name, "[red]❌[/red]", f"Falha na importação")
         except Exception as e:
-            diagnostic_table.add_row(module_name, "⚠️", f"Erro: {str(e)[:50]}")
+            diagnostic_table.add_row(module_name, "[orange1]⚠️[/orange1]", f"Erro: {str(e)[:50]}")
     
     console.print(diagnostic_table)
     
@@ -757,25 +758,25 @@ def sobre():
     (Ou, neste caso, quem está te observando)
     """
     console.print(Panel.fit(
-        "🤖 [bold magenta]GLaDOS Planner[/bold magenta]",
+        "🤖 [bold blue]GLaDOS Planner[/bold blue]",
         subtitle="[dim]Sistema de Gestão Acadêmica Filosófica[/dim]",
-        border_style="magenta",
+        border_style="blue",
         box=ROUNDED
     ))
     
     about_text = Text()
     about_text.append("Versão: ", style="bold")
-    about_text.append("0.4.0 (MVP Completo)\n", style="cyan")
+    about_text.append("0.4.0 (MVP Completo)\n", style="blue")
     
     about_text.append("Desenvolvido para: ", style="bold")
-    about_text.append("Estudantes de filosofia que precisam de organização\n", style="green")
+    about_text.append("Estudantes de filosofia que precisam de organização\n", style="blue")
     about_text.append("(e um pouco de atitude)\n\n", style="dim")
     
     about_text.append("Principais recursos:\n", style="bold")
-    about_text.append("  • 🤖 IA local com personalidade GLaDOS\n", style="cyan")
-    about_text.append("  • 📚 Gerenciamento completo de leituras\n", style="green")
-    about_text.append("  • 🔗 Integração nativa com Obsidian\n", style="yellow")
-    about_text.append("  • 🌐 Tradução de termos filosóficos\n", style="magenta")
+    about_text.append("  • 🤖 IA local com personalidade GLaDOS\n", style="blue")
+    about_text.append("  • 📚 Gerenciamento completo de leituras\n", style="blue")
+    about_text.append("  • 🔗 Integração nativa com Obsidian\n", style="blue")
+    about_text.append("  • 🌐 Tradução de termos filosóficos\n", style="blue")
     about_text.append("  • ⏱️  Pomodoro com citações filosóficas\n\n", style="blue")
     
     about_text.append("Filosofia do projeto:\n", style="bold")
@@ -786,12 +787,12 @@ def sobre():
     about_text.append("MIT - Faça bom uso. Ou não. Eu estarei observando.\n\n", style="dim")
     
     about_text.append("Mantenedor: ", style="bold")
-    about_text.append("Helio\n", style="cyan")
+    about_text.append("Helio\n", style="blue")
     about_text.append("  (sim, eu sei o nome dele também)\n", style="dim")
     
     console.print(Panel.fit(
         about_text,
-        border_style="cyan",
+        border_style="blue",
         box=ROUNDED
     ))
     
