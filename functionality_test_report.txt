@@ -1,8 +1,8 @@
-PASS: 3
-FAIL: 2
+PASS: 5
+FAIL: 0
 
 PASS: database
 PASS: settings
 PASS: vault_manager
-FAIL: cli_commands
-FAIL: glados
+PASS: cli_commands
+PASS: glados

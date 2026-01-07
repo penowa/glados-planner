@@ -33,7 +33,7 @@ def add_glados_to_cli(app: typer.Typer):
         glados_config = settings.llm.glados
         
         table.add_row("User Name", glados_config.user_name)
-        table.add_row("GLaDOS Name", glados_config.gladios_name)
+        table.add_row("GLaDOS Name", glados_config.glados_name)
         table.add_row("Gender", glados_config.gender)
         table.add_row("Personality Intensity", str(glados_config.personality_intensity))
         table.add_row("Sarcasm Enabled", "✅" if glados_config.enable_sarcasm else "❌")

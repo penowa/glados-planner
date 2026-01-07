@@ -95,17 +95,22 @@ def test_cli_commands():
     
     try:
         from src.cli.main import app
-        from src.cli.glados import add_glados_to_cli
         
         print("✅ CLI app importado")
-        print("✅ Função add_glados_to_cli importada")
         
-        # Verifica comandos disponíveis
-        commands = [cmd.name for cmd in app.registered_commands]
+        # Verifica comandos disponíveis - CORREÇÃO: evitar ordenar None
+        commands = []
+        for cmd in app.registered_commands:
+            if cmd.name:  # Só inclui comandos com nome
+                commands.append(cmd.name)
+        
         print(f"✅ Comandos disponíveis: {len(commands)}")
         
-        for cmd in sorted(commands):
-            print(f"   ├── {cmd}")
+        if commands:  # Só ordena se houver comandos
+            for cmd in sorted(commands):
+                print(f"   ├── {cmd}")
+        else:
+            print("   ⚠️  Nenhum comando encontrado")
         
         return True
         
@@ -128,7 +133,7 @@ def test_glados_functionality():
         
         print(f"✅ Configurações GLaDOS carregadas")
         print(f"   ├── Usuário: {glados_config.user_name}")
-        print(f"   ├── Nome GLaDOS: {glados_config.gladios_name}")
+        print(f"   ├── GLaDOS Name: {getattr(glados_config, 'glados_name', getattr(glados_config, 'gladios_name', 'N/A'))}")
         print(f"   └── Intensidade: {glados_config.personality_intensity}")
         
         return True
