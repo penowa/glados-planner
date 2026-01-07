@@ -49,7 +49,7 @@ except ImportError:
 
 app = typer.Typer(
     name="glados",
-    help="🤖 GLaDOS Planner - Sistema integrado para estudantes de filosofia",
+    help="🤖 GLaDOS Planner - Sistema integrado para estudantes",
     add_completion=True,
     rich_markup_mode="rich",
     invoke_without_command=True  # Permite executar sem comando
@@ -91,7 +91,7 @@ def show_welcome(verbose: bool = False, silent: bool = False):
     
     console.print(Panel.fit(
         "🤖 [bold blue]GLaDOS Planner[/bold blue]",
-        subtitle="[dim]Sistema de Gestão Acadêmica Filosófica[/dim]",
+        subtitle="[dim]Sistema de Gestão Acadêmica[/dim]",
         border_style="blue",
         box=ROUNDED
     ))
@@ -226,21 +226,21 @@ def init(
         
         try:
             from src.core.modules.translation_module import TranslationAssistant
-            modules_status.append(("🌐 TranslationAssistant", "✅"))
+            modules_status.append(("🌐TranslationAssistant", "✅"))
         except:
-            modules_status.append(("🌐 TranslationAssistant", "⚠️"))
+            modules_status.append(("🌐TranslationAssistant", "⚠️"))
         
         try:
             from src.core.modules.pomodoro_timer import PomodoroTimer
-            modules_status.append(("⏱️  PomodoroTimer", "✅"))
+            modules_status.append(("⏱️PomodoroTimer", "✅"))
         except:
-            modules_status.append(("⏱️  PomodoroTimer", "⚠️"))
+            modules_status.append(("⏱️PomodoroTimer", "⚠️"))
         
         try:
             from src.core.modules.writing_assistant import WritingAssistant
-            modules_status.append(("✍️  WritingAssistant", "✅"))
+            modules_status.append(("✍️ WritingAssistant", "✅"))
         except:
-            modules_status.append(("✍️  WritingAssistant", "⚠️"))
+            modules_status.append(("✍️ WritingAssistant", "⚠️"))
         
         try:
             from src.core.modules.review_system import ReviewSystem
@@ -744,7 +744,7 @@ def diagnostico():
             console.print(f"  {rec}")
     else:
         console.print("  [green]✓ Sistema está funcionando corretamente[/green]")
-        console.print("  [dim]  Por enquanto...[/dim]")
+        console.print("  [dim]Por enquanto...[/dim]")
     
     console.print("\n[dim]Diagnóstico completo. Agora você sabe o que está errado.[/dim]")
     console.print("[dim]Ou pelo menos, o que eu estou disposta a contar.[/dim]")
@@ -776,8 +776,8 @@ def sobre():
     about_text.append("  • 🤖 IA local com personalidade GLaDOS\n", style="blue")
     about_text.append("  • 📚 Gerenciamento completo de leituras\n", style="blue")
     about_text.append("  • 🔗 Integração nativa com Obsidian\n", style="blue")
-    about_text.append("  • 🌐 Tradução de termos filosóficos\n", style="blue")
-    about_text.append("  • ⏱️  Pomodoro com citações filosóficas\n\n", style="blue")
+    about_text.append("  • 🌐 Tradução de termos\n", style="blue")
+    about_text.append("  • ⏱️ Pomodoro com citações filosóficas\n\n", style="blue")
     
     about_text.append("Filosofia do projeto:\n", style="bold")
     about_text.append("  Estudar filosofia deve ser estimulante, organizado\n", style="dim")
@@ -788,7 +788,7 @@ def sobre():
     
     about_text.append("Mantenedor: ", style="bold")
     about_text.append("Helio\n", style="blue")
-    about_text.append("  (sim, eu sei o nome dele também)\n", style="dim")
+    about_text.append("(sim, eu sei o nome dele também)\n", style="dim")
     
     console.print(Panel.fit(
         about_text,
@@ -796,8 +796,7 @@ def sobre():
         box=ROUNDED
     ))
     
-    console.print("\n[dim]\"Ah, você leu tudo? Impressionante.\n")
-    console.print("Agora vá usar o sistema em vez de apenas ler sobre ele.\"[/dim]")
+    console.print("\n[dim]\"Ah, você leu tudo? Impressionante.\nAgora vá usar o sistema em vez de apenas ler sobre ele.\"[/dim]")
     console.print("[dim]— GLaDOS[/dim]")
 
 if __name__ == "__main__":
