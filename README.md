@@ -15,9 +15,9 @@
 
 ## ✨ Features
 
-- **Gestão Inteligente de Leituras** - Cronograma, progresso, revisão espaçada
-- **Agenda Filosófica** - Calendário acadêmico integrado
-- **Assistente LLM Local** - Análise de textos com modelos privados
+- **Gestão de Leituras** - Cronograma, progresso, revisão espaçada
+- **Agenda** - Calendário integrado
+- **LLM Local** - Análise de textos com modelos privados
 - **Integração Obsidian** - Sincronia bidirecional com seu vault
 - **Pomodoro** - Foco com citações inspiradoras
 - **Tradução & Glossário** - Termos técnicos em grego/alemão
