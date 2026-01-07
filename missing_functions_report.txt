@@ -2,25 +2,11 @@ Funções documentadas mas não implementadas:
 
 Outras:
   - SessionLocal()
-  - analyze_argument()
-  - check_norms()
-  - export_document()
-  - generate_flashcards()
-  - generate_questions()
-  - generate_schedule()
-  - pause()
-  - resume()
-  - spaced_repetition()
-  - start()
-  - structure_paper()
-  - summarize()
-  - translate_term()
+  - stats()
 
 CRUD:
-  - add_event()
-  - create_quiz()
+  - add_book()
 
 Consultas:
-  - get_overdue_tasks()
-  - get_pronunciation()
+  - list_books()
 

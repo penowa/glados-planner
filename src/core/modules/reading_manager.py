@@ -35,8 +35,10 @@ class ReadingManager:
         self.vault_path = Path(vault_path).expanduser()
         self.progress_file = self.vault_path / "01-LEITURAS" / "progresso_leitura.json"
         
-        # Carrega progresso existente
+        # Carrega progresso existente - garante que seja um dicionário
         self.readings = self._load_progress()
+        if not isinstance(self.readings, dict):
+            self.readings = {}
     
     def _load_progress(self) -> Dict[str, ReadingProgress]:
         """Carrega progresso de leitura do arquivo"""
@@ -47,19 +49,26 @@ class ReadingManager:
                 with open(self.progress_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     
+                # Garante que data seja um dicionário
+                if not isinstance(data, dict):
+                    print(f"Formato inválido no arquivo {self.progress_file}. Esperado dicionário.")
+                    return {}
+                    
                 for book_id, book_data in data.items():
-                    readings[book_id] = ReadingProgress(
-                        book_id=book_id,
-                        title=book_data.get('title', ''),
-                        author=book_data.get('author', ''),
-                        total_pages=book_data.get('total_pages', 0),
-                        current_page=book_data.get('current_page', 0),
-                        start_date=book_data.get('start_date', ''),
-                        last_read=book_data.get('last_read', ''),
-                        reading_speed=book_data.get('reading_speed', 10.0),
-                        estimated_completion=book_data.get('estimated_completion', ''),
-                        notes=book_data.get('notes', [])
-                    )
+                    # Garante que book_data seja um dicionário
+                    if isinstance(book_data, dict):
+                        readings[book_id] = ReadingProgress(
+                            book_id=book_id,
+                            title=book_data.get('title', ''),
+                            author=book_data.get('author', ''),
+                            total_pages=book_data.get('total_pages', 0),
+                            current_page=book_data.get('current_page', 0),
+                            start_date=book_data.get('start_date', ''),
+                            last_read=book_data.get('last_read', ''),
+                            reading_speed=book_data.get('reading_speed', 10.0),
+                            estimated_completion=book_data.get('estimated_completion', ''),
+                            notes=book_data.get('notes', [])
+                        )
             except Exception as e:
                 print(f"Erro ao carregar progresso: {e}")
         
@@ -113,7 +122,17 @@ class ReadingManager:
                 }
             return {}
         else:
-            return {book_id: self.get_reading_progress(book_id) for book_id in self.readings.keys()}
+            result = {}
+            for book_id, progress in self.readings.items():
+                result[book_id] = {
+                    "book_id": progress.book_id,
+                    "title": progress.title,
+                    "progress": f"{progress.current_page}/{progress.total_pages}",
+                    "percentage": (progress.current_page / progress.total_pages * 100) if progress.total_pages > 0 else 0,
+                    "reading_speed": progress.reading_speed,
+                    "estimated_completion": progress.estimated_completion
+                }
+            return result
     
     def update_progress(self, book_id: str, current_page: int, notes: str = "") -> bool:
         """
@@ -322,3 +341,132 @@ class ReadingManager:
                     }
         
         return recommendations
+    
+    def add_book(self, title: str, author: str, total_pages: int, book_id: str = None) -> str:
+        """
+        Adiciona um novo livro ao sistema de leitura
+        
+        Args:
+            title: Título do livro
+            author: Autor
+            total_pages: Total de páginas
+            book_id: ID opcional (gera automaticamente se None)
+            
+        Returns:
+            ID do livro
+        """
+        if book_id is None:
+            # Gera ID baseado no título
+            import hashlib
+            book_id = hashlib.md5(title.encode()).hexdigest()[:8]
+        
+        if book_id not in self.readings:
+            self.readings[book_id] = ReadingProgress(
+                book_id=book_id,
+                title=title,
+                author=author,
+                total_pages=total_pages,
+                current_page=0,
+                start_date=datetime.now().isoformat(),
+                last_read="",
+                reading_speed=10.0,
+                estimated_completion="",
+                notes=[]
+            )
+            self._save_progress()
+        
+        return book_id
+    
+    def list_books(self, include_progress: bool = True) -> List[Dict]:
+        """
+        Lista todos os livros registrados
+        
+        Args:
+            include_progress: Se True, inclui informações de progresso
+            
+        Returns:
+            Lista de livros
+        """
+        books = []
+        
+        for book_id, progress in self.readings.items():
+            book_info = {
+                "id": book_id,
+                "title": progress.title,
+                "author": progress.author,
+                "total_pages": progress.total_pages
+            }
+            
+            if include_progress:
+                book_info.update({
+                    "current_page": progress.current_page,
+                    "percentage": (progress.current_page / progress.total_pages * 100) if progress.total_pages > 0 else 0,
+                    "last_read": progress.last_read,
+                    "reading_speed": progress.reading_speed
+                })
+            
+            books.append(book_info)
+        
+        return books
+    
+    def stats(self) -> Dict:
+        """
+        Retorna estatísticas de leitura
+        
+        Returns:
+            Estatísticas detalhadas
+        """
+        # Garante que self.readings é um dicionário
+        if not isinstance(self.readings, dict):
+            print(f"Aviso: self.readings não é um dicionário. Tipo: {type(self.readings)}")
+            return {"error": "Formato de dados inválido"}
+        
+        total_books = len(self.readings)
+        completed_books = sum(1 for p in self.readings.values() if p.current_page >= p.total_pages)
+        in_progress = total_books - completed_books
+        
+        total_pages_read = sum(p.current_page for p in self.readings.values())
+        total_pages = sum(p.total_pages for p in self.readings.values())
+        
+        avg_speed = sum(p.reading_speed for p in self.readings.values()) / total_books if total_books > 0 else 0
+        
+        # Estatísticas por tempo
+        from datetime import datetime, timedelta
+        today = datetime.now().strftime("%Y-%m-%d")
+        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        
+        recent_pages = 0
+        for progress in self.readings.values():
+            if progress.last_read >= week_ago:
+                recent_pages += progress.current_page
+        
+        return {
+            "total_books": total_books,
+            "completed_books": completed_books,
+            "books_in_progress": in_progress,
+            "total_pages_read": total_pages_read,
+            "total_pages": total_pages,
+            "completion_percentage": (total_pages_read / total_pages * 100) if total_pages > 0 else 0,
+            "average_reading_speed": avg_speed,
+            "pages_last_week": recent_pages,
+            "estimated_time_to_complete": self._calculate_total_completion_time()
+        }
+    
+    def _calculate_total_completion_time(self) -> str:
+        """Calcula tempo total estimado para completar todas as leituras"""
+        total_days = 0
+        for progress in self.readings.values():
+            pages_remaining = progress.total_pages - progress.current_page
+            if pages_remaining > 0 and progress.reading_speed > 0:
+                total_days += pages_remaining / progress.reading_speed
+        
+        if total_days <= 0:
+            return "Nenhuma leitura pendente"
+        
+        if total_days < 1:
+            return f"{int(total_days * 24)} horas"
+        elif total_days < 30:
+            return f"{int(total_days)} dias"
+        else:
+            months = total_days / 30
+            return f"{months:.1f} meses"
