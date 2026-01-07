@@ -1,4 +1,3 @@
-# src/cli/main.py
 #!/usr/bin/env python3
 """
 Philosophy Planner - CLI Main Entry Point
@@ -18,9 +17,10 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from src.core.database.base import init_db, SessionLocal
+from src.core.vault.manager import VaultManager
+
 # Comentado por enquanto - ainda não implementados
 # from src.core.llm.local_llm import PhilosophyLLM
-# from src.core.database.obsidian_sync import VaultManager
 
 # Tentar importar comandos de dados, mas continuar se não existirem
 try:
@@ -29,7 +29,7 @@ try:
 except ImportError:
     HAS_DATA_COMMANDS = False
 
-app = typer.Typer(help=" Glados Planner - Sistema de gestão acadêmica")
+app = typer.Typer(help="Glados Planner - Sistema de gestão acadêmica")
 console = Console()
 add_glados_to_cli(app)
 
@@ -81,7 +81,7 @@ def init(
         task2 = progress.add_task("[cyan]Configurando gerenciador do vault...", total=None)
         global vault_manager
         try:
-            # vault_manager = VaultManager(vault_path)
+            vault_manager = VaultManager(vault_path)
             progress.update(task2, completed=True)
             console.print("[green]✓ Gerenciador do vault configurado[/green]")
         except Exception as e:
@@ -148,7 +148,7 @@ def status():
     global vault_manager
     if vault_manager and hasattr(vault_manager, 'is_connected') and vault_manager.is_connected():
         vault_status = "✅"
-        vault_details = vault_manager.vault_path
+        vault_details = str(vault_manager.vault_path)
     else:
         vault_status = "⚠️"
         vault_details = "Não configurado"

@@ -1,4 +1,3 @@
-# src/cli/glados.py
 """
 Módulo de comandos específicos do GLaDOS
 """
@@ -23,7 +22,7 @@ def add_glados_to_cli(app: typer.Typer):
         ))
     
     @app.command()
-    def personality():
+    def glados_personality():
         """Mostra configurações de personalidade do GLaDOS"""
         from src.core.config.settings import settings
         
@@ -59,7 +58,7 @@ def add_glados_to_cli(app: typer.Typer):
             console.print(area_table)
     
     @app.command()
-    def quote():
+    def glados_quote():
         """Citações inspiradoras do GLaDOS"""
         import random
         
@@ -79,7 +78,7 @@ def add_glados_to_cli(app: typer.Typer):
         ))
     
     @app.command()
-    def setup(
+    def glados_setup(
         vault_path: str = typer.Option(None, help="Caminho para o vault do Obsidian"),
         model_path: str = typer.Option(None, help="Caminho para o modelo LLM"),
     ):
@@ -103,4 +102,50 @@ def add_glados_to_cli(app: typer.Typer):
             console.print("[yellow]⚠️  Nenhum modelo LLM configurado. Use --model-path para configurar.[/yellow]")
         
         console.print("\n[bold green]✅ Configuração inicial concluída![/bold green]")
-        console.print("[cyan]Execute 'glados personality' para ver configurações detalhadas.[/cyan]")
+        console.print("[cyan]Execute 'glados-personality' para ver configurações detalhadas.[/cyan]")
+
+    @app.command()
+    def create_vault(
+        path: str = typer.Option(None, help="Caminho para criar o vault"),
+        force: bool = typer.Option(False, help="Forçar criação mesmo se existir"),
+    ):
+        """Cria um novo vault do Obsidian estruturado"""
+        from src.core.vault.manager import VaultManager
+        from src.core.config.settings import settings
+        from pathlib import Path
+        
+        vault_path = path or settings.paths.vault
+        vault_path = Path(vault_path).expanduser()
+        
+        console.print(Panel.fit(
+            f"[bold cyan]Criando vault em:[/bold cyan]\n{vault_path}",
+            border_style="cyan"
+        ))
+        
+        manager = VaultManager(str(vault_path))
+        
+        if manager.is_connected() and not force:
+            console.print("[yellow]⚠️  Vault já existe. Use --force para recriar.[/yellow]")
+            return
+        
+        if manager.create_structure():
+            console.print(Panel.fit(
+                "[bold green]✅ Vault criado com sucesso![/bold green]\n\n"
+                f"Acesse em: {vault_path}\n\n"
+                "[cyan]Estrutura criada:[/cyan]",
+                border_style="green"
+            ))
+            
+            # Mostra estrutura criada
+            table = Table(title="📁 Estrutura do Vault")
+            table.add_column("Diretório", style="cyan")
+            table.add_column("Finalidade", style="green")
+            
+            for directory in settings.obsidian.vault_structure:
+                base_name = directory.split(" - ")[-1] if " - " in directory else directory
+                purpose = settings.obsidian.brain_regions.get(base_name.lower(), "Organização")
+                table.add_row(directory, purpose)
+            
+            console.print(table)
+        else:
+            console.print("[red]❌ Falha ao criar vault[/red]")
