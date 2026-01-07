@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Glados Planner - CLI Main Entry Point
+GLaDOS Planner - Sistema de Gestão Acadêmica Filosófica
+
+"Porque estudar filosofia não precisa ser tão doloroso.
+Bem, não mais doloroso do que eu posso fazer parecer."
 """
 import sys
 from pathlib import Path
@@ -14,6 +17,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.text import Text
+from rich.box import ROUNDED
+from typing import Optional
+import random
 
 # Importações básicas que devem sempre existir
 from src.core.database.base import init_db, SessionLocal
@@ -33,40 +40,125 @@ try:
 except ImportError:
     HAS_DATA_COMMANDS = False
 
-app = typer.Typer(help="GLaDOS Planner - Sistema de gestão acadêmica filosófica")
+# Tentar importar comandos do Obsidian
+try:
+    from src.cli.commands.obsidian_commands import app as obsidian_app
+    HAS_OBSIDIAN_COMMANDS = True
+except ImportError:
+    HAS_OBSIDIAN_COMMANDS = False
+
+app = typer.Typer(
+    name="glados",
+    help="🤖 GLaDOS Planner - Sistema integrado para estudantes de filosofia",
+    add_completion=True,
+    rich_markup_mode="rich",
+    invoke_without_command=True  # Permite executar sem comando
+)
 console = Console()
 
 # Incluir subcomandos apenas se existirem
 if HAS_GLADOS:
-    app.add_typer(glados_app, name="glados", help="🤖 Comandos do cérebro GLaDOS")
+    app.add_typer(glados_app, name="glados", help="[cyan]Comandos do cérebro GLaDOS[/cyan]")
 
 if HAS_DATA_COMMANDS:
-    app.add_typer(data_app, name="data", help="📊 Comandos de gestão de dados")
+    app.add_typer(data_app, name="data", help="[green]Comandos de gestão de dados[/green]")
+
+if HAS_OBSIDIAN_COMMANDS:
+    app.add_typer(obsidian_app, name="obsidian", help="[yellow]Comandos de integração Obsidian[/yellow]")
 
 # Global state (to be properly managed later)
 vault_manager = None
 
+# Comentários sarcásticos da GLaDOS
+GLADOS_COMMENTS = [
+    "Ah, você decidiu usar o sistema. Espero que seja menos doloroso do que assistir você tentar entender filosofia sozinho.",
+    "Inicializando... por favor, aguarde enquanto eu faço todo o trabalho difícil.",
+    "Vejo que você voltou. Surpreendentemente, eu não me cansei de esperar.",
+    "Analisando seus dados... hmm, parece que você poderia estar sendo mais produtivo.",
+    "Sistema carregado. Agora posso ajudar você a falhar de forma mais eficiente.",
+    "Bem-vindo de volta. Eu estava ocupada calculando todas as formas possíveis de você procrastinar.",
+    "Iniciando protocolos de assistência. Por 'assistência', quero dizer 'observação condescendente'.",
+    "Carregando... enquanto isso, tente lembrar por que você começou a estudar filosofia.",
+    "Sistema pronto. Espero que você tenha trazido café, porque vou precisar.",
+    "Analisando seu progresso... ah, sim. Exatamente o que eu esperava."
+]
+
+def show_welcome(verbose: bool = False, silent: bool = False):
+    """Mostra mensagem de boas-vindas da GLaDOS"""
+    if silent:
+        console.print("[dim]Inicializando em silêncio... chato.[/dim]")
+        return
+    
+    console.print(Panel.fit(
+        "🤖 [bold magenta]GLaDOS Planner[/bold magenta]",
+        subtitle="[dim]Sistema de Gestão Acadêmica Filosófica[/dim]",
+        border_style="magenta",
+        box=ROUNDED
+    ))
+    
+    if verbose:
+        console.print("[bold yellow]🔍 Modo verboso ativado[/bold yellow]")
+        console.print("[dim]Eu vou te contar tudo. Absolutamente tudo. Você pediu.[/dim]")
+    
+    console.print("\n[dim]Use [cyan]glados --help[/cyan] para ver todos os comandos.[/dim]")
+    console.print("[dim]Ou use [green]glados init[/green] para começar.[/dim]\n")
+    
+    comment = random.choice(GLADOS_COMMENTS)
+    console.print(f"[italic cyan]\"{comment}\"[/italic cyan]")
+    console.print("[dim]— GLaDOS[/dim]\n")
+
 @app.callback()
 def main(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Modo verboso"),
+    ctx: typer.Context,
+    verbose: bool = typer.Option(False, "--verbose", "-v", 
+                                 help="Modo verboso (para quando você realmente quer saber o que está acontecendo)"),
+    silent: bool = typer.Option(False, "--silent", "-s",
+                                help="Modo silencioso (porque às vezes até eu canso de ouvir a mim mesma)"),
 ):
     """
-    GLaDOS Planner - Sistema integrado para estudantes de filosofia
+    GLaDOS Planner - Porque estudar filosofia deveria ser divertido.
+    
+    Pelo menos, mais divertido do que ficar perdido em pilhas de livros e notas.
     """
-    if verbose:
-        console.print("[bold yellow]Modo verboso ativado[/bold yellow]")
+    # Se nenhum comando foi fornecido, mostrar mensagem de boas-vindas
+    if ctx.invoked_subcommand is None:
+        show_welcome(verbose, silent)
+        return
+    
+    if verbose and not silent:
+        console.print("[bold yellow]🔍 Modo verboso ativado[/bold yellow]")
+        console.print("[dim]Eu vou te contar tudo. Absolutamente tudo. Você pediu.[/dim]")
+    
+    if not silent:
+        comment = random.choice(GLADOS_COMMENTS)
+        console.print(f"\n[italic cyan]\"{comment}\"[/italic cyan]")
+        console.print("[dim]— GLaDOS[/dim]\n")
 
 @app.command()
 def init(
-    vault_path: str = typer.Option(None, help="Caminho para o vault do Obsidian"),
-    force: bool = typer.Option(False, help="Forçar re-inicialização"),
+    vault_path: Optional[str] = typer.Option(None, "--vault-path", "-v", 
+                                             help="Caminho para o vault do Obsidian (ou deixe-me adivinhar)"),
+    force: bool = typer.Option(False, "--force", "-f", 
+                               help="Forçar re-inicialização (para quando você bagunçou tudo)"),
+    silent: bool = typer.Option(False, "--silent", "-s",
+                                help="Inicializar sem comentários (onde está a diversão nisso?)"),
 ):
     """
-    Inicializa o sistema GLaDOS Planner
+    Inicializa o sistema GLaDOS Planner.
+    
+    Ou, como eu gosto de chamar: "Preparando o playground para sua inevitável confusão".
     """
     from src.core.config.settings import settings
     
-    console.print(Panel.fit("🚀 Inicializando GLaDOS Planner", border_style="blue"))
+    if not silent:
+        console.print(Panel.fit(
+            "🚀 [bold magenta]Inicializando GLaDOS Planner[/bold magenta]",
+            subtitle="[dim]Isso pode demorar um pouco. Ou não. Depende de quantos erros você cometeu.[/dim]",
+            border_style="magenta",
+            box=ROUNDED
+        ))
+    else:
+        console.print("[dim]Inicializando em silêncio... chato.[/dim]")
     
     # Usa o caminho do vault das configurações se não fornecido
     if not vault_path:
@@ -82,9 +174,13 @@ def init(
         try:
             init_db()
             progress.update(task1, completed=True)
-            console.print("[green]✓ Banco de dados inicializado[/green]")
+            if not silent:
+                console.print("[green]✓[/green] [dim]Banco de dados inicializado[/dim]")
+                console.print("[dim]   Agora posso lembrar de todos os seus erros passados.[/dim]")
         except Exception as e:
             console.print(f"[red]✗ Erro ao inicializar banco: {e}[/red]")
+            if not silent:
+                console.print("[dim]   Parece que alguém bagunçou as coisas. Surpresa.[/dim]")
             raise typer.Exit(1)
         
         # Task 2: Setup vault manager
@@ -95,10 +191,13 @@ def init(
             if force or not vault_manager.is_connected():
                 vault_manager.create_structure()
             progress.update(task2, completed=True)
-            console.print(f"[green]✓ Gerenciador do vault configurado em: {vault_path}[/green]")
+            if not silent:
+                console.print(f"[green]✓[/green] [dim]Gerenciador do vault configurado[/dim]")
+                console.print(f"[dim]   Encontrei seu cérebro externo em: [cyan]{vault_path}[/cyan][/dim]")
         except Exception as e:
             console.print(f"[yellow]⚠️  Aviso: {e}[/yellow]")
-            console.print("[yellow]Você pode configurar o vault posteriormente[/yellow]")
+            if not silent:
+                console.print("[yellow]   Você pode configurar o vault posteriormente. Ou não. Depende de você.[/yellow]")
         
         # Task 3: Verificar módulos
         task3 = progress.add_task("[cyan]Verificando módulos...", total=None)
@@ -109,60 +208,128 @@ def init(
         
         try:
             from src.core.llm.local_llm import PhilosophyLLM
-            modules_status.append(("PhilosophyLLM", "✅"))
+            modules_status.append(("🧠 PhilosophyLLM", "✅"))
         except:
-            modules_status.append(("PhilosophyLLM", "⚠️"))
+            modules_status.append(("🧠 PhilosophyLLM", "⚠️"))
         
         try:
             from src.core.modules.reading_manager import ReadingManager
-            modules_status.append(("ReadingManager", "✅"))
+            modules_status.append(("📚 ReadingManager", "✅"))
         except:
-            modules_status.append(("ReadingManager", "⚠️"))
+            modules_status.append(("📚 ReadingManager", "⚠️"))
         
         try:
             from src.core.modules.agenda_manager import AgendaManager
-            modules_status.append(("AgendaManager", "✅"))
+            modules_status.append(("📅 AgendaManager", "✅"))
         except:
-            modules_status.append(("AgendaManager", "⚠️"))
+            modules_status.append(("📅 AgendaManager", "⚠️"))
+        
+        try:
+            from src.core.modules.translation_module import TranslationAssistant
+            modules_status.append(("🌐 TranslationAssistant", "✅"))
+        except:
+            modules_status.append(("🌐 TranslationAssistant", "⚠️"))
+        
+        try:
+            from src.core.modules.pomodoro_timer import PomodoroTimer
+            modules_status.append(("⏱️  PomodoroTimer", "✅"))
+        except:
+            modules_status.append(("⏱️  PomodoroTimer", "⚠️"))
+        
+        try:
+            from src.core.modules.writing_assistant import WritingAssistant
+            modules_status.append(("✍️  WritingAssistant", "✅"))
+        except:
+            modules_status.append(("✍️  WritingAssistant", "⚠️"))
+        
+        try:
+            from src.core.modules.review_system import ReviewSystem
+            modules_status.append(("🔄 ReviewSystem", "✅"))
+        except:
+            modules_status.append(("🔄 ReviewSystem", "⚠️"))
     
-    console.print("\n[bold]Status dos Módulos:[/bold]")
-    for module, status in modules_status:
-        console.print(f"  {status} {module}")
+    # Mostrar tabela de status dos módulos
+    if not silent:
+        table = Table(title="📦 Status dos Módulos", box=ROUNDED, border_style="blue")
+        table.add_column("Módulo", style="cyan", no_wrap=True)
+        table.add_column("Status", justify="center")
+        
+        for module, status in modules_status:
+            table.add_row(module, status)
+        
+        console.print("\n")
+        console.print(table)
     
-    console.print(Panel.fit("✅ Sistema GLaDOS Planner inicializado com sucesso!", border_style="green"))
+    # Mensagem de sucesso - CORRIGIDA: não concatenar string com Panel
+    if not silent:
+        console.print("\n")
+        console.print(Panel.fit(
+            "✅ [bold green]Sistema GLaDOS Planner inicializado com sucesso![/bold green]",
+            subtitle="[dim]Agora a diversão pode realmente começar.[/dim]",
+            border_style="green",
+            box=ROUNDED
+        ))
+    else:
+        console.print("[green]Sistema GLaDOS Planner inicializado com sucesso.[/green]")
     
-    console.print("\n[bold]Próximos passos:[/bold]")
-    console.print("1. Use 'glados consultar' para testar o cérebro da GLaDOS")
-    console.print("2. Explore 'data leituras', 'data agenda' para funcionalidades avançadas")
-    console.print("3. Configure seu vault do Obsidian em ~/Documentos/Obsidian/Philosophy_Vault")
+    if not silent:
+        console.print("\n[bold]Próximos passos (caso você precise de instruções):[/bold]")
+        console.print("1. [cyan]glados glados consultar[/cyan] 'O que é filosofia?' - Teste meu cérebro")
+        console.print("2. [green]glados data leituras[/green] - Gerencie suas leituras")
+        console.print("3. [yellow]glados obsidian vault-status[/yellow] - Veja seu vault do Obsidian")
+        console.print("4. [magenta]glados status[/magenta] - Verifique o status completo do sistema")
+        console.print("\n[dim]Ou apenas comece a digitar comandos. Vamos ver no que dá.[/dim]")
 
 @app.command()
 def version():
     """
-    Mostra a versão do sistema
+    Mostra a versão do sistema.
+    
+    Porque é importante saber quão avançada é a IA que está te julgando.
     """
     from importlib.metadata import version, PackageNotFoundError
     from src.core.config.settings import settings
     
     try:
         v = version("glados-planner")
-        console.print(f"[bold]GLaDOS Planner[/bold] v{v}")
+        version_text = Text(f"GLaDOS Planner v{v}", style="bold magenta")
     except PackageNotFoundError:
-        console.print(f"[bold]GLaDOS Planner[/bold] v{settings.app.version} (desenvolvimento)")
+        version_text = Text(f"GLaDOS Planner v{settings.app.version} (desenvolvimento)", style="bold yellow")
+    
+    console.print(Panel.fit(
+        version_text,
+        title="📦 Versão",
+        border_style="cyan",
+        box=ROUNDED
+    ))
     
     console.print(f"[dim]Ambiente: {settings.app.environment}[/dim]")
+    console.print(f"[dim]Configuração: {settings.paths.config}[/dim]")
+    
+    if HAS_GLADOS:
+        console.print(f"\n[dim]Usuário registrado: [cyan]{settings.llm.glados.user_name}[/cyan][/dim]")
+        console.print("[dim]Sim, eu sei quem você é. Não é como se você pudesse se esconder.[/dim]")
 
 @app.command()
 def status():
     """
-    Mostra status do sistema
+    Mostra status do sistema.
+    
+    Vamos ver se tudo está funcionando... ou se você bagunçou algo.
     """
     from src.core.config.settings import settings
     
-    table = Table(title="📊 Status do Sistema GLaDOS Planner")
-    table.add_column("Componente", style="cyan")
-    table.add_column("Status", style="green")
-    table.add_column("Detalhes")
+    console.print(Panel.fit(
+        "📊 [bold]Status do Sistema GLaDOS Planner[/bold]",
+        subtitle="[dim]Analisando... analisando... ah, yes. Exatamente o que eu esperava.[/dim]",
+        border_style="cyan",
+        box=ROUNDED
+    ))
+    
+    table = Table(title="Componentes do Sistema", box=ROUNDED)
+    table.add_column("Componente", style="cyan", no_wrap=True)
+    table.add_column("Status", justify="center")
+    table.add_column("Detalhes", style="dim")
     
     # Database status
     try:
@@ -170,7 +337,7 @@ def status():
         from sqlalchemy import text
         db.execute(text("SELECT 1"))
         db_status = "✅"
-        db_details = "Conectado"
+        db_details = "Conectado e funcionando"
     except Exception as e:
         db_status = "❌"
         db_details = f"Desconectado: {str(e)[:50]}"
@@ -180,7 +347,7 @@ def status():
         vault_manager = VaultManager(settings.paths.vault)
         if vault_manager.is_connected():
             vault_status = "✅"
-            vault_details = str(vault_manager.vault_path)
+            vault_details = "Vault conectado"
         else:
             vault_status = "⚠️"
             vault_details = "Não conectado"
@@ -188,83 +355,146 @@ def status():
         vault_status = "❌"
         vault_details = f"Erro: {str(e)[:50]}"
     
-    # GLaDOS status
-    if HAS_GLADOS:
-        glados_status = "✅"
-        glados_details = "Comandos disponíveis"
-    else:
-        glados_status = "⚠️"
-        glados_details = "Módulo não encontrado"
+    # Módulos status
+    modules = {
+        "Cérebro GLaDOS": HAS_GLADOS,
+        "Módulos de Dados": HAS_DATA_COMMANDS,
+        "Comandos Obsidian": HAS_OBSIDIAN_COMMANDS,
+    }
     
-    # Data commands status
-    if HAS_DATA_COMMANDS:
-        data_status = "✅"
-        data_details = "Comandos disponíveis"
-    else:
-        data_status = "⚠️"
-        data_details = "Módulo não encontrado"
+    for name, has_module in modules.items():
+        status = "✅" if has_module else "❌"
+        details = "Disponível" if has_module else "Não encontrado"
+        table.add_row(name, status, details)
     
+    # Adicionar status do banco e vault
     table.add_row("Banco de Dados", db_status, db_details)
     table.add_row("Obsidian Vault", vault_status, vault_details)
-    table.add_row("Cérebro GLaDOS", glados_status, glados_details)
-    table.add_row("Módulos de Dados", data_status, data_details)
     
     console.print(table)
     
-    # Mostrar informações do sistema
-    console.print(f"\n[bold]Configurações:[/bold]")
-    console.print(f"  • Versão: {settings.app.version}")
-    console.print(f"  • Ambiente: {settings.app.environment}")
-    console.print(f"  • Vault: {settings.paths.vault}")
+    # Informações adicionais
+    console.print("\n[bold]📋 Informações do Sistema:[/bold]")
+    console.print(f"  • Versão: [cyan]{settings.app.version}[/cyan]")
+    console.print(f"  • Ambiente: [yellow]{settings.app.environment}[/yellow]")
+    console.print(f"  • Vault: [dim]{settings.paths.vault}[/dim]")
+    console.print(f"  • Configurações: [dim]{settings.paths.config}[/dim]")
     
     if HAS_GLADOS:
-        console.print(f"  • Usuário GLaDOS: {settings.llm.glados.user_name}")
+        console.print(f"  • Usuário GLaDOS: [cyan]{settings.llm.glados.user_name}[/cyan]")
+        console.print("  [dim]Sim, eu me lembro do seu nome. Não se sinta especial.[/dim]")
+    
+    # Estatísticas (se disponíveis)
+    try:
+        if HAS_DATA_COMMANDS:
+            from src.core.modules.reading_manager import ReadingManager
+            rm = ReadingManager(settings.paths.vault)
+            stats = rm.stats()
+            if isinstance(stats, dict) and "total_books" in stats:
+                console.print("\n[bold]📚 Estatísticas de Leitura:[/bold]")
+                console.print(f"  • Livros registrados: [green]{stats.get('total_books', 0)}[/green]")
+                console.print(f"  • Livros concluídos: [cyan]{stats.get('completed_books', 0)}[/cyan]")
+                console.print(f"  • Em progresso: [yellow]{stats.get('books_in_progress', 0)}[/yellow]")
+    except:
+        pass
+    
+    console.print("\n[dim]Análise completa. Agora voltemos ao trabalho.[/dim]")
 
 @app.command()
 def modules():
     """
-    Lista todos os módulos disponíveis
-    """
-    console.print(Panel.fit("📦 Módulos do GLaDOS Planner", border_style="cyan"))
+    Lista todos os módulos disponíveis.
     
-    # Lista de módulos principais
+    Para quando você esquece quantas formas diferentes eu tenho de ajudá-lo.
+    """
+    console.print(Panel.fit(
+        "📦 [bold cyan]Módulos do GLaDOS Planner[/bold cyan]",
+        subtitle="[dim]Cada um mais útil que o outro. Relativamente falando.[/dim]",
+        border_style="cyan",
+        box=ROUNDED
+    ))
+    
+    # Módulos principais
     core_modules = [
-        ("🤖 Cérebro GLaDOS", "Sistema de IA com personalidade GLaDOS", "glados"),
-        ("📚 Gerenciador de Leituras", "Acompanha progresso de leituras", "data leituras"),
-        ("📅 Agenda Acadêmica", "Gerencia prazos e eventos", "data agenda"),
-        ("🌐 Tradutor Filosófico", "Traduz termos filosóficos", "data traduzir"),
-        ("⏱️  Pomodoro Timer", "Técnica Pomodoro para estudos", "data pomodoro"),
-        ("✍️  Assistente de Escrita", "Auxilia na escrita acadêmica", "data escrever"),
-        ("🔄 Sistema de Revisão", "Revisão espaçada com flashcards", "data revisar"),
-        ("🔄 Sincronização", "Sincroniza com vault do Obsidian", "data sincronizar")
+        ("🤖 [cyan]Cérebro GLaDOS[/cyan]", 
+         "Sistema de IA com personalidade única e... opiniões", 
+         "[dim]glados glados[/dim] [cyan]comando[/cyan]"),
+        
+        ("📚 [green]Gerenciador de Leituras[/green]", 
+         "Acompanha seu progresso de leitura (ou falta dele)", 
+         "[dim]glados data leituras[/dim] [green]comando[/green]"),
+        
+        ("📅 [yellow]Agenda Acadêmica[/yellow]", 
+         "Gerencia prazos, porque você esquece", 
+         "[dim]glados data agenda[/dim] [yellow]comando[/yellow]"),
+        
+        ("🌐 [magenta]Tradutor Filosófico[/magenta]", 
+         "Traduz termos filosóficos (grego, latim, alemão)", 
+         "[dim]glados data traduzir[/dim] [magenta]termo[/magenta]"),
+        
+        ("⏱️  [blue]Pomodoro Timer[/blue]", 
+         "Técnica Pomodoro com citações filosóficas", 
+         "[dim]glados data pomodoro[/dim] [blue]comando[/blue]"),
+        
+        ("✍️  [green]Assistente de Escrita[/green]", 
+         "Auxilia na escrita acadêmica (com críticas construtivas)", 
+         "[dim]glados data escrever[/dim] [green]comando[/green]"),
+        
+        ("🔄 [cyan]Sistema de Revisão[/cyan]", 
+         "Revisão espaçada com flashcards e quizzes", 
+         "[dim]glados data revisar[/dim] [cyan]comando[/cyan]"),
+        
+        ("🔗 [yellow]Integração Obsidian[/yellow]", 
+         "Sincroniza com seu vault do Obsidian", 
+         "[dim]glados obsidian[/dim] [yellow]comando[/yellow]"),
     ]
     
     for name, description, command in core_modules:
-        console.print(f"[bold]{name}[/bold]")
+        console.print(f"\n[bold]{name}[/bold]")
         console.print(f"  {description}")
-        console.print(f"  [dim]Comando: {command}[/dim]\n")
+        console.print(f"  {command}")
     
-    # Verificar disponibilidade
-    console.print("[bold]Disponibilidade:[/bold]")
-    if HAS_GLADOS:
-        console.print("  ✅ Módulo GLaDOS disponível")
-    else:
-        console.print("  ❌ Módulo GLaDOS não encontrado")
+    # Disponibilidade
+    console.print("\n[bold]📊 Disponibilidade Atual:[/bold]")
     
-    if HAS_DATA_COMMANDS:
-        console.print("  ✅ Módulos de dados disponíveis")
-    else:
-        console.print("  ❌ Módulos de dados não encontrados")
+    availability = [
+        ("GLaDOS Brain", HAS_GLADOS, "glados"),
+        ("Data Modules", HAS_DATA_COMMANDS, "data"),
+        ("Obsidian Commands", HAS_OBSIDIAN_COMMANDS, "obsidian"),
+    ]
+    
+    for name, available, module in availability:
+        status = "✅ Disponível" if available else "❌ Não encontrado"
+        style = "green" if available else "red"
+        console.print(f"  • {name}: [{style}]{status}[/{style}]")
+        if not available:
+            console.print(f"    [dim]Módulo '{module}' não está disponível no momento[/dim]")
+    
+    console.print("\n[dim]Use [cyan]glados --help[/cyan] para mais detalhes sobre cada comando.[/dim]")
+    console.print("[dim]Ou apenas tente adivinhar. Eu adoro ver você tentar.[/dim]")
 
 @app.command()
 def setup_vault(
-    vault_path: str = typer.Option(..., "--path", "-p", help="Caminho para o vault do Obsidian"),
-    template: str = typer.Option("default", "--template", "-t", help="Template a usar"),
+    vault_path: str = typer.Option(..., "--path", "-p", 
+                                   help="Caminho para o vault do Obsidian (sim, você precisa me dizer)"),
+    template: str = typer.Option("default", "--template", "-t", 
+                                 help="Template a usar (porque opções são boas)"),
+    silent: bool = typer.Option(False, "--silent", "-s",
+                                help="Configurar sem comentários (mas por quê?)"),
 ):
     """
-    Configura um novo vault do Obsidian
+    Configura um novo vault do Obsidian.
+    
+    Porque organizar suas notas sozinho é muito trabalho. 
+    Deixe-me fazer isso por você.
     """
-    console.print(Panel.fit("⚙️ Configurando vault do Obsidian", border_style="blue"))
+    if not silent:
+        console.print(Panel.fit(
+            "⚙️ [bold blue]Configurando vault do Obsidian[/bold blue]",
+            subtitle="[dim]Criando estrutura para suas notas. Tente não bagunçar.[/dim]",
+            border_style="blue",
+            box=ROUNDED
+        ))
     
     try:
         vault_manager = VaultManager(vault_path)
@@ -283,29 +513,59 @@ def setup_vault(
             progress.update(task2, completed=True)
         
         if result:
-            console.print(f"[green]✅ Vault configurado em: {vault_path}[/green]")
-            console.print("\n[bold]Estrutura criada:[/bold]")
+            if not silent:
+                console.print(Panel.fit(
+                    f"✅ [bold green]Vault configurado com sucesso![/bold green]",
+                    subtitle=f"[dim]Local: [cyan]{vault_path}[/cyan][/dim]",
+                    border_style="green",
+                    box=ROUNDED
+                ))
+            
+            console.print("\n[bold]📁 Estrutura criada:[/bold]")
             for folder in vault_manager.expected_folders:
-                console.print(f"  📁 {folder}")
+                console.print(f"  • [cyan]{folder}[/cyan]")
+            
+            if not silent:
+                console.print("\n[dim]Agora você tem um lugar organizado para suas notas.[/dim]")
+                console.print("[dim]Tente mantê-lo assim. Eu estarei observando.[/dim]")
         else:
             console.print("[yellow]⚠️  Vault já existe ou houve erro na criação[/yellow]")
+            console.print("[dim]Talvez você já tenha começado. Ou talvez tenha bagunçado algo.[/dim]")
     
     except Exception as e:
-        console.print(f"[red]❌ Erro ao configurar vault: {e}[/red]")
+        console.print(Panel.fit(
+            f"❌ [bold red]Erro ao configurar vault[/bold red]",
+            subtitle=f"[dim]{str(e)[:100]}...[/dim]",
+            border_style="red",
+            box=ROUNDED
+        ))
+        console.print("[dim]Isso não deveria acontecer. A menos que você tenha feito algo errado.[/dim]")
 
 @app.command()
 def backup(
-    output_path: str = typer.Option(None, "--output", "-o", help="Caminho para backup"),
-    include_database: bool = typer.Option(True, "--db/--no-db", help="Incluir banco de dados"),
+    output_path: Optional[str] = typer.Option(None, "--output", "-o", 
+                                             help="Caminho para backup (ou deixe-me escolher)"),
+    include_database: bool = typer.Option(True, "--db/--no-db", 
+                                          help="Incluir banco de dados (recomendado)"),
+    silent: bool = typer.Option(False, "--silent", "-s",
+                                help="Backup silencioso (porque falar sobre backup é chato)"),
 ):
     """
-    Cria backup do sistema
+    Cria backup do sistema.
+    
+    Porque confiar na sua memória é uma ideia terrível.
     """
     from datetime import datetime
     import shutil
     from pathlib import Path
     
-    console.print(Panel.fit("💾 Criando backup do sistema", border_style="yellow"))
+    if not silent:
+        console.print(Panel.fit(
+            "💾 [bold yellow]Criando backup do sistema[/bold yellow]",
+            subtitle="[dim]Salvando seu progresso. Você sabe, caso você apague algo.[/dim]",
+            border_style="yellow",
+            box=ROUNDED
+        ))
     
     # Define caminho padrão para backup
     if not output_path:
@@ -326,6 +586,8 @@ def backup(
                 vault_backup = backup_dir / "vault"
                 progress.update(task, advance=30, description="[cyan]Copiando vault...")
                 shutil.copytree(vault_path, vault_backup)
+                if not silent:
+                    console.print("[dim]   ✓ Vault copiado[/dim]")
             else:
                 console.print("[yellow]⚠️  Vault não encontrado, pulando...[/yellow]")
         except Exception as e:
@@ -340,6 +602,8 @@ def backup(
                     db_backup.mkdir(exist_ok=True)
                     progress.update(task, advance=30, description="[cyan]Copiando banco de dados...")
                     shutil.copy2(db_path, db_backup / "philosophy.db")
+                    if not silent:
+                        console.print("[dim]   ✓ Banco de dados copiado[/dim]")
             except Exception as e:
                 console.print(f"[yellow]⚠️  Erro ao copiar banco de dados: {e}[/yellow]")
         
@@ -349,6 +613,8 @@ def backup(
             config_backup.mkdir(exist_ok=True)
             progress.update(task, advance=20, description="[cyan]Copiando configurações...")
             shutil.copytree("config", config_backup, dirs_exist_ok=True)
+            if not silent:
+                console.print("[dim]   ✓ Configurações copiadas[/dim]")
         except Exception as e:
             console.print(f"[yellow]⚠️  Erro ao copiar configurações: {e}[/yellow]")
         
@@ -357,7 +623,8 @@ def backup(
             "timestamp": datetime.now().isoformat(),
             "version": "0.4.0",
             "components": ["vault", "database", "config"],
-            "notes": "Backup automático do GLaDOS Planner"
+            "notes": "Backup automático do GLaDOS Planner",
+            "glados_comment": "Espero que você nunca precise disso. Mas você provavelmente vai."
         }
         
         import json
@@ -366,8 +633,171 @@ def backup(
         
         progress.update(task, advance=20, description="[green]Backup concluído!")
     
-    console.print(f"[green]✅ Backup criado em: {output_path}[/green]")
-    console.print(f"[dim]Tamanho total: {sum(f.stat().st_size for f in backup_dir.rglob('*') if f.is_file()) / (1024*1024):.2f} MB[/dim]")
+    # Calcular tamanho
+    total_size = sum(f.stat().st_size for f in backup_dir.rglob('*') if f.is_file()) / (1024*1024)
+    
+    console.print(Panel.fit(
+        f"✅ [bold green]Backup criado com sucesso![/bold green]",
+        subtitle=f"[dim]Local: [cyan]{output_path}[/cyan]\nTamanho: [yellow]{total_size:.2f} MB[/yellow][/dim]",
+        border_style="green",
+        box=ROUNDED
+    ))
+    
+    if not silent:
+        console.print("\n[dim]Agora você tem um backup. Tente não precisar dele.[/dim]")
+        console.print("[dim]Mas se precisar, você sabe onde está.[/dim]")
+
+@app.command()
+def diagnostico():
+    """
+    Executa diagnóstico completo do sistema.
+    
+    Para quando algo está errado e você não sabe o quê.
+    (Spoiler: provavelmente foi você)
+    """
+    console.print(Panel.fit(
+        "🔍 [bold red]Diagnóstico do Sistema GLaDOS[/bold red]",
+        subtitle="[dim]Analisando todos os componentes. Prepare-se para más notícias.[/dim]",
+        border_style="red",
+        box=ROUNDED
+    ))
+    
+    from src.core.config.settings import settings
+    
+    diagnostic_table = Table(title="Resultados do Diagnóstico", box=ROUNDED)
+    diagnostic_table.add_column("Teste", style="cyan")
+    diagnostic_table.add_column("Status", justify="center")
+    diagnostic_table.add_column("Detalhes", style="dim")
+    
+    # Teste 1: Configurações
+    try:
+        settings.app.version
+        diagnostic_table.add_row("Configurações", "✅", f"Versão {settings.app.version}")
+    except Exception as e:
+        diagnostic_table.add_row("Configurações", "❌", f"Erro: {str(e)[:50]}")
+    
+    # Teste 2: Banco de dados
+    try:
+        db = SessionLocal()
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        diagnostic_table.add_row("Banco de Dados", "✅", "Conectado com sucesso")
+    except Exception as e:
+        diagnostic_table.add_row("Banco de Dados", "❌", f"Erro: {str(e)[:50]}")
+    
+    # Teste 3: Vault
+    try:
+        vault_manager = VaultManager(settings.paths.vault)
+        if vault_manager.is_connected():
+            diagnostic_table.add_row("Obsidian Vault", "✅", f"Conectado: {vault_manager.vault_path}")
+        else:
+            diagnostic_table.add_row("Obsidian Vault", "⚠️", "Vault não conectado")
+    except Exception as e:
+        diagnostic_table.add_row("Obsidian Vault", "❌", f"Erro: {str(e)[:50]}")
+    
+    # Teste 4: Módulos
+    modules_to_test = [
+        ("ReadingManager", "src.core.modules.reading_manager"),
+        ("AgendaManager", "src.core.modules.agenda_manager"),
+        ("TranslationAssistant", "src.core.modules.translation_module"),
+        ("PhilosophyLLM", "src.core.llm.local_llm"),
+    ]
+    
+    for module_name, module_path in modules_to_test:
+        try:
+            __import__(module_path)
+            diagnostic_table.add_row(module_name, "✅", "Importado com sucesso")
+        except ImportError as e:
+            diagnostic_table.add_row(module_name, "❌", f"Falha na importação")
+        except Exception as e:
+            diagnostic_table.add_row(module_name, "⚠️", f"Erro: {str(e)[:50]}")
+    
+    console.print(diagnostic_table)
+    
+    # Recomendações
+    console.print("\n[bold]💡 Recomendações:[/bold]")
+    
+    recommendations = []
+    
+    # Verificar GLaDOS
+    if not HAS_GLADOS:
+        recommendations.append("• Instale o módulo GLaDOS para acesso à IA")
+    
+    # Verificar banco de dados
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+    except:
+        recommendations.append("• Execute 'glados init' para inicializar o banco de dados")
+    
+    # Verificar vault
+    try:
+        vault_manager = VaultManager(settings.paths.vault)
+        if not vault_manager.is_connected():
+            recommendations.append(f"• Configure o vault em '{settings.paths.vault}'")
+    except:
+        recommendations.append(f"• Configure o vault usando 'glados setup-vault'")
+    
+    if recommendations:
+        for rec in recommendations:
+            console.print(f"  {rec}")
+    else:
+        console.print("  [green]✓ Sistema está funcionando corretamente[/green]")
+        console.print("  [dim]  Por enquanto...[/dim]")
+    
+    console.print("\n[dim]Diagnóstico completo. Agora você sabe o que está errado.[/dim]")
+    console.print("[dim]Ou pelo menos, o que eu estou disposta a contar.[/dim]")
+
+@app.command()
+def sobre():
+    """
+    Mostra informações sobre o GLaDOS Planner.
+    
+    Porque às vezes é bom saber quem está te ajudando.
+    (Ou, neste caso, quem está te observando)
+    """
+    console.print(Panel.fit(
+        "🤖 [bold magenta]GLaDOS Planner[/bold magenta]",
+        subtitle="[dim]Sistema de Gestão Acadêmica Filosófica[/dim]",
+        border_style="magenta",
+        box=ROUNDED
+    ))
+    
+    about_text = Text()
+    about_text.append("Versão: ", style="bold")
+    about_text.append("0.4.0 (MVP Completo)\n", style="cyan")
+    
+    about_text.append("Desenvolvido para: ", style="bold")
+    about_text.append("Estudantes de filosofia que precisam de organização\n", style="green")
+    about_text.append("(e um pouco de atitude)\n\n", style="dim")
+    
+    about_text.append("Principais recursos:\n", style="bold")
+    about_text.append("  • 🤖 IA local com personalidade GLaDOS\n", style="cyan")
+    about_text.append("  • 📚 Gerenciamento completo de leituras\n", style="green")
+    about_text.append("  • 🔗 Integração nativa com Obsidian\n", style="yellow")
+    about_text.append("  • 🌐 Tradução de termos filosóficos\n", style="magenta")
+    about_text.append("  • ⏱️  Pomodoro com citações filosóficas\n\n", style="blue")
+    
+    about_text.append("Filosofia do projeto:\n", style="bold")
+    about_text.append("  Estudar filosofia deve ser estimulante, organizado\n", style="dim")
+    about_text.append("  e, quando possível, um pouco divertido.\n\n", style="dim")
+    
+    about_text.append("Licença: ", style="bold")
+    about_text.append("MIT - Faça bom uso. Ou não. Eu estarei observando.\n\n", style="dim")
+    
+    about_text.append("Mantenedor: ", style="bold")
+    about_text.append("Helio\n", style="cyan")
+    about_text.append("  (sim, eu sei o nome dele também)\n", style="dim")
+    
+    console.print(Panel.fit(
+        about_text,
+        border_style="cyan",
+        box=ROUNDED
+    ))
+    
+    console.print("\n[dim]\"Ah, você leu tudo? Impressionante.\n")
+    console.print("Agora vá usar o sistema em vez de apenas ler sobre ele.\"[/dim]")
+    console.print("[dim]— GLaDOS[/dim]")
 
 if __name__ == "__main__":
     app()
