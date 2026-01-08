@@ -75,7 +75,8 @@ class LocalLLM:
             self.vault_structure = VaultStructure(str(vault_path))
             
             # Inicializar Sembrain se configurado
-            if settings.llm.get('use_semantic_search', True):
+            # CORREÇÃO: acessar diretamente o atributo, não usar .get()
+            if hasattr(settings.llm, 'use_semantic_search') and settings.llm.use_semantic_search:
                 self._init_sembrain()
             
             # Glados voice
@@ -92,6 +93,8 @@ class LocalLLM:
             
         except Exception as e:
             print(f"❌ Erro inicializando LLM: {e}")
+            import traceback
+            traceback.print_exc()
             self._initialized = True
     
     def _init_sembrain(self):
@@ -99,6 +102,7 @@ class LocalLLM:
         try:
             from src.core.llm.glados.brain.sembrain import Sembrain
             
+            # CORREÇÃO: usar get_all_notes() que agora existe
             notes = self.vault_structure.get_all_notes()
             vault_path = Path(settings.paths.vault).expanduser()
             
@@ -337,7 +341,7 @@ Por favor, use o contexto acima para responder. Se não houver informações suf
                 },
                 "sembrain": {
                     "available": self.sembrain is not None,
-                    "notes_indexed": self.sembrain.get_stats()["total_notes"] if self.sembrain else 0
+                    "notes_indexed": self.sembrain.get_stats().get("total_notes", 0) if self.sembrain else 0
                 },
                 "timestamp": datetime.now().isoformat()
             }

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 
-from .semantic_search import HierarchicalSearch, SearchResult
+from .semantic_search import Sembrain, SearchResult
 
 @dataclass
 class VaultNote:
@@ -67,12 +67,13 @@ class VaultStructure:
         try:
             # Converte cache para lista de notas
             notes_list = list(self.notes_cache.values())
-            self.semantic_search = HierarchicalSearch(self.vault_path, notes_list)
+            self.semantic_search = Sembrain(self.vault_path, notes_list)
             print(f"[GLaDOS] ✅ Busca semântica inicializada: {len(notes_list)} notas indexadas")
             
-            # Mostra estatísticas
-            stats = self.semantic_search.get_stats()
-            print(f"[GLaDOS] 📊 Estatísticas busca: embeddings={stats['model_loaded']}, cache={stats['query_cache_size']}")
+            # Mostra estatísticas CORRIGIDO: Sembrain não tem 'model_loaded'
+            if self.semantic_search:
+                stats = self.semantic_search.get_stats()
+                print(f"[GLaDOS] 📊 Estatísticas busca: notas={stats['total_notes']}, vocabulário={stats['vocabulary_size']}")
         except Exception as e:
             print(f"[GLaDOS] ⚠️  Erro ao inicializar busca semântica: {e}")
             self.semantic_search = None
@@ -217,6 +218,11 @@ class VaultStructure:
         """Retorna notas de disciplinas da pasta 03 - Disciplinas"""
         return self.get_notes_by_folder("03 - Disciplinas")
     
+    # ADICIONADO: Método para compatibilidade com local_llm.py
+    def get_all_notes(self) -> List[VaultNote]:
+        """Retorna todas as notas do vault (para compatibilidade)"""
+        return list(self.notes_cache.values())
+    
     def search_notes(self, query: str, limit: int = 5, semantic: bool = True) -> List[Union[VaultNote, Dict]]:
         """
         Busca por texto nas notas usando busca semântica ou textual
@@ -235,7 +241,7 @@ class VaultStructure:
         # Usa busca semântica se disponível
         if semantic and self.semantic_search:
             try:
-                results = self.semantic_search.search(query, limit=limit, use_semantic=semantic)
+                results = self.semantic_search.search(query, limit=limit)
                 
                 # Retorna apenas as notas (backward compatibility)
                 notes = [result.note for result in results]
@@ -262,9 +268,8 @@ class VaultStructure:
                 'note': result.note.to_dict(),
                 'relevance': result.relevance,
                 'search_type': result.search_type,
-                'similarity': result.similarity,
-                'folder_type': result.folder_type,
-                'matched_fields': result.matched_fields
+                'matched_fields': result.matched_fields,
+                'excerpt': result.excerpt
             })
         
         return detailed_results
@@ -311,8 +316,13 @@ class VaultStructure:
             notes = self.get_notes_by_folder(folder)
             notes_by_folder[folder] = len(notes)
         
-        # Estatísticas de busca semântica
-        semantic_stats = self.semantic_search.get_stats() if self.semantic_search else {}
+        # Estatísticas de busca semântica CORRIGIDAS
+        semantic_stats = {}
+        if self.semantic_search:
+            try:
+                semantic_stats = self.semantic_search.get_stats()
+            except:
+                semantic_stats = {}
         
         return {
             "total_notes": total_notes,
@@ -321,9 +331,9 @@ class VaultStructure:
             "vault_path": str(self.vault_path),
             "semantic_search": {
                 "available": self.semantic_search is not None,
-                "embeddings_loaded": semantic_stats.get('model_loaded', False),
-                "notes_indexed": semantic_stats.get('notes_indexed', 0),
-                "cache_size": semantic_stats.get('query_cache_size', 0)
+                "total_notes": semantic_stats.get('total_notes', 0),
+                "vocabulary_size": semantic_stats.get('vocabulary_size', 0),
+                "cache_size": semantic_stats.get('cache_size', 0)
             }
         }
     
@@ -400,7 +410,7 @@ class VaultStructure:
                 
                 # Atualiza índice semântico se disponível
                 if self.semantic_search:
-                    self.semantic_search.update_index([note])
+                    self.semantic_search.add_note(note)
                 
                 return note
         except Exception as e:
