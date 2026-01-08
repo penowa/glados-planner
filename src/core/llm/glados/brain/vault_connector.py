@@ -1,6 +1,6 @@
 """
 Conector do vault do Obsidian como cérebro da GLaDOS
-Respeita a estrutura definida na documentação
+Atualizado para a estrutura real do vault
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -23,19 +23,21 @@ class VaultNote:
     modified: Optional[datetime] = None
 
 class VaultStructure:
-    """Mapeia a estrutura exata do vault definido na documentação"""
+    """Mapeia a estrutura REAL do vault"""
     
-    # Estrutura baseada no documento original
+    # Estrutura REAL baseada na sua pasta
     STRUCTURE = {
-        "00-META": "Sistema e metadados",
-        "01-LEITURAS": "Gestão de leituras por autor",
-        "02-DISCIPLINAS": "Organização por áreas da filosofia",
-        "03-PRODUÇÃO": "Produção acadêmica do usuário",
-        "04-AGENDA": "Gestão acadêmica e prazos",
-        "05-CONCEITOS": "Conceitos filosóficos organizados",
-        "06-RECURSOS": "Recursos e métodos de estudo",
-        "07-PESSOAL": "Conteúdo pessoal e reflexões",
-        "08-ARCHIVE": "Conteúdo arquivado"
+        "00 - Meta": "Sistema e metadados",
+        "01 - Leituras": "Gestão de leituras por autor",
+        "02 - Conceitos": "Conceitos filosóficos organizados",
+        "03 - Disciplinas": "Organização por áreas da filosofia",
+        "04 - Projetos": "Produção acadêmica do usuário",
+        "05 - Pessoal": "Conteúdo pessoal e reflexões",
+        "06 - Templates": "Templates de notas",
+        "07 - Arquivos": "Arquivos diversos",
+        "08 - Referências": "Referências bibliográficas",
+        "09 - Excalidraw": "Desenhos e diagramas",
+        "10 - Mapas Mentais": "Mapas conceituais"
     }
     
     def __init__(self, vault_path: str):
@@ -45,39 +47,101 @@ class VaultStructure:
         self._index_vault()
     
     def _validate_structure(self) -> bool:
-        """Valida se o vault segue a estrutura esperada"""
-        valid = True
+        """Valida se o vault existe (modo flexível)"""
+        if not self.vault_path.exists():
+            print(f"[GLaDOS] ❌ Vault não encontrado: {self.vault_path}")
+            print(f"[GLaDOS] Criando estrutura básica...")
+            self._create_basic_structure()
+            return True
         
-        for folder in self.STRUCTURE.keys():
-            folder_path = self.vault_path / folder
-            if not folder_path.exists():
-                print(f"[GLaDOS] Aviso: Pasta '{folder}' não encontrada no vault")
-                valid = False
+        # Verifica estrutura existente
+        print(f"[GLaDOS] ✅ Vault encontrado: {self.vault_path}")
         
-        return valid
+        # Lista diretórios existentes
+        existing_dirs = [d.name for d in self.vault_path.iterdir() if d.is_dir()]
+        print(f"[GLaDOS] Diretórios encontrados: {existing_dirs}")
+        
+        return True
+    
+    def _create_basic_structure(self):
+        """Cria estrutura básica do vault se não existir"""
+        self.vault_path.mkdir(parents=True, exist_ok=True)
+        
+        for folder_name, description in self.STRUCTURE.items():
+            folder_path = self.vault_path / folder_name
+            folder_path.mkdir(exist_ok=True)
+            
+            # Cria README em cada pasta
+            readme_path = folder_path / "README.md"
+            if not readme_path.exists():
+                readme_content = f"""# {folder_name}
+
+{description}
+
+*Esta pasta é gerenciada automaticamente pelo sistema GLaDOS.*
+
+## Conteúdo Esperado:
+- {description.lower()}
+- Notas relacionadas
+- Metadados do sistema
+
+---
+*Criado por GLaDOS v0.4.0*
+"""
+                readme_path.write_text(readme_content, encoding="utf-8")
+        
+        print(f"[GLaDOS] ✅ Estrutura criada em: {self.vault_path}")
     
     def _index_vault(self):
         """Indexa todas as notas do vault"""
-        for md_file in self.vault_path.glob("**/*.md"):
-            try:
-                note = self._parse_note(md_file)
-                if note:
-                    relative_path = md_file.relative_to(self.vault_path)
-                    self.notes_cache[str(relative_path)] = note
-            except Exception as e:
-                print(f"[GLaDOS] Erro ao parsear {md_file}: {e}")
+        print(f"[GLaDOS] 🔍 Indexando vault...")
+        
+        # Lista de extensões de arquivos de nota
+        note_extensions = ['.md', '.txt', '.markdown']
+        
+        note_count = 0
+        for ext in note_extensions:
+            for md_file in self.vault_path.glob(f"**/*{ext}"):
+                try:
+                    note = self._parse_note(md_file)
+                    if note:
+                        relative_path = md_file.relative_to(self.vault_path)
+                        self.notes_cache[str(relative_path)] = note
+                        note_count += 1
+                except Exception as e:
+                    print(f"[GLaDOS] ⚠️  Erro ao parsear {md_file}: {e}")
+        
+        print(f"[GLaDOS] ✅ {note_count} notas indexadas")
     
     def _parse_note(self, file_path: Path) -> Optional[VaultNote]:
         """Parseia uma nota Markdown com frontmatter"""
         try:
             content = file_path.read_text(encoding='utf-8')
-            parsed = frontmatter.loads(content)
+            
+            # Tenta extrair frontmatter
+            frontmatter_data = {}
+            if content.startswith('---'):
+                try:
+                    # Usa frontmatter se disponível
+                    parsed = frontmatter.loads(content)
+                    content = parsed.content
+                    frontmatter_data = parsed.metadata
+                except:
+                    # Fallback para parsing simples
+                    parts = content.split('---', 2)
+                    if len(parts) >= 3:
+                        frontmatter_str = parts[1]
+                        content = parts[2].lstrip('\n')
+                        try:
+                            frontmatter_data = yaml.safe_load(frontmatter_str) or {}
+                        except:
+                            frontmatter_data = {}
             
             # Extrai título do frontmatter ou do nome do arquivo
-            title = parsed.get('title', file_path.stem)
+            title = frontmatter_data.get('title', file_path.stem)
             
             # Extrai tags
-            tags = parsed.get('tags', [])
+            tags = frontmatter_data.get('tags', [])
             if isinstance(tags, str):
                 tags = [tags]
             
@@ -88,15 +152,15 @@ class VaultStructure:
             return VaultNote(
                 path=file_path,
                 title=title,
-                content=parsed.content,
-                frontmatter=parsed.metadata,
+                content=content.strip(),
+                frontmatter=frontmatter_data,
                 tags=tags,
                 links=links,
-                created=file_path.stat().st_ctime,
-                modified=file_path.stat().st_mtime
+                created=datetime.fromtimestamp(file_path.stat().st_ctime),
+                modified=datetime.fromtimestamp(file_path.stat().st_mtime)
             )
         except Exception as e:
-            print(f"[GLaDOS] Erro ao parsear {file_path}: {e}")
+            print(f"[GLaDOS] ⚠️  Erro ao parsear {file_path}: {e}")
             return None
     
     def get_notes_by_folder(self, folder_name: str) -> List[VaultNote]:
@@ -111,19 +175,22 @@ class VaultStructure:
         return notes
     
     def get_concept_notes(self) -> List[VaultNote]:
-        """Retorna notas de conceitos da pasta 05-CONCEITOS"""
-        return self.get_notes_by_folder("05-CONCEITOS")
+        """Retorna notas de conceitos da pasta 02 - Conceitos"""
+        return self.get_notes_by_folder("02 - Conceitos")
     
     def get_reading_notes(self) -> List[VaultNote]:
-        """Retorna notas de leituras da pasta 01-LEITURAS"""
-        return self.get_notes_by_folder("01-LEITURAS")
+        """Retorna notas de leituras da pasta 01 - Leituras"""
+        return self.get_notes_by_folder("01 - Leituras")
     
     def get_discipline_notes(self) -> List[VaultNote]:
-        """Retorna notas de disciplinas da pasta 02-DISCIPLINAS"""
-        return self.get_notes_by_folder("02-DISCIPLINAS")
+        """Retorna notas de disciplinas da pasta 03 - Disciplinas"""
+        return self.get_notes_by_folder("03 - Disciplinas")
     
-    def search_notes(self, query: str, limit: int = 10) -> List[VaultNote]:
+    def search_notes(self, query: str, limit: int = 3) -> List[VaultNote]:
         """Busca por texto nas notas"""
+        if not self.notes_cache:
+            return []
+        
         results = []
         query_lower = query.lower()
         
@@ -164,25 +231,34 @@ class VaultStructure:
         return {
             "total_notes": total_notes,
             "notes_by_folder": notes_by_folder,
-            "structure": self.STRUCTURE
+            "structure": self.STRUCTURE,
+            "vault_path": str(self.vault_path)
         }
     
     def format_as_brain_context(self, notes: List[VaultNote]) -> str:
         """Formata notas como contexto cerebral para a LLM"""
         if not notes:
-            return "[MEMÓRIA VAZIA] Nenhuma informação relevante encontrada no cérebro."
+            return "[MEMÓRIA VAZIA] Nenhuma informação relevante encontrada no meu cérebro."
         
         context = "[CONSULTA AO CÉREBRO DE GLaDOS]\n"
-        for i, note in enumerate(notes[:5]):  # Limita a 5 notas
+        context += f"Consulta retornou {len(notes)} nota(s) relevantes:\n\n"
+        
+        for i, note in enumerate(notes):
             relative_path = note.path.relative_to(self.vault_path)
-            context += f"\n--- NOTA {i+1}: {relative_path} ---\n"
+            context += f"--- NOTA {i+1}: {relative_path} ---\n"
             context += f"Título: {note.title}\n"
             
-            # Resumo do conteúdo (primeiras 200 caracteres)
-            summary = note.content[:200] + "..." if len(note.content) > 200 else note.content
+            # Resumo do conteúdo (primeiros 300 caracteres)
+            if len(note.content) > 300:
+                summary = note.content[:300] + "..."
+            else:
+                summary = note.content
+            
             context += f"Conteúdo: {summary}\n"
             
             if note.tags:
                 context += f"Tags: {', '.join(note.tags)}\n"
+            
+            context += "\n"
         
         return context
