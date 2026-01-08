@@ -193,7 +193,8 @@ def init(
             progress.update(task2, completed=True)
             if not silent:
                 console.print(f"[green]✓[/green] [dim]Gerenciador do vault configurado[/dim]")
-                console.print(f"[dim]   Encontrei seu cérebro externo em: [blue]{vault_path}[/blue][/dim]")
+                vault_display_path = str(vault_manager.vault_path).replace(str(Path.home()), "~")
+                console.print(f"[dim]   Encontrei seu cérebro externo em: [blue]{vault_display_path}[/blue][/dim]")
         except Exception as e:
             console.print(f"[orange1]⚠️  Aviso: {e}[/orange1]")
             if not silent:
@@ -207,10 +208,10 @@ def init(
         modules_status = []
         
         try:
-            from src.core.llm.local_llm import PhilosophyLLM
-            modules_status.append(("🧠 PhilosophyLLM", "✅"))
+            from src.core.llm.local_llm import LocalLLM
+            modules_status.append(("🧠 Glados", "✅"))
         except:
-            modules_status.append(("🧠 PhilosophyLLM", "⚠️"))
+            modules_status.append(("🧠 Glados", "⚠️"))
         
         try:
             from src.core.modules.reading_manager import ReadingManager

@@ -1,20 +1,24 @@
 """
 Comandos CLI para interagir com o cérebro da GLaDOS
+Atualizado com opções de busca semântica
 """
 import typer
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.markdown import Markdown
+from rich.syntax import Syntax
+from rich import box
 import time
-from typing import Optional
+from typing import Optional, List
+import json
 
 from src.core.llm.glados.brain.vault_connector import VaultStructure
 from src.core.llm.glados.personality.glados_voice import GladosVoice
 from src.core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados, LlamaConfig
 
-app = typer.Typer(name="glados", help="Sistema GLaDOS - Cérebro Filosófico")
+app = typer.Typer(name="glados", help="Sistema GLaDOS - Cérebro Filosófico com Busca Semântica")
 console = Console()
 
 def _get_glados_system():
@@ -52,19 +56,20 @@ def _get_glados_system():
 @app.command(name="consultar")
 def consultar_cerebro(
     pergunta: str = typer.Argument(..., help="Pergunta para o cérebro de GLaDOS"),
-    area: Optional[str] = typer.Option(None, "--area", "-a", help="Área específica (conceitos, leituras, etc)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Mostrar detalhes do processo"),
+    semantic: bool = typer.Option(True, "--semantic/--textual", help="Usar busca semântica (padrão) ou apenas textual"),
+    detalhes: bool = typer.Option(False, "--detalhes", "-d", help="Mostrar detalhes da busca"),
+    limite: int = typer.Option(5, "--limite", "-l", help="Número máximo de notas para consultar"),
     raw: bool = typer.Option(False, "--raw", help="Mostrar resposta sem formatação Rich")
 ):
     """
-    Consulta o cérebro de GLaDOS (vault do Obsidian)
+    Consulta o cérebro de GLaDOS com busca semântica no vault
     """
     system = _get_glados_system()
     
     # Cabeçalho
     if not raw:
         console.print(Panel.fit(
-            f"[bold magenta]GLaDOS[/bold magenta] - Consulta Cerebral\n"
+            f"[bold magenta]GLaDOS[/bold magenta] - Consulta Cerebral {'Semântica' if semantic else 'Textual'}\n"
             f"[dim]Usuário: {system['settings'].llm.glados.user_name} | "
             f"Vault: {system['settings'].paths.vault}[/dim]",
             border_style="magenta"
@@ -74,48 +79,58 @@ def consultar_cerebro(
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
         console=console,
         disable=raw
     ) as progress:
         
-        task1 = progress.add_task("[cyan]Ativando neurônios...", total=100)
-        for i in range(10):
-            progress.update(task1, advance=10)
-            time.sleep(0.05)
+        task1 = progress.add_task("[cyan]Ativando neurônios...", total=None)
+        time.sleep(0.5)
         
-        task2 = progress.add_task("[cyan]Consultando memórias...", total=100)
-        vault_stats = system['vault'].get_vault_stats()
-        for i in range(10):
-            progress.update(task2, advance=10)
-            time.sleep(0.05)
+        task2 = progress.add_task("[cyan]Buscando no conhecimento...", total=None)
+        # Busca notas usando o método apropriado
+        if detalhes:
+            # Busca detalhada para mostrar métricas
+            resultados_detalhados = system['vault'].search_detailed(pergunta, limit=limite)
+            notas = [system['vault'].get_note_by_path(r['note']['path']) for r in resultados_detalhados]
+            notas = [n for n in notas if n]
+        else:
+            notas = system['vault'].search_notes(pergunta, limit=limite, semantic=semantic)
         
-        task3 = progress.add_task("[cyan]Processando com TinyLlama...", total=100)
-        resposta = system['llm'].generate_response(pergunta, system['settings'].llm.glados.user_name)
-        for i in range(10):
-            progress.update(task3, advance=10)
-            time.sleep(0.1)
+        time.sleep(0.5)
+        
+        task3 = progress.add_task("[cyan]Processando com TinyLlama...", total=None)
+        # Formata contexto
+        contexto = system['vault'].format_as_brain_context(notas, pergunta)
+        
+        # Gera resposta
+        resposta = system['llm'].generate_response(
+            pergunta, 
+            system['settings'].llm.glados.user_name,
+            contexto_adicional=contexto
+        )
+        time.sleep(0.5)
+        
+        progress.update(task3, completed=True)
     
-    # Mostra resultados
-    if verbose:
-        console.print("\n[bold]Estatísticas do Vault:[/bold]")
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Pasta", style="cyan")
-        table.add_column("Notas", justify="right")
-        table.add_column("Função Cerebral", style="green")
+    # Mostra detalhes da busca se solicitado
+    if detalhes and not raw:
+        console.print("\n[bold]📊 Detalhes da Busca:[/bold]")
         
-        for folder, count in vault_stats["notes_by_folder"].items():
-            brain_region = system['settings'].obsidian.brain_regions.get(folder, "desconhecida")
-            table.add_row(folder, str(count), brain_region.replace("_", " ").title())
+        if semantic and system['vault'].semantic_search:
+            stats = system['vault'].semantic_search.get_stats()
+            console.print(f"  • Modelo de embeddings: {'✅ Carregado' if stats['model_loaded'] else '❌ Não disponível'}")
+            console.print(f"  • Notas indexadas: {stats['notes_indexed']}")
+            console.print(f"  • Cache de consultas: {stats['query_cache_size']} entradas")
         
-        console.print(table)
-        
-        # Estatísticas do LLM
-        llm_stats = system['llm'].get_stats()
-        console.print(f"\n[bold]Estatísticas GLaDOS:[/bold]")
-        console.print(f"• Modelo carregado: {'✅' if llm_stats['model_loaded'] else '❌'}")
-        console.print(f"• Taxa de cache: {llm_stats['cache_hit_rate']:.1%}")
-        console.print(f"• Tamanho do cache: {llm_stats['cache_size']} respostas")
+        console.print(f"  • Notas encontradas: {len(notas)}")
+        console.print(f"  • Método: {'Semântico' if semantic else 'Textual'}")
+    
+    # Mostra contexto encontrado (debug)
+    if detalhes and notas and not raw:
+        console.print("\n[bold]🔍 Contexto Encontrado:[/bold]")
+        for i, nota in enumerate(notas):
+            console.print(f"  {i+1}. [cyan]{nota.title}[/cyan]")
+            console.print(f"     [dim]{nota.path.relative_to(system['vault'].vault_path)}[/dim]")
     
     # Resposta final
     if raw:
@@ -129,203 +144,286 @@ def consultar_cerebro(
         ))
         
         # Rodapé
-        console.print(f"\n[dim]Consulta processada. Memórias ativadas: {vault_stats['total_notes']}[/dim]")
-
-@app.command(name="estrutura")
-def mostrar_estrutura(
-    detalhado: bool = typer.Option(False, "--detalhado", "-d", help="Mostrar estrutura detalhada")
-):
-    """Mostra a estrutura do cérebro (vault) de GLaDOS"""
-    system = _get_glados_system()
-    vault_stats = system['vault'].get_vault_stats()
-    
-    console.print(Panel.fit(
-        "[bold magenta]Estrutura do Cérebro de GLaDOS[/bold magenta]\n"
-        f"[dim]Vault: {system['settings'].paths.vault}[/dim]",
-        border_style="magenta"
-    ))
-    
-    if detalhado:
-        # Estrutura detalhada
-        for folder, description in system['vault'].STRUCTURE.items():
-            notes = system['vault'].get_notes_by_folder(folder)
-            brain_region = system['settings'].obsidian.brain_regions.get(folder, "desconhecida")
-            
-            console.print(f"\n[bold cyan]{folder}[/bold cyan] - {description}")
-            console.print(f"  [dim]Função cerebral: {brain_region.replace('_', ' ').title()}[/dim]")
-            console.print(f"  [dim]Notas: {len(notes)}[/dim]")
-            
-            # Mostra algumas notas de exemplo
-            if notes and len(notes) > 0:
-                for note in notes[:3]:
-                    console.print(f"    • {note.title}")
-                if len(notes) > 3:
-                    console.print(f"    [dim]... e mais {len(notes) - 3} notas[/dim]")
-    else:
-        # Visão geral
-        table = Table(title="Estrutura do Vault", show_header=True, header_style="bold magenta")
-        table.add_column("Pasta", style="cyan")
-        table.add_column("Descrição", style="white")
-        table.add_column("Notas", justify="right")
-        table.add_column("Função Cerebral", style="green")
-        
-        for folder, description in system['vault'].STRUCTURE.items():
-            notes_count = vault_stats["notes_by_folder"].get(folder, 0)
-            brain_region = system['settings'].obsidian.brain_regions.get(folder, "desconhecida")
-            table.add_row(folder, description, str(notes_count), brain_region.replace("_", " ").title())
-        
-        console.print(table)
-    
-    console.print(f"\n[dim]Total de memórias: {vault_stats['total_notes']} notas[/dim]")
-
-@app.command(name="chamar")
-def chamar_glados():
-    """Chama GLaDOS pelo nome"""
-    system = _get_glados_system()
-    resposta = system['voice'].respond_to_name()
-    
-    console.print(Panel.fit(
-        resposta,
-        title="[bold magenta]GLaDOS[/bold magenta]",
-        border_style="magenta"
-    ))
-
-@app.command(name="estatisticas")
-def mostrar_estatisticas():
-    """Mostra estatísticas do sistema GLaDOS"""
-    system = _get_glados_system()
-    
-    # Estatísticas do vault
-    vault_stats = system['vault'].get_vault_stats()
-    
-    # Estatísticas do LLM
-    llm_stats = system['llm'].get_stats()
-    
-    console.print(Panel.fit(
-        "[bold magenta]Estatísticas do Sistema GLaDOS[/bold magenta]",
-        border_style="magenta"
-    ))
-    
-    console.print("\n[bold]📊 Cérebro (Vault):[/bold]")
-    console.print(f"  • Total de memórias: {vault_stats['total_notes']} notas")
-    console.print(f"  • Estrutura validada: {'✅' if system['vault']._validate_structure() else '❌'}")
-    
-    console.print("\n[bold]🤖 Inteligência (LLM):[/bold]")
-    console.print(f"  • Modelo: {llm_stats['config']['model']}")
-    console.print(f"  • Carregado: {'✅' if llm_stats['model_loaded'] else '❌ (modo simulado)'}")
-    console.print(f"  • Contexto: {llm_stats['config']['context_size']} tokens")
-    console.print(f"  • Cache: {llm_stats['cache_size']} respostas")
-    console.print(f"  • Taxa de acerto no cache: {llm_stats['cache_hit_rate']:.1%}")
-    
-    console.print("\n[bold]👤 Personalidade:[/bold]")
-    console.print(f"  • Usuário: {system['settings'].llm.glados.user_name}")
-    console.print(f"  • Intensidade: {system['settings'].llm.glados.personality_intensity}")
-    console.print(f"  • Interações: {system['voice'].user_context.interaction_count}")
-    
-    console.print("\n[dim]Sistema GLaDOS operacional. Pronto para consultas filosóficas.[/dim]")
+        vault_stats = system['vault'].get_vault_stats()
+        console.print(f"\n[dim]Consulta processada. Memórias ativadas: {vault_stats['total_notes']} | "
+                     f"Busca: {'semântica' if semantic else 'textual'}[/dim]")
 
 @app.command(name="buscar")
 def buscar_no_vault(
     termo: str = typer.Argument(..., help="Termo para buscar no vault"),
-    limite: int = typer.Option(10, "--limite", "-l", help="Número máximo de resultados")
+    semantic: bool = typer.Option(True, "--semantic/--textual", help="Usar busca semântica"),
+    limite: int = typer.Option(10, "--limite", "-l", help="Número máximo de resultados"),
+    format: str = typer.Option("table", "--format", "-f", help="Formato: table, json, minimal"),
+    detalhes: bool = typer.Option(False, "--detalhes", "-d", help="Mostrar detalhes de relevância")
 ):
-    """Busca direta no vault do Obsidian"""
+    """Busca direta no vault do Obsidian com opções semânticas"""
     system = _get_glados_system()
     
-    console.print(f"[bold]Buscando '{termo}' no cérebro de GLaDOS...[/bold]\n")
+    console.print(f"[bold]🔍 Buscando '{termo}' no cérebro de GLaDOS...[/bold]")
+    console.print(f"[dim]Método: {'semântico' if semantic else 'textual'} | Limite: {limite}[/dim]\n")
     
-    results = system['vault'].search_notes(termo, limit=limite)
+    if detalhes and semantic:
+        # Busca detalhada com métricas
+        resultados = system['vault'].search_detailed(termo, limit=limite)
+    else:
+        # Busca normal
+        notas = system['vault'].search_notes(termo, limit=limite, semantic=semantic)
+        resultados = [{'note': n.to_dict(), 'relevance': 1.0} for n in notas]
     
-    if not results:
+    if not resultados:
         console.print("[yellow]Nenhuma nota encontrada.[/yellow]")
         return
     
-    table = Table(title=f"Resultados para '{termo}'", show_header=True, header_style="bold cyan")
-    table.add_column("Nota", style="green")
+    # Formata saída baseado no formato escolhido
+    if format == "json":
+        console.print(json.dumps(resultados, indent=2, ensure_ascii=False))
+        return
+    elif format == "minimal":
+        for i, res in enumerate(resultados):
+            note = res['note']
+            console.print(f"{i+1}. [green]{note['title']}[/green]")
+            console.print(f"   [dim]{note['path']}[/dim]")
+            if detalhes:
+                console.print(f"   Relevância: {res.get('relevance', 0):.3f}")
+        return
+    
+    # Formato table (padrão)
+    table = Table(
+        title=f"Resultados para '{termo}' ({len(resultados)} encontrados)",
+        show_header=True, 
+        header_style="bold cyan",
+        box=box.ROUNDED
+    )
+    
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Título", style="green")
     table.add_column("Pasta", style="cyan")
     table.add_column("Tags", style="yellow")
     table.add_column("Tamanho", justify="right")
     
-    for note in results:
-        relative_path = note.path.relative_to(system['vault'].vault_path)
-        folder = str(relative_path).split('/')[0] if '/' in str(relative_path) else "raiz"
-        tags = ", ".join(note.tags[:3]) if note.tags else ""
-        if len(note.tags) > 3:
+    if detalhes:
+        table.add_column("Relevância", justify="right")
+        table.add_column("Tipo", style="magenta")
+    
+    for i, res in enumerate(resultados):
+        note = res['note']
+        path_parts = note['path'].split('/')
+        folder = path_parts[0] if len(path_parts) > 1 else "raiz"
+        
+        tags = ", ".join(note['tags'][:3]) if note['tags'] else ""
+        if len(note['tags']) > 3:
             tags += "..."
         
-        size = f"{len(note.content)} chars"
+        size = f"{len(note.get('content_preview', ''))} chars"
         
-        table.add_row(note.title, folder, tags, size)
+        row = [str(i+1), note['title'], folder, tags, size]
+        
+        if detalhes:
+            relevance = res.get('relevance', 0)
+            search_type = res.get('search_type', 'textual')
+            
+            # Cor baseada na relevância
+            rel_color = "red" if relevance < 0.3 else "yellow" if relevance < 0.6 else "green"
+            
+            row.append(f"[{rel_color}]{relevance:.3f}[/{rel_color}]")
+            row.append(search_type)
+        
+        table.add_row(*row)
     
     console.print(table)
-    console.print(f"\n[dim]Encontradas {len(results)} notas.[/dim]")
-
-@app.command(name="diagnostico")
-def diagnostico_sistema():
-    """Faz diagnóstico completo do sistema GLaDOS"""
-    from pathlib import Path
-    
-    system = _get_glados_system()
-    settings = system['settings']
-    
-    console.print(Panel.fit(
-        "[bold red]DIAGNÓSTICO DO SISTEMA GLaDOS[/bold red]",
-        border_style="red"
-    ))
-    
-    checks = []
-    
-    # 1. Verifica vault
-    vault_path = Path(settings.paths.vault).expanduser()
-    if vault_path.exists():
-        checks.append(("✅", "Vault encontrado", str(vault_path)))
-    else:
-        checks.append(("❌", "Vault NÃO encontrado", str(vault_path)))
-    
-    # 2. Verifica modelo
-    model_path = Path(settings.llm.model_path)
-    if model_path.exists():
-        checks.append(("✅", "Modelo encontrado", model_path.name))
-    else:
-        checks.append(("❌", "Modelo NÃO encontrado", str(model_path)))
-    
-    # 3. Verifica estrutura do vault
-    structure_ok = system['vault']._validate_structure()
-    checks.append(("✅" if structure_ok else "⚠️", 
-                  "Estrutura do vault", 
-                  "Válida" if structure_ok else "Incompleta"))
-    
-    # 4. Verifica LLM
-    llm_loaded = system['llm'].llm is not None
-    checks.append(("✅" if llm_loaded else "⚠️", 
-                  "Modelo LLM", 
-                  "Carregado" if llm_loaded else "Modo simulado"))
-    
-    # 5. Verifica cache
-    cache_dir = Path(settings.paths.cache_dir)
-    if cache_dir.exists():
-        checks.append(("✅", "Diretório de cache", "OK"))
-    else:
-        checks.append(("⚠️", "Diretório de cache", "Não existe"))
-    
-    # Mostra resultados
-    console.print("\n[bold]Verificações do Sistema:[/bold]")
-    for icon, check, detail in checks:
-        console.print(f"  {icon} {check}: [dim]{detail}[/dim]")
     
     # Estatísticas
+    if detalhes and semantic:
+        stats = system['vault'].get_vault_stats()
+        semantic_info = stats.get('semantic_search', {})
+        if semantic_info.get('available'):
+            console.print(f"\n[dim]Busca semântica ativa | Embeddings: "
+                         f"{'✅' if semantic_info['embeddings_loaded'] else '❌'} | "
+                         f"Notas indexadas: {semantic_info['notes_indexed']}[/dim]")
+
+@app.command(name="estatisticas-busca")
+def estatisticas_busca():
+    """Mostra estatísticas detalhadas do sistema de busca semântica"""
+    system = _get_glados_system()
+    
+    console.print(Panel.fit(
+        "[bold magenta]Estatísticas do Sistema de Busca Semântica[/bold magenta]",
+        border_style="magenta"
+    ))
+    
     vault_stats = system['vault'].get_vault_stats()
-    console.print(f"\n[bold]Estatísticas:[/bold]")
-    console.print(f"  • Notas no vault: {vault_stats['total_notes']}")
-    console.print(f"  • Interações GLaDOS: {system['voice'].user_context.interaction_count}")
+    semantic_info = vault_stats.get('semantic_search', {})
     
-    # Recomendações
-    console.print("\n[bold]Recomendações:[/bold]")
-    if not llm_loaded:
-        console.print("  • Instale llama-cpp-python: pip install llama-cpp-python")
-    if not structure_ok:
-        console.print("  • Verifique a estrutura do vault na documentação")
-    if vault_stats['total_notes'] == 0:
-        console.print("  • Adicione notas ao vault para melhorar as consultas")
+    console.print("\n[bold]📊 Estado do Sistema:[/bold]")
+    console.print(f"  • Busca semântica disponível: {'✅' if semantic_info.get('available') else '❌'}")
+    console.print(f"  • Modelo de embeddings carregado: {'✅' if semantic_info.get('embeddings_loaded') else '❌'}")
+    console.print(f"  • Notas indexadas semanticamente: {semantic_info.get('notes_indexed', 0)}")
+    console.print(f"  • Cache de consultas: {semantic_info.get('cache_size', 0)} entradas")
     
-    console.print("\n[green]Diagnóstico completo. Sistema GLaDOS pronto.[/green]")
+    console.print(f"\n[bold]🏗️  Estrutura do Vault:[/bold]")
+    console.print(f"  • Total de notas: {vault_stats['total_notes']}")
+    
+    # Tabela de pastas
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Pasta", style="cyan")
+    table.add_column("Descrição", style="white")
+    table.add_column("Notas", justify="right")
+    
+    for folder, description in vault_stats['structure'].items():
+        notes_count = vault_stats['notes_by_folder'].get(folder, 0)
+        table.add_row(folder, description, str(notes_count))
+    
+    console.print(table)
+    
+    # Detalhes do modelo se disponível
+    if system['vault'].semantic_search:
+        search_stats = system['vault'].semantic_search.get_stats()
+        
+        console.print(f"\n[bold]🤖 Modelo de Embeddings:[/bold]")
+        console.print(f"  • Disponível: {'✅' if search_stats['embeddings_available'] else '❌'}")
+        console.print(f"  • Carregado: {'✅' if search_stats['model_loaded'] else '❌'}")
+        
+        if search_stats['cache_path']:
+            console.print(f"  • Cache: {search_stats['cache_path']}")
+    
+    console.print("\n[dim]Use 'glados buscar --detalhes' para ver métricas de relevância[/dim]")
+
+@app.command(name="testar-busca")
+def testar_busca(
+    consultas: List[str] = typer.Argument(..., help="Consultas de teste (pode passar múltiplas)"),
+    semantic: bool = typer.Option(True, "--semantic/--textual", help="Usar busca semântica"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Mostrar detalhes")
+):
+    """Testa o sistema de busca com múltiplas consultas"""
+    system = _get_glados_system()
+    
+    console.print(Panel.fit(
+        f"[bold magenta]Teste do Sistema de Busca {'Semântica' if semantic else 'Textual'}[/bold magenta]",
+        border_style="magenta"
+    ))
+    
+    resultados_teste = []
+    
+    for consulta in consultas:
+        console.print(f"\n[bold]Consulta:[/bold] [cyan]'{consulta}'[/cyan]")
+        
+        try:
+            # Busca detalhada para métricas
+            if semantic and system['vault'].semantic_search:
+                resultados = system['vault'].search_detailed(consulta, limit=3)
+                notas_encontradas = len(resultados)
+                
+                if resultados:
+                    avg_relevance = sum(r.get('relevance', 0) for r in resultados) / len(resultados)
+                    tipos = [r.get('search_type', 'textual') for r in resultados]
+                    
+                    console.print(f"  • Notas encontradas: {notas_encontradas}")
+                    console.print(f"  • Relevância média: {avg_relevance:.3f}")
+                    console.print(f"  • Tipos de busca: {', '.join(set(tipos))}")
+                    
+                    if verbose:
+                        for i, res in enumerate(resultados):
+                            note = res['note']
+                            console.print(f"    {i+1}. {note['title']} (rel: {res.get('relevance', 0):.3f})")
+                    
+                    resultados_teste.append({
+                        'consulta': consulta,
+                        'notas': notas_encontradas,
+                        'relevancia_media': avg_relevance,
+                        'sucesso': True
+                    })
+                else:
+                    console.print("  • [yellow]Nenhum resultado[/yellow]")
+                    resultados_teste.append({
+                        'consulta': consulta,
+                        'notas': 0,
+                        'relevancia_media': 0,
+                        'sucesso': False
+                    })
+            else:
+                # Teste textual
+                notas = system['vault'].search_notes(consulta, limit=3, semantic=False)
+                console.print(f"  • Notas encontradas: {len(notas)}")
+                
+                if verbose and notas:
+                    for i, nota in enumerate(notas):
+                        console.print(f"    {i+1}. {nota.title}")
+                
+                resultados_teste.append({
+                    'consulta': consulta,
+                    'notas': len(notas),
+                    'sucesso': len(notas) > 0
+                })
+                
+        except Exception as e:
+            console.print(f"  • [red]Erro: {e}[/red]")
+            resultados_teste.append({
+                'consulta': consulta,
+                'erro': str(e),
+                'sucesso': False
+            })
+    
+    # Resumo do teste
+    console.print("\n[bold]📈 Resumo do Teste:[/bold]")
+    
+    total_consultas = len(resultados_teste)
+    consultas_sucesso = sum(1 for r in resultados_teste if r.get('sucesso', False))
+    taxa_sucesso = (consultas_sucesso / total_consultas * 100) if total_consultas > 0 else 0
+    
+    console.print(f"  • Consultas testadas: {total_consultas}")
+    console.print(f"  • Consultas com resultados: {consultas_sucesso}")
+    console.print(f"  • Taxa de sucesso: {taxa_sucesso:.1f}%")
+    
+    if semantic:
+        # Média de relevância para buscas semânticas
+        relevancias = [r.get('relevancia_media', 0) for r in resultados_teste if 'relevancia_media' in r]
+        if relevancias:
+            avg_rel = sum(relevancias) / len(relevancias)
+            console.print(f"  • Relevância média: {avg_rel:.3f}")
+    
+    console.print(f"\n[dim]Sistema de busca {'semântica' if semantic else 'textual'} testado com sucesso.[/dim]")
+
+@app.command(name="reindexar")
+def reindexar_busca(
+    forcar: bool = typer.Option(False, "--forcar", "-f", help="Forçar reindexação completa")
+):
+    """Reindexa o vault para busca semântica"""
+    system = _get_glados_system()
+    
+    if not system['vault'].semantic_search:
+        console.print("[red]❌ Sistema de busca semântica não disponível[/red]")
+        return
+    
+    console.print(Panel.fit(
+        "[bold magenta]Reindexação do Sistema de Busca Semântica[/bold magenta]",
+        border_style="magenta"
+    ))
+    
+    console.print("[yellow]⚠️  Esta operação pode demorar dependendo do número de notas...[/yellow]")
+    
+    with Progress(console=console) as progress:
+        task = progress.add_task("[cyan]Reindexando...", total=None)
+        
+        try:
+            # Força reconstrução do índice
+            if forcar:
+                # Remove cache existente
+                cache_path = system['vault'].semantic_search.cache_path
+                if cache_path.exists():
+                    cache_path.unlink()
+                    console.print("  • Cache anterior removido")
+            
+            # Reconstrói índice
+            system['vault'].semantic_search._build_embeddings_index()
+            
+            progress.update(task, completed=True)
+            
+            console.print("\n[green]✅ Reindexação concluída![/green]")
+            
+            # Mostra estatísticas atualizadas
+            stats = system['vault'].semantic_search.get_stats()
+            console.print(f"  • Notas indexadas: {stats['notes_indexed']}")
+            console.print(f"  • Cache salvo em: {stats['cache_path']}")
+            
+        except Exception as e:
+            console.print(f"\n[red]❌ Erro na reindexação: {e}[/red]")

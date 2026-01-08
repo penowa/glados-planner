@@ -1,14 +1,16 @@
 """
 Conector do vault do Obsidian como cérebro da GLaDOS
-Atualizado para a estrutura real do vault
+Atualizado com busca semântica integrada
 """
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 import yaml
 import frontmatter
-import json
 from dataclasses import dataclass
 from datetime import datetime
+import json
+
+from .semantic_search import HierarchicalSearch, SearchResult
 
 @dataclass
 class VaultNote:
@@ -21,9 +23,21 @@ class VaultNote:
     links: List[str]
     created: Optional[datetime] = None
     modified: Optional[datetime] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Converte para dicionário"""
+        return {
+            'path': str(self.path),
+            'title': self.title,
+            'content_preview': self.content[:200] + '...' if len(self.content) > 200 else self.content,
+            'tags': self.tags,
+            'links': self.links,
+            'created': self.created.isoformat() if self.created else None,
+            'modified': self.modified.isoformat() if self.modified else None
+        }
 
 class VaultStructure:
-    """Mapeia a estrutura REAL do vault"""
+    """Mapeia a estrutura REAL do vault com busca semântica integrada"""
     
     # Estrutura REAL baseada na sua pasta
     STRUCTURE = {
@@ -43,8 +57,25 @@ class VaultStructure:
     def __init__(self, vault_path: str):
         self.vault_path = Path(vault_path).expanduser()
         self.notes_cache = {}
+        self.semantic_search = None
         self._validate_structure()
         self._index_vault()
+        self._init_semantic_search()
+    
+    def _init_semantic_search(self):
+        """Inicializa o sistema de busca semântica"""
+        try:
+            # Converte cache para lista de notas
+            notes_list = list(self.notes_cache.values())
+            self.semantic_search = HierarchicalSearch(self.vault_path, notes_list)
+            print(f"[GLaDOS] ✅ Busca semântica inicializada: {len(notes_list)} notas indexadas")
+            
+            # Mostra estatísticas
+            stats = self.semantic_search.get_stats()
+            print(f"[GLaDOS] 📊 Estatísticas busca: embeddings={stats['model_loaded']}, cache={stats['query_cache_size']}")
+        except Exception as e:
+            print(f"[GLaDOS] ⚠️  Erro ao inicializar busca semântica: {e}")
+            self.semantic_search = None
     
     def _validate_structure(self) -> bool:
         """Valida se o vault existe (modo flexível)"""
@@ -186,34 +217,86 @@ class VaultStructure:
         """Retorna notas de disciplinas da pasta 03 - Disciplinas"""
         return self.get_notes_by_folder("03 - Disciplinas")
     
-    def search_notes(self, query: str, limit: int = 3) -> List[VaultNote]:
-        """Busca por texto nas notas"""
-        if not self.notes_cache:
+    def search_notes(self, query: str, limit: int = 5, semantic: bool = True) -> List[Union[VaultNote, Dict]]:
+        """
+        Busca por texto nas notas usando busca semântica ou textual
+        
+        Args:
+            query: Texto da consulta
+            limit: Número máximo de resultados
+            semantic: Se True, usa busca semântica; senão, só busca textual
+        
+        Returns:
+            Lista de notas ou resultados detalhados
+        """
+        if not query.strip():
             return []
         
-        results = []
+        # Usa busca semântica se disponível
+        if semantic and self.semantic_search:
+            try:
+                results = self.semantic_search.search(query, limit=limit, use_semantic=semantic)
+                
+                # Retorna apenas as notas (backward compatibility)
+                notes = [result.note for result in results]
+                return notes[:limit]
+            except Exception as e:
+                print(f"[GLaDOS] ⚠️  Erro na busca semântica: {e}. Usando busca textual.")
+                return self._textual_search(query, limit)
+        else:
+            # Fallback para busca textual
+            return self._textual_search(query, limit)
+    
+    def search_detailed(self, query: str, limit: int = 5) -> List[Dict]:
+        """
+        Busca detalhada com metadados de relevância
+        """
+        if not self.semantic_search:
+            return []
+        
+        results = self.semantic_search.search(query, limit=limit)
+        
+        detailed_results = []
+        for result in results:
+            detailed_results.append({
+                'note': result.note.to_dict(),
+                'relevance': result.relevance,
+                'search_type': result.search_type,
+                'similarity': result.similarity,
+                'folder_type': result.folder_type,
+                'matched_fields': result.matched_fields
+            })
+        
+        return detailed_results
+    
+    def _textual_search(self, query: str, limit: int) -> List[VaultNote]:
+        """Busca textual (fallback quando semântica não disponível)"""
         query_lower = query.lower()
+        scored_notes = []
         
         for note in self.notes_cache.values():
-            # Busca no título
-            if query_lower in note.title.lower():
-                results.append((note, 1.0))  # Alta relevância
-                continue
+            score = 0.0
             
-            # Busca no conteúdo
-            if query_lower in note.content.lower():
-                results.append((note, 0.7))  # Relevância média
-                continue
+            # Busca no título (maior peso)
+            if query_lower in note.title.lower():
+                score += 0.6
             
             # Busca em tags
             for tag in note.tags:
                 if query_lower in tag.lower():
-                    results.append((note, 0.5))  # Relevância baixa
+                    score += 0.3
                     break
+            
+            # Busca no conteúdo
+            if query_lower in note.content.lower():
+                score += 0.1
+            
+            if score > 0:
+                scored_notes.append((note, score))
         
-        # Ordena por relevância e limite
-        results.sort(key=lambda x: x[1], reverse=True)
-        return [note for note, _ in results[:limit]]
+        # Ordena por pontuação
+        scored_notes.sort(key=lambda x: x[1], reverse=True)
+        return [note for note, _ in scored_notes[:limit]]
     
     def get_note_by_path(self, path: str) -> Optional[VaultNote]:
         """Obtém uma nota específica pelo caminho relativo"""
@@ -228,37 +311,98 @@ class VaultStructure:
             notes = self.get_notes_by_folder(folder)
             notes_by_folder[folder] = len(notes)
         
+        # Estatísticas de busca semântica
+        semantic_stats = self.semantic_search.get_stats() if self.semantic_search else {}
+        
         return {
             "total_notes": total_notes,
             "notes_by_folder": notes_by_folder,
             "structure": self.STRUCTURE,
-            "vault_path": str(self.vault_path)
+            "vault_path": str(self.vault_path),
+            "semantic_search": {
+                "available": self.semantic_search is not None,
+                "embeddings_loaded": semantic_stats.get('model_loaded', False),
+                "notes_indexed": semantic_stats.get('notes_indexed', 0),
+                "cache_size": semantic_stats.get('query_cache_size', 0)
+            }
         }
     
-    def format_as_brain_context(self, notes: List[VaultNote]) -> str:
-        """Formata notas como contexto cerebral para a LLM"""
+    def format_as_brain_context(self, notes: List[VaultNote], query: str = "") -> str:
+        """
+        Formata notas como contexto cerebral para a LLM
+        Melhorado para incluir informações de relevância
+        """
         if not notes:
             return "[MEMÓRIA VAZIA] Nenhuma informação relevante encontrada no meu cérebro."
         
-        context = "[CONSULTA AO CÉREBRO DE GLaDOS]\n"
-        context += f"Consulta retornou {len(notes)} nota(s) relevantes:\n\n"
+        context = f"[CONSULTA AO CÉREBRO DE GLaDOS - '{query}']\n"
+        context += f"Consulta retornou {len(notes)} nota(s) relevantes do meu conhecimento:\n\n"
+        
+        # Se temos busca semântica, tenta obter detalhes de relevância
+        detailed_results = []
+        if self.semantic_search and query:
+            try:
+                detailed_results = self.search_detailed(query, limit=len(notes))
+            except:
+                detailed_results = []
         
         for i, note in enumerate(notes):
             relative_path = note.path.relative_to(self.vault_path)
-            context += f"--- NOTA {i+1}: {relative_path} ---\n"
+            folder = str(relative_path).split('/')[0] if '/' in str(relative_path) else "raiz"
+            
+            # Tenta obter relevância da busca detalhada
+            relevance_info = ""
+            if i < len(detailed_results):
+                detail = detailed_results[i]
+                relevance_info = f" (Relevância: {detail['relevance']:.2f}, Método: {detail['search_type']})"
+            
+            context += f"--- NOTA {i+1}: {folder}/{relative_path.name}{relevance_info} ---\n"
             context += f"Título: {note.title}\n"
             
-            # Resumo do conteúdo (primeiros 300 caracteres)
-            if len(note.content) > 300:
-                summary = note.content[:300] + "..."
+            if note.tags:
+                context += f"Tags: {', '.join(note.tags)}\n"
+            
+            # Resumo inteligente do conteúdo
+            if len(note.content) > 500:
+                # Tenta encontrar sentenças mais relevantes
+                sentences = note.content.split('. ')
+                if len(sentences) > 3:
+                    # Pega primeira, última e algumas do meio
+                    summary = '. '.join([sentences[0]] + sentences[1:3] + ["..."]) + "."
+                else:
+                    summary = note.content[:500] + "..."
             else:
                 summary = note.content
             
             context += f"Conteúdo: {summary}\n"
             
-            if note.tags:
-                context += f"Tags: {', '.join(note.tags)}\n"
+            if note.links:
+                context += f"Links relacionados: {', '.join(note.links[:3])}"
+                if len(note.links) > 3:
+                    context += f" ... (+{len(note.links)-3} mais)"
+                context += "\n"
             
             context += "\n"
         
+        context += "[FIM DA CONSULTA AO CÉREBRO]\n"
+        context += "Instrução: Use essas informações como base principal para sua resposta. "
+        context += "Se necessário, complemente com seu conhecimento geral, mas priorize o conteúdo acima."
+        
         return context
+    
+    def add_note_to_index(self, note_path: Path):
+        """Adiciona uma nova nota ao índice"""
+        try:
+            note = self._parse_note(note_path)
+            if note:
+                relative_path = note_path.relative_to(self.vault_path)
+                self.notes_cache[str(relative_path)] = note
+                
+                # Atualiza índice semântico se disponível
+                if self.semantic_search:
+                    self.semantic_search.update_index([note])
+                
+                return note
+        except Exception as e:
+            print(f"[GLaDOS] ⚠️  Erro ao adicionar nota ao índice: {e}")
+        return None
