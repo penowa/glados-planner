@@ -1,4 +1,4 @@
-# Glados Planner
+# 📚 Philosophy Planner
 
 <div align="center">
 
@@ -7,28 +7,28 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-**Um sistema integrado de gestão acadêmica para estudantes**
+**Um sistema integrado de gestão acadêmica para estudantes de filosofia**
 
-*Organize leituras, agenda, anotações e análises com LLM local*
+*Organize leituras, agenda, anotações e análises com IA local*
 
 </div>
 
 ## ✨ Features
 
-- **Gestão de Leituras** - Cronograma, progresso, revisão espaçada
-- **Agenda** - Calendário integrado
-- **LLM Local** - Análise de textos com modelos privados
-- **Integração Obsidian** - Sincronia bidirecional com seu vault
-- **Pomodoro** - Foco com citações inspiradoras
-- **Tradução & Glossário** - Termos técnicos em grego/alemão
-- **Estatísticas** - Analytics de produtividade e aprendizado
+- 📖 **Gestão Inteligente de Leituras** - Cronograma, progresso, revisão espaçada
+- 🗓️ **Agenda Filosófica** - Calendário acadêmico integrado
+- 🧠 **Assistente LLM Local** - Análise de textos com modelos privados
+- 📝 **Integração Obsidian** - Sincronia bidirecional com seu vault
+- ⏱️ **Pomodoro Filosófico** - Foco com citações inspiradoras
+- 🌐 **Tradução & Glossário** - Termos técnicos em grego/alemão
+- 📊 **Estatísticas** - Analytics de produtividade e aprendizado
 
 ## 🚀 Quick Start
 
 ### Pré-requisitos
 - Arch Linux (otimizado para Hyprland/Wayland)
 - Python 3.11+
-- Obsidian (opcional)
+- Obsidian (opcional, mas recomendado)
 
 ### Instalação
 

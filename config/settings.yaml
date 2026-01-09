@@ -1,106 +1,32 @@
-# Configurações do GLaDOS Planner
+# Philosophy Planner - Configuration
+
 app:
-  name: "Glados Planner"
-  version: "0.4.0"
+  name: "Philosophy Planner"
+  version: "0.1.0"
   debug: true
   log_level: "INFO"
 
 paths:
-  vault: "~/Documentos/Obsidian/Philosophy_Vault"
+  vault: "~/Documents/Obsidian/Philosophy_Vault"  # Update this path
   data_dir: "./data"
   models_dir: "./data/models"
   exports_dir: "./data/exports"
-  cache_dir: "./data/cache"
 
 database:
   url: "sqlite:///data/database/philosophy.db"
   echo: false
 
 llm:
-  model_name: "TinyLlama-1.1B-Chat-v1.0"
   model_path: "./data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
   n_ctx: 2048
-  n_gpu_layers: 0  # ESPAÇO ADICIONADO AQUI
-  temperature: 0.8
+  n_gpu_layers: 0  # Set based on your GPU
+  temperature: 0.7
   top_p: 0.95
-  repeat_penalty: 1.1
-  max_tokens: 512
-  cpu:
-    threads: 4
-  glados:
-    user_name: "Helio"
-    glados_name: "GLaDOS"
-    gender: "feminino"
-    personality_intensity: 0.7
-    enable_sarcasm: true
-    enable_brain_metaphor: true
-    area_behavior:
-      meta:
-        sarcasm_level: 0.3
-        formality: 0.9
-      leituras:
-        sarcasm_level: 0.4
-        formality: 0.8
-      conceitos:
-        sarcasm_level: 0.6
-        formality: 0.7
-      disciplinas:
-        sarcasm_level: 0.5
-        formality: 0.8
-      pessoal:
-        sarcasm_level: 0.2
-        formality: 0.5
-      geral:
-        sarcasm_level: 0.5
-        formality: 0.7
-    response:
-      include_intro_comment: true
-      include_signature: true
-      max_response_length: 1000
-  use_semantic_search: true
-  semantic_search:
-    max_notes_context: 3
-    similarity_threshold: 0.1
-    cache_responses: true
-    cache_ttl: 3600  # 1 hora
-  
-  # Configurações de performance
-  enable_response_cache: true
-  max_cache_size: 500
-  save_cache_on_exit: true
 
 obsidian:
   templates_dir: "./config/templates"
   auto_sync: true
-  sync_interval: 300
-  vault_structure:
-    - "00 - Meta"
-    - "01 - Leituras"
-    - "02 - Conceitos"
-    - "03 - Disciplinas"
-    - "04 - Projetos"
-    - "05 - Pessoal"
-    - "06 - Templates"
-    - "07 - Arquivos"
-    - "08 - Referências"
-    - "09 - Excalidraw"
-    - "10 - Mapas Mentais"
-  brain_regions:
-    meta: "Metacognição - Pensar sobre pensar"
-    leituras: "Anotações de leitura e resumos"
-    conceitos: "Conceitos filosóficos fundamentais"
-    disciplinas: "Notas por disciplina/cursos"
-    projetos: "Projetos acadêmicos e de pesquisa"
-    pessoal: "Reflexões pessoais e diário"
-    referencias: "Referências bibliográficas"
-
-features:
-  enable_llm: true
-  enable_obsidian_sync: true
-  enable_pomodoro: true
-  enable_translation: false
-  enable_glados_personality: true
-  enable_vault_as_brain: true
+  sync_interval: 300  # seconds
 
 pomodoro:
   work_duration: 25
@@ -108,3 +34,8 @@ pomodoro:
   long_break: 15
   sessions_before_long_break: 4
 
+features:
+  enable_llm: true
+  enable_obsidian_sync: true
+  enable_pomodoro: true
+  enable_translation: false
