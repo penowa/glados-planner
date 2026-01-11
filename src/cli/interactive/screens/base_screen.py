@@ -4,9 +4,9 @@ Classe base para todas as telas interativas.
 Fornece interface comum e métodos utilitários.
 """
 from abc import ABC, abstractmethod
-from cli.theme import theme
-from cli.icons import Icon, icon_text
-from cli.interactive.input.keyboard_handler import KeyboardHandler, Key
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
+from src.cli.interactive.input.keyboard_handler import KeyboardHandler, Key
 
 class BaseScreen(ABC):
     """Classe base abstrata para todas as telas."""

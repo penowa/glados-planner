@@ -121,56 +121,56 @@ class MockLocalLLM:
 
 # Tenta importar módulos reais
 try:
-    from core.modules.agenda_manager import AgendaManager
+    from src.core.modules.agenda_manager import AgendaManager
     AGENDA_MANAGER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"AgendaManager não disponível: {e}")
     AgendaManager = MockAgendaManager
 
 try:
-    from core.modules.reading_manager import ReadingManager
+    from src.core.modules.reading_manager import ReadingManager
     READING_MANAGER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"ReadingManager não disponível: {e}")
     ReadingManager = MockReadingManager
 
 try:
-    from core.modules.daily_checkin import DailyCheckinSystem
+    from src.core.modules.daily_checkin import DailyCheckinSystem
     DAILY_CHECKIN_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"DailyCheckinSystem não disponível: {e}")
     DailyCheckinSystem = MockDailyCheckinSystem
 
 try:
-    from core.local_llm import LocalLLM
+    from src.core.llm.local_llm import LocalLLM
     LOCAL_LLM_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"LocalLLM não disponível: {e}")
     LocalLLM = MockLocalLLM
 
 try:
-    from core.modules.pomodoro_timer import PomodoroTimer
+    from src.core.modules.pomodoro_timer import PomodoroTimer
     POMODORO_TIMER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"PomodoroTimer não disponível: {e}")
     PomodoroTimer = MockPomodoroTimer
 
 try:
-    from core.modules.book_processor import BookProcessor
+    from src.core.modules.book_processor import BookProcessor
     BOOK_PROCESSOR_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"BookProcessor não disponível: {e}")
     BookProcessor = None
 
 try:
-    from core.modules.review_system import ReviewSystem
+    from src.core.modules.review_system import ReviewSystem
     REVIEW_SYSTEM_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"ReviewSystem não disponível: {e}")
     ReviewSystem = None
 
 try:
-    from core.modules.writing_assistant import WritingAssistant
+    from src.core.modules.writing_assistant import WritingAssistant
     WRITING_ASSISTANT_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"WritingAssistant não disponível: {e}")

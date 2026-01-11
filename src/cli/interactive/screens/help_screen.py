@@ -3,8 +3,8 @@
 Tela de ajuda hierárquica com busca.
 """
 from .base_screen import BaseScreen
-from cli.theme import theme
-from cli.icons import Icon, icon_text
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
 
 class HelpScreen(BaseScreen):
     """Tela de ajuda do sistema."""

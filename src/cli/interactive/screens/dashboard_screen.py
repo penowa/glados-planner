@@ -6,9 +6,10 @@ Agrupa todas as telas em categorias organizadas.
 import datetime
 from typing import Dict, List, Tuple
 from .base_screen import BaseScreen
-from cli.integration.backend_integration import backend
-from cli.theme import theme
-from cli.icons import Icon, icon_text
+from src.cli.integration.backend_integration import backend
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
+from src.cli.interactive.input.keyboard_handler import Key
 
 class DashboardScreen(BaseScreen):
     """Dashboard principal com categorias organizadas."""

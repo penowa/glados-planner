@@ -20,7 +20,12 @@ class Icon(Enum):
     ALERT = "⚠️"
     HELP = "❓"
     SETTINGS = "⚙️"
-    
+    TARGET = "🎯"  # Adicionado para metas
+    ZAP = "⚡"      # Adicionado para atalhos rápidos
+    MENU = "📋"     # Adicionado para menu
+    REFRESH = "🔄"  # Adicionado para recarregar (usado no screen_manager)
+    #QUESTION = "❓" # Já existe como HELP? Vamos adicionar separado
+
     # Navegação
     ARROW_UP = "↑"
     ARROW_DOWN = "↓"

@@ -4,8 +4,8 @@ Tela de planejamento semanal com relatórios integrados.
 """
 import datetime
 from .base_screen import BaseScreen
-from cli.theme import theme
-from cli.icons import Icon, icon_text
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
 
 class WeeklyPlanningScreen(BaseScreen):
     """Tela de planejamento semanal."""

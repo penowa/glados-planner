@@ -3,8 +3,8 @@
 Tela para iniciar diferentes tipos de sessões de estudo.
 """
 from .base_screen import BaseScreen
-from cli.theme import theme
-from cli.icons import Icon, icon_text
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
 
 class SessionScreen(BaseScreen):
     """Tela para seleção de tipo de sessão."""

@@ -3,9 +3,9 @@
 Tela de gerenciamento de tarefas (CRUD completo).
 """
 from .base_screen import BaseScreen
-from cli.integration.backend_integration import backend
-from cli.theme import theme
-from cli.icons import Icon, icon_text
+from src.cli.integration.backend_integration import backend
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
 import datetime
 
 class TaskManagementScreen(BaseScreen):
