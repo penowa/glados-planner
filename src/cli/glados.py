@@ -1,151 +1,169 @@
-"""
-Módulo de comandos específicos do GLaDOS
-"""
-import typer
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
+# Arquivo atual: glados.py (provável estrutura)
+# Vamos criar uma versão refatorada em português:
 
-console = Console()
+import click
+from cli.components import GladosComponents
+from cli.personality import comentario_glados, frase_boas_vindas
+import importlib
 
-def add_glados_to_cli(app: typer.Typer):
-    """Adiciona comandos específicos do Glados ao CLI principal"""
-    
-    @app.command()
-    def glados_test():
-        """Testa se o sistema GLaDOS está funcionando"""
-        console.print(Panel.fit(
-            "[bold cyan]GLaDOS System Test[/bold cyan]\n"
-            "[green]✅ All systems operational[/green]\n"
-            "[yellow]Current core temperature: 3.6°C[/yellow]",
-            border_style="cyan"
-        ))
-    
-    @app.command()
-    def glados_personality():
-        """Mostra configurações de personalidade do GLaDOS"""
-        from src.core.config.settings import settings
-        
-        table = Table(title="🎭 GLaDOS Personality Settings")
-        table.add_column("Setting", style="cyan")
-        table.add_column("Value", style="green")
-        
-        glados_config = settings.llm.glados
-        
-        table.add_row("User Name", glados_config.user_name)
-        table.add_row("GLaDOS Name", glados_config.glados_name)
-        table.add_row("Gender", glados_config.gender)
-        table.add_row("Personality Intensity", str(glados_config.personality_intensity))
-        table.add_row("Sarcasm Enabled", "✅" if glados_config.enable_sarcasm else "❌")
-        table.add_row("Brain Metaphor", "✅" if glados_config.enable_brain_metaphor else "❌")
-        
-        console.print(table)
-        
-        # Mostrar configurações de área
-        if glados_config.area_behavior:
-            area_table = Table(title="🧠 Area Behavior Settings")
-            area_table.add_column("Area", style="magenta")
-            area_table.add_column("Sarcasm Level", style="yellow")
-            area_table.add_column("Formality", style="blue")
-            
-            for area, behavior in glados_config.area_behavior.items():
-                area_table.add_row(
-                    area.capitalize(),
-                    str(behavior.sarcasm_level),
-                    str(behavior.formality)
-                )
-            
-            console.print(area_table)
-    
-    @app.command()
-    def glados_quote():
-        """Citações inspiradoras do GLaDOS"""
-        import random
-        
-        quotes = [
-            "[cyan]'The Enrichment Center is committed to the well being of all participants.'[/cyan]",
-            "[yellow]'You're doing very well.'[/yellow]",
-            "[magenta]'I'm not angry, just disappointed.'[/magenta]",
-            "[green]'Science has shown that you learn faster when tested.'[/green]",
-            "[red]'This next test involves turrets. You remember them, right?'[/red]",
-            "[blue]'The probability of you surviving is... non-zero.'[/blue]",
-        ]
-        
-        console.print(Panel.fit(
-            random.choice(quotes),
-            title="[bold]GLaDOS Quote[/bold]",
-            border_style="cyan"
-        ))
-    
-    @app.command()
-    def glados_setup(
-        vault_path: str = typer.Option(None, help="Caminho para o vault do Obsidian"),
-        model_path: str = typer.Option(None, help="Caminho para o modelo LLM"),
-    ):
-        """Configuração guiada do GLaDOS"""
-        console.print(Panel.fit(
-            "[bold cyan]GLaDOS Setup Wizard[/bold cyan]\n"
-            "Vamos configurar seu assistente acadêmico personalizado.",
-            border_style="cyan"
-        ))
-        
-        # Configuração do vault
-        if vault_path:
-            console.print(f"[green]✓ Vault configurado: {vault_path}[/green]")
-        else:
-            console.print("[yellow]⚠️  Nenhum vault configurado. Use --vault-path para configurar.[/yellow]")
-        
-        # Configuração do modelo
-        if model_path:
-            console.print(f"[green]✓ Modelo LLM configurado: {model_path}[/green]")
-        else:
-            console.print("[yellow]⚠️  Nenhum modelo LLM configurado. Use --model-path para configurar.[/yellow]")
-        
-        console.print("\n[bold green]✅ Configuração inicial concluída![/bold green]")
-        console.print("[cyan]Execute 'glados-personality' para ver configurações detalhadas.[/cyan]")
+@click.group()
+def glados():
+    """GLaDOS Planner - Transformando confusão filosófica em conhecimento aparente."""
+    GladosComponents.imprimir_cabecalho()
+    print(frase_boas_vindas())
 
-    @app.command()
-    def create_vault(
-        path: str = typer.Option(None, help="Caminho para criar o vault"),
-        force: bool = typer.Option(False, help="Forçar criação mesmo se existir"),
-    ):
-        """Cria um novo vault do Obsidian estruturado"""
-        from src.core.vault.manager import VaultManager
-        from src.core.config.settings import settings
-        from pathlib import Path
+# Comandos principais da agenda
+@glados.group(name='agenda', help='Gerencia sua agenda de estudos')
+def agenda():
+    """Sistema de agenda - Porque claramente você precisa de ajuda para se organizar."""
+    pass
+
+@agenda.command(name='listar', help='Lista compromissos')
+@click.option('--hoje', is_flag=True, help='Mostra apenas compromissos de hoje')
+@click.option('--semana', is_flag=True, help='Mostra compromissos da semana')
+def agenda_listar(hoje, semana):
+    """Lista seus compromissos agendados."""
+    from commands.agenda import listar_compromissos
+    GladosComponents.imprimir_titulo("📅 Compromissos Agendados")
+    
+    if hoje:
+        compromissos = listar_compromissos(periodo='hoje')
+        print(f"  Hoje: {len(compromissos)} compromissos encontrados.")
+    elif semana:
+        compromissos = listar_compromissos(periodo='semana')
+        print(f"  Esta semana: {len(compromissos)} compromissos.")
+    else:
+        compromissos = listar_compromissos()
+        print(f"  Total: {len(compromissos)} compromissos agendados.")
+    
+    for comp in compromissos[:10]:  # Limitar a 10 para não poluir
+        GladosComponents.imprimir_item(f"{comp['hora']} - {comp['titulo']}")
+    
+    if len(compromissos) > 10:
+        GladosComponents.imprimir_aviso(f"... e mais {len(compromissos)-10} compromissos")
+    
+    print(comentario_glados("agenda_listar", len(compromissos)))
+
+@agenda.command(name='adicionar', help='Adiciona novo compromisso')
+@click.argument('titulo')
+@click.option('--data', '-d', help='Data (YYYY-MM-DD)')
+@click.option('--hora', '-h', help='Hora (HH:MM)')
+@click.option('--duracao', '-t', default='1h', help='Duração (ex: 1h30m)')
+def agenda_adicionar(titulo, data, hora, duracao):
+    """Adiciona um novo compromisso à sua desorganizada vida."""
+    from commands.agenda import adicionar_compromisso
+    
+    compromisso = {
+        'titulo': titulo,
+        'data': data,
+        'hora': hora,
+        'duracao': duracao
+    }
+    
+    resultado = adicionar_compromisso(compromisso)
+    
+    if resultado['sucesso']:
+        GladosComponents.imprimir_sucesso(f"Compromisso adicionado: {titulo}")
+        GladosComponents.imprimir_info(f"  Data: {resultado['data_formatada']}")
+        GladosComponents.imprimir_info(f"  Hora: {resultado['hora_formatada']}")
+    else:
+        GladosComponents.imprimir_erro(f"Erro ao adicionar: {resultado['erro']}")
+    
+    print(comentario_glados("agenda_adicionar", titulo))
+
+# Comandos de livro/leitura
+@glados.group(name='livro', help='Gerencia livros e leituras')
+def livro():
+    """Sistema de gestão de leituras - Para quando você decide 'aprender coisas'."""
+    pass
+
+@livro.command(name='processar', help='Processa um novo livro')
+@click.argument('arquivo', type=click.Path(exists=True))
+@click.option('--qualidade', '-q', default='alta', 
+              type=click.Choice(['baixa', 'media', 'alta']),
+              help='Qualidade do processamento')
+def livro_processar(arquivo, qualidade):
+    """Processa um novo livro para estudo."""
+    from commands.book_commands import processar_livro
+    
+    GladosComponents.imprimir_titulo(f"📚 Processando: {arquivo}")
+    GladosComponents.imprimir_info(f"Qualidade: {qualidade}")
+    
+    with GladosComponents.barra_progresso() as progresso:
+        tarefa = progresso.add_task("[cyan]Processando...", total=100)
         
-        vault_path = path or settings.paths.vault
-        vault_path = Path(vault_path).expanduser()
+        # Simular progresso (substituir pelo processamento real)
+        for i in range(10):
+            progresso.update(tarefa, advance=10)
+            time.sleep(0.1)  # Remover em produção
         
-        console.print(Panel.fit(
-            f"[bold cyan]Criando vault em:[/bold cyan]\n{vault_path}",
-            border_style="cyan"
-        ))
-        
-        manager = VaultManager(str(vault_path))
-        
-        if manager.is_connected() and not force:
-            console.print("[yellow]⚠️  Vault já existe. Use --force para recriar.[/yellow]")
-            return
-        
-        if manager.create_structure():
-            console.print(Panel.fit(
-                "[bold green]✅ Vault criado com sucesso![/bold green]\n\n"
-                f"Acesse em: {vault_path}\n\n"
-                "[cyan]Estrutura criada:[/cyan]",
-                border_style="green"
-            ))
-            
-            # Mostra estrutura criada
-            table = Table(title="📁 Estrutura do Vault")
-            table.add_column("Diretório", style="cyan")
-            table.add_column("Finalidade", style="green")
-            
-            for directory in settings.obsidian.vault_structure:
-                base_name = directory.split(" - ")[-1] if " - " in directory else directory
-                purpose = settings.obsidian.brain_regions.get(base_name.lower(), "Organização")
-                table.add_row(directory, purpose)
-            
-            console.print(table)
-        else:
-            console.print("[red]❌ Falha ao criar vault[/red]")
+        resultado = processar_livro(arquivo, qualidade)
+    
+    if resultado['sucesso']:
+        GladosComponents.imprimir_sucesso("Livro processado com sucesso!")
+        GladosComponents.imprimir_info(f"  Páginas: {resultado['paginas']}")
+        GladosComponents.imprimir_info(f"  Conceitos: {resultado['conceitos']}")
+    else:
+        GladosComponents.imprimir_erro(f"Falha no processamento: {resultado['erro']}")
+    
+    print(comentario_glados("livro_processar", resultado.get('titulo', 'desconhecido')))
+
+# Comandos de dados
+@glados.group(name='dados', help='Gerencia dados e configurações')
+def dados():
+    """Sistema de dados - Onde suas informações estão (provavelmente) seguras."""
+    pass
+
+@dados.command(name='estatisticas', help='Mostra estatísticas de uso')
+@click.option('--periodo', '-p', default='mes',
+              type=click.Choice(['dia', 'semana', 'mes', 'ano']))
+def dados_estatisticas(periodo):
+    """Mostra estatísticas do seu (pouco) progresso."""
+    from commands.data_commands import obter_estatisticas
+    
+    stats = obter_estatisticas(periodo)
+    
+    GladosComponents.imprimir_titulo(f"📊 Estatísticas - Último {periodo}")
+    
+    # Tabela de estatísticas
+    tabela = GladosComponents.criar_tabela(["Métrica", "Valor", "Tendência"])
+    tabela.add_row("Horas de estudo", f"{stats['horas_estudo']}h", stats['tendencia_estudo'])
+    tabela.add_row("Páginas lidas", str(stats['paginas_lidas']), stats['tendencia_leitura'])
+    tabela.add_row("Conceitos aprendidos", str(stats['conceitos']), stats['tendencia_conceitos'])
+    tabela.add_row("Taxa de conclusão", f"{stats['conclusao']}%", stats['tendencia_conclusao'])
+    
+    GladosComponents.imprimir_tabela(tabela)
+    print(comentario_glados("estatisticas", stats['conclusao']))
+
+# Comandos Obsidian
+@glados.group(name='obsidian', help='Integração com Obsidian')
+def obsidian():
+    """Integração Obsidian - Para manter sua confusão sincronizada."""
+    pass
+
+@obsidian.command(name='sincronizar', help='Sincroniza com vault do Obsidian')
+@click.option('--forcar', '-f', is_flag=True, help='Força sincronização completa')
+def obsidian_sincronizar(forcar):
+    """Sincroniza suas anotações (des)organizadas."""
+    from commands.obsidian_commands import sincronizar_vault
+    
+    GladosComponents.imprimir_titulo("🔄 Sincronizando com Obsidian")
+    
+    if forcar:
+        GladosComponents.imprimir_aviso("Modo forçado ativado - Isso pode demorar mais")
+    
+    resultado = sincronizar_vault(forcar=forcar)
+    
+    if resultado['sucesso']:
+        GladosComponents.imprimir_sucesso("Sincronização concluída!")
+        GladosComponents.imprimir_info(f"  Arquivos atualizados: {resultado['atualizados']}")
+        GladosComponents.imprimir_info(f"  Novos arquivos: {resultado['novos']}")
+        GladosComponents.imprimir_info(f"  Conflitos resolvidos: {resultado['conflitos']}")
+    else:
+        GladosComponents.imprimir_erro(f"Erro na sincronização: {resultado['erro']}")
+    
+    print(comentario_glados("obsidian_sincronizar", resultado.get('atualizados', 0)))
+
+# Comando principal
+if __name__ == '__main__':
+    glados()

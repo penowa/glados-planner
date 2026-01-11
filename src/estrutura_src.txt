@@ -1,0 +1,267 @@
+.
+├── api
+│   └── __init__.py
+├── cli
+│   ├── commands
+│   │   ├── agenda.py
+│   │   ├── book_commands.py
+│   │   ├── data_commands.py
+│   │   ├── __init__.py
+│   │   ├── obsidian_commands.py
+│   │   └── __pycache__
+│   │       ├── data_commands.cpython-313.pyc
+│   │       ├── __init__.cpython-313.pyc
+│   │       ├── __init__.py
+│   │       └── obsidian_commands.cpython-313.pyc
+│   ├── components.py
+│   ├── core
+│   │   ├── event_system.py
+│   │   └── __pycache__
+│   │       └── event_system.cpython-313.pyc
+│   ├── glados.py
+│   ├── icons.py
+│   ├── __init__.py
+│   ├── integration
+│   │   ├── backend_integration.py
+│   │   └── __pycache__
+│   │       └── backend_integration.cpython-313.pyc
+│   ├── interactive
+│   │   ├── __init__.py
+│   │   ├── input
+│   │   │   ├── __init__.py
+│   │   │   ├── input_manager.py
+│   │   │   ├── keyboard_handler.py
+│   │   │   └── __pycache__
+│   │   │       ├── __init__.cpython-313.pyc
+│   │   │       ├── input_manager.cpython-313.pyc
+│   │   │       ├── keyboard_handler.cpython-313.pyc
+│   │   │       └── navigation_state.cpython-313.pyc
+│   │   ├── integration
+│   │   │   ├── backend_integration.py
+│   │   │   └── __pycache__
+│   │   │       └── backend_integration.cpython-313.pyc
+│   │   ├── menu.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── menu.cpython-313.pyc
+│   │   │   └── screen_manager.cpython-313.pyc
+│   │   ├── screen_manager.py
+│   │   ├── screens
+│   │   │   ├── agenda_config_screen.py
+│   │   │   ├── base_screen.py
+│   │   │   ├── book_selection_screen.py
+│   │   │   ├── daily_checkin_screen.py
+│   │   │   ├── dashboard_screen.py
+│   │   │   ├── emergency_mode_screen.py
+│   │   │   ├── glados_query_screen.py
+│   │   │   ├── help_screen.py
+│   │   │   ├── __init__.py
+│   │   │   ├── new_book_screen.py
+│   │   │   ├── pomodoro_session_screen.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── agenda_config_screen.cpython-313.pyc
+│   │   │   │   ├── base_screen.cpython-313.pyc
+│   │   │   │   ├── book_selection_screen.cpython-313.pyc
+│   │   │   │   ├── boot_screen.cpython-313.pyc
+│   │   │   │   ├── daily_checkin_screen.cpython-313.pyc
+│   │   │   │   ├── dashboard_screen.cpython-313.pyc
+│   │   │   │   ├── emergency_mode_screen.cpython-313.pyc
+│   │   │   │   ├── glados_query_screen.cpython-313.pyc
+│   │   │   │   ├── help_screen.cpython-313.pyc
+│   │   │   │   ├── __init__.cpython-313.pyc
+│   │   │   │   ├── new_book_screen.cpython-313.pyc
+│   │   │   │   ├── pomodoro_session_screen.cpython-313.pyc
+│   │   │   │   ├── reading_session_screen.cpython-313.pyc
+│   │   │   │   ├── session_screen.cpython-313.pyc
+│   │   │   │   ├── settings_screen.cpython-313.pyc
+│   │   │   │   ├── shutdown_screen.cpython-313.pyc
+│   │   │   │   ├── statistics_screen.cpython-313.pyc
+│   │   │   │   ├── task_management_screen.cpython-313.pyc
+│   │   │   │   ├── test_screen.cpython-313.pyc
+│   │   │   │   └── weekly_planning_screen.cpython-313.pyc
+│   │   │   ├── reading_session_screen.py
+│   │   │   ├── session_screen.py
+│   │   │   ├── settings_screen.py
+│   │   │   ├── shutdown_screen.py
+│   │   │   ├── statistics_screen.py
+│   │   │   ├── task_management_screen.py
+│   │   │   └── weekly_planning_screen.py
+│   │   ├── utils
+│   │   │   └── __init__.py
+│   │   └── widgets
+│   │       ├── dashboard_widgets.py
+│   │       ├── __init__.py
+│   │       └── __pycache__
+│   │           ├── dashboard_widgets.cpython-313.pyc
+│   │           └── __init__.cpython-313.pyc
+│   ├── main.py
+│   ├── personality.py
+│   ├── __pycache__
+│   │   ├── components.cpython-313.pyc
+│   │   ├── glados.cpython-313.pyc
+│   │   ├── icons.cpython-313.pyc
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── __init__.py
+│   │   ├── main.cpython-313.pyc
+│   │   ├── personality.cpython-313.pyc
+│   │   └── theme.cpython-313.pyc
+│   ├── templates
+│   │   └── __init__.py
+│   └── theme.py
+├── core
+│   ├── config
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── __init__.py
+│   │   │   └── settings.cpython-313.pyc
+│   │   └── settings.py
+│   ├── database
+│   │   ├── base.py
+│   │   ├── __init__.py
+│   │   ├── obsidian_sync.py
+│   │   ├── __pycache__
+│   │   │   ├── base.cpython-313.pyc
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── __init__.py
+│   │   │   ├── obsidian_sync.cpython-313.pyc
+│   │   │   └── repository.cpython-313.pyc
+│   │   └── repository.py
+│   ├── __init__.py
+│   ├── integration
+│   │   ├── book_integration.py
+│   │   └── __pycache__
+│   │       └── book_integration.cpython-313.pyc
+│   ├── llm
+│   │   ├── glados
+│   │   │   ├── brain
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── __init__.cpython-313.pyc
+│   │   │   │   │   ├── __init__.py
+│   │   │   │   │   ├── semantic_search.cpython-313.pyc
+│   │   │   │   │   └── vault_connector.cpython-313.pyc
+│   │   │   │   ├── semantic_search.py
+│   │   │   │   └── vault_connector.py
+│   │   │   ├── commands
+│   │   │   │   ├── brain_query.py
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── __pycache__
+│   │   │   │       ├── brain_query.cpython-313.pyc
+│   │   │   │       ├── __init__.cpython-313.pyc
+│   │   │   │       └── __init__.py
+│   │   │   ├── __init__.py
+│   │   │   ├── models
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── __init__.cpython-313.pyc
+│   │   │   │   │   ├── __init__.py
+│   │   │   │   │   └── tinyllama_wrapper.cpython-313.pyc
+│   │   │   │   ├── response_formatter.py
+│   │   │   │   └── tinyllama_wrapper.py
+│   │   │   ├── personality
+│   │   │   │   ├── config.py
+│   │   │   │   ├── glados_voice.py
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── glados_voice.cpython-313.pyc
+│   │   │   │   │   ├── __init__.cpython-313.pyc
+│   │   │   │   │   └── __init__.py
+│   │   │   │   └── user_context.py
+│   │   │   └── __pycache__
+│   │   │       ├── __init__.cpython-313.pyc
+│   │   │       └── __init__.py
+│   │   ├── __init__.py
+│   │   ├── local_llm.py
+│   │   └── __pycache__
+│   │       ├── __init__.cpython-313.pyc
+│   │       ├── __init__.py
+│   │       └── local_llm.cpython-313.pyc
+│   ├── models
+│   │   ├── base.py
+│   │   ├── book.py
+│   │   ├── __init__.py
+│   │   ├── note.py
+│   │   ├── __pycache__
+│   │   │   ├── base.cpython-313.pyc
+│   │   │   ├── book.cpython-313.pyc
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── __init__.py
+│   │   │   ├── note.cpython-313.pyc
+│   │   │   ├── reading_session.cpython-313.pyc
+│   │   │   └── task.cpython-313.pyc
+│   │   ├── reading_session.py
+│   │   └── task.py
+│   ├── modules
+│   │   ├── agenda_manager.py
+│   │   ├── book_processor.py
+│   │   ├── daily_checkin.py
+│   │   ├── __init__.py
+│   │   ├── obsidian
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-313.pyc
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── vault_manager.cpython-313.pyc
+│   │   │   ├── templates
+│   │   │   │   ├── book_template.py
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── __pycache__
+│   │   │   │       ├── book_template.cpython-313.pyc
+│   │   │   │       ├── __init__.cpython-313.pyc
+│   │   │   │       └── __init__.py
+│   │   │   └── vault_manager.py
+│   │   ├── pdf_processor.py
+│   │   ├── pomodoro_timer.py
+│   │   ├── preference_manager.py
+│   │   ├── __pycache__
+│   │   │   ├── agenda_manager.cpython-313.pyc
+│   │   │   ├── book_processor.cpython-313.pyc
+│   │   │   ├── daily_checkin.cpython-313.pyc
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── __init__.py
+│   │   │   ├── pdf_processor.cpython-313.pyc
+│   │   │   ├── pomodoro_timer.cpython-313.pyc
+│   │   │   ├── reading_manager.cpython-313.pyc
+│   │   │   ├── review_system.cpython-313.pyc
+│   │   │   ├── translation_module.cpython-313.pyc
+│   │   │   └── writing_assistant.cpython-313.pyc
+│   │   ├── reading_manager.py
+│   │   ├── review_system.py
+│   │   ├── smart_allocator.py
+│   │   ├── translation_module.py
+│   │   └── writing_assistant.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-313.pyc
+│   │   └── __init__.py
+│   ├── repositories
+│   │   ├── book_repository.py
+│   │   ├── __init__.py
+│   │   ├── note_repository.py
+│   │   ├── __pycache__
+│   │   │   ├── book_repository.cpython-313.pyc
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── __init__.py
+│   │   │   ├── note_repository.cpython-313.pyc
+│   │   │   └── task_repository.cpython-313.pyc
+│   │   ├── reading_session_repository.py
+│   │   └── task_repository.py
+│   ├── utils
+│   │   └── __init__.py
+│   └── vault
+│       ├── __init__.py
+│       ├── manager.py
+│       └── __pycache__
+│           ├── __init__.cpython-313.pyc
+│           ├── __init__.py
+│           └── manager.cpython-313.pyc
+├── data
+│   └── database
+├── estrutura_src.txt
+├── __init__.py
+├── __pycache__
+│   ├── __init__.cpython-313.pyc
+│   └── __init__.py
+└── teste.py
+
+58 directories, 207 files
