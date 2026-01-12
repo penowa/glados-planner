@@ -1,381 +1,190 @@
-# src/cli/interactive/screens/dashboard_screen.py
 """
-Dashboard principal do sistema GLaDOS Planner.
-Agrupa todas as telas em categorias organizadas.
+Dashboard mínimo e funcional - versão 3.0
 """
 import datetime
-from typing import Dict, List, Tuple
+import time
+from typing import Optional
 from .base_screen import BaseScreen
-from src.cli.integration.backend_integration import backend
-from src.cli.theme import theme
-from src.cli.icons import Icon, icon_text
-from src.cli.interactive.input.keyboard_handler import Key
+from src.cli.interactive.terminal import Key
+
 
 class DashboardScreen(BaseScreen):
-    """Dashboard principal com categorias organizadas."""
+    """Dashboard com navegação por setas e atualização de relógio."""
     
-    def __init__(self):
-        super().__init__()
-        self.title = "Dashboard GLaDOS"
-        self.selected_category = 0
-        self.selected_item = 0
-        self.showing_categories = True
-        self.dashboard_data = {}
-        self.last_refresh = None
+    def __init__(self, terminal):
+        super().__init__(terminal)
+        self.title = "Dashboard"
         
-        # Categorias organizadas com ícones
-        self.categories = [
-            {
-                "name": "📚 Leitura",
-                "icon": Icon.BOOK,
-                "color": "primary",
-                "screens": [
-                    ("➕ Adicionar Livro", "new_book"),
-                    ("📖 Sessão de Leitura", "reading"),
-                    ("📚 Selecionar Livro", "book_selection"),
-                    ("📊 Progresso", "statistics")
-                ]
-            },
-            {
-                "name": "⏰ Sessões",
-                "icon": Icon.TIMER,
-                "color": "accent",
-                "screens": [
-                    ("🎯 Tipo de Sessão", "session"),
-                    ("🍅 Pomodoro", "pomodoro"),
-                    ("📖 Leitura Focada", "reading"),
-                    ("🔄 Revisão", None)  # TODO: Implementar
-                ]
-            },
-            {
-                "name": "📅 Planejamento",
-                "icon": Icon.CALENDAR,
-                "color": "secondary",
-                "screens": [
-                    ("✅ Check-in Diário", "daily_checkin"),
-                    ("📋 Planejamento Semanal", "weekly_planning"),
-                    ("🗓️ Configurar Agenda", "agenda_config"),
-                    ("📝 Gerenciar Tarefas", "task_management")
-                ]
-            },
-            {
-                "name": "🚨 Sistema",
-                "icon": Icon.ALERT,
-                "color": "warning",
-                "screens": [
-                    ("⚠️ Modo Emergência", "emergency_mode"),
-                    ("🤖 Consultar GLaDOS", "glados_query"),
-                    ("⚙️ Configurações", "settings"),
-                    ("📈 Estatísticas", "statistics")
-                ]
-            },
-            {
-                "name": "🆘 Ajuda",
-                "icon": Icon.INFO,
-                "color": "info",
-                "screens": [
-                    ("❓ Ajuda do Sistema", "help"),
-                    ("ℹ️ Sobre", "help"),  # Redireciona para seção Sobre
-                    ("🚪 Encerrar", "shutdown"),
-                    ("📋 Tutorial", None)  # TODO: Implementar
-                ]
-            }
+        # Menu simples
+        self.menu_items = [
+            ("📚 Adicionar Livro", "new_book"),
+            ("📖 Sessão de Leitura", "reading_session"),
+            ("🍅 Pomodoro", "pomodoro_session"),
+            ("✅ Check-in Diário", "daily_checkin"),
+            ("📅 Configurar Agenda", "agenda_config"),
+            ("⚠️ Modo Emergência", "emergency_mode"),
+            ("🤖 Consultar GLaDOS", "glados_query"),
+            ("❓ Ajuda", "help"),
+            ("⚙️ Configurações", "settings"),
+            ("🚪 Sair", "exit")
         ]
-        
-        # Atalhos rápidos
-        self.quick_actions = [
-            ("C", "Check-in rápido"),
-            ("E", "Modo emergência"),
-            ("P", "Iniciar Pomodoro"),
-            ("R", "Recarregar dados"),
-            ("S", "Sair do sistema")
-        ]
+        self.selected = 0
+        self.menu_visible = True
+        self.last_clock_update = 0
+        self.clock_interval = 1.0  # Atualizar relógio a cada segundo
+        self.input_timeout = 0.1   # Timeout curto para verificar input
     
-    def show(self):
-        """Exibe o dashboard e gerencia a navegação."""
-        self._load_dashboard_data()
+    def show(self) -> Optional[str]:
+        """Loop principal com timeout para atualizar relógio."""
+        self.initialize()
         
         while True:
-            if self.showing_categories:
-                self._render_categories()
-            else:
-                self._render_screens()
+            # Atualiza tela
+            self._draw()
             
-            key = self.keyboard_handler.wait_for_input()
+            # Obtém input com timeout curto
+            key = self.terminal.get_key(self.input_timeout)
             
-            # Navegação global
-            if key == Key.H:
-                return 'goto:help'
-            elif key == Key.S:
-                return 'exit'
-            elif key == Key.R:
-                self._load_dashboard_data()
-                continue
-            elif key == Key.C:
-                return 'goto:daily_checkin'
-            elif key == Key.E:
-                return 'goto:emergency_mode'
-            elif key == Key.ESC:
-                if not self.showing_categories:
-                    self.showing_categories = True
-                    self.selected_item = 0
-                else:
-                    return 'back'
+            # Processa input se houver
+            if key:
+                return self._handle_input(key)
             
-            # Navegação no dashboard
-            if self.showing_categories:
-                self._handle_category_navigation(key)
-            else:
-                self._handle_screen_navigation(key)
+            # Atualiza relógio se necessário
+            self._update_clock_if_needed()
     
-    def _load_dashboard_data(self):
-        """Carrega dados para o dashboard."""
+    def initialize(self):
+        """Inicialização básica."""
+        if not self.is_initialized:
+            # Verifica backend uma vez
+            self.backend_status = self._check_backend()
+            self.last_clock_update = time.time()
+            self.is_initialized = True
+    
+    def _check_backend(self):
+        """Verifica backend de forma simples."""
         try:
-            self.dashboard_data = backend.get_dashboard_data()
-            self.last_refresh = datetime.datetime.now()
-        except Exception as e:
-            theme.print(f"❌ Erro ao carregar dados: {e}", style="error")
-            self.dashboard_data = self._get_mock_dashboard_data()
-    
-    def _get_mock_dashboard_data(self):
-        """Retorna dados mock para desenvolvimento."""
-        return {
-            'daily_goals': [
-                {'title': 'Leitura: A República', 'completed': False, 'progress': 45},
-                {'title': 'Escrita: Paper sobre Virtude', 'completed': False, 'progress': 60},
-                {'title': 'Revisão: Flashcards Ética', 'completed': True, 'progress': 100}
-            ],
-            'upcoming_events': [
-                {'time': '09:00-11:00', 'title': 'A República - Platão', 'type': 'leitura'},
-                {'time': '14:00-16:00', 'title': 'Aula: Ética', 'type': 'aula'},
-                {'time': '19:00-20:00', 'title': 'Paper: Virtude', 'type': 'escrita'}
-            ],
-            'alerts': [
-                {'type': 'warning', 'message': 'Prova de Lógica em 3 dias'},
-                {'type': 'info', 'message': 'Entrega do paper em 7 dias'}
-            ],
-            'daily_stats': {
-                'tasks_completed': 3,
-                'sessions_completed': 2,
-                'pages_read': 25,
-                'streak_days': 5
-            },
-            'active_books': [
-                {'title': 'A República', 'author': 'Platão', 'progress': 45},
-                {'title': 'Ética a Nicômaco', 'author': 'Aristóteles', 'progress': 30}
-            ],
-            'pending_tasks': [
-                {'title': 'Revisar capítulo 3', 'priority': 'high'},
-                {'title': 'Escrever resumo', 'priority': 'medium'},
-                {'title': 'Criar flashcards', 'priority': 'low'}
-            ]
-        }
-    
-    def _render_categories(self):
-        """Renderiza a tela de categorias."""
-        theme.clear()
-        
-        # Cabeçalho com dados do sistema
-        self._render_header()
-        
-        # Título
-        theme.rule(f"[{self.title}]", style="accent")
-        
-        # Mensagem do dia
-        self._render_daily_message()
-        
-        # Metas do dia
-        self._render_daily_goals()
-        
-        # Categorias principais
-        theme.print(f"\n{icon_text(Icon.MENU, 'Menu Principal:')}", style="primary")
-        theme.print("=" * 60, style="dim")
-        
-        for i, category in enumerate(self.categories):
-            prefix = "> " if i == self.selected_category else "  "
-            icon = category.get('icon', Icon.INFO)
-            color = category.get('color', 'primary')
-            
-            theme.print(f"{prefix}{icon_text(icon, category['name'])}", 
-                       style=color if i == self.selected_category else "info")
-        
-        # Atalhos rápidos
-        self._render_quick_actions()
-        
-        # Rodapé
-        theme.print(f"\n{icon_text(Icon.INFO, 'Navegação:')}", style="dim")
-        theme.print("  ↑↓: Navegar  Enter: Selecionar  ESC: Voltar/Sair  H: Ajuda", style="dim")
-    
-    def _render_screens(self):
-        """Renderiza as telas dentro da categoria selecionada."""
-        theme.clear()
-        
-        # Cabeçalho
-        self._render_header()
-        
-        # Categoria atual
-        category = self.categories[self.selected_category]
-        theme.rule(f"[{category['name']}]", style=category['color'])
-        
-        # Telas disponíveis
-        theme.print(f"\n{icon_text(Icon.LIST, 'Opções disponíveis:')}", style="primary")
-        theme.print("=" * 60, style="dim")
-        
-        for i, (screen_name, screen_key) in enumerate(category['screens']):
-            prefix = "> " if i == self.selected_item else "  "
-            
-            # Verificar se a tela está disponível
-            if screen_key is None:
-                style = "dim"
-                suffix = " [Em desenvolvimento]"
-            else:
-                style = "primary" if i == self.selected_item else "info"
-                suffix = ""
-            
-            theme.print(f"{prefix}{screen_name}{suffix}", style=style)
-        
-        # Descrição da seleção atual
-        self._render_selection_description()
-        
-        # Rodapé
-        theme.print(f"\n{icon_text(Icon.INFO, 'Navegação:')}", style="dim")
-        theme.print("  ↑↓: Navegar  Enter: Selecionar  ESC: Voltar  B: Dashboard", style="dim")
-    
-    def _render_header(self):
-        """Renderiza o cabeçalho do dashboard."""
-        now = datetime.datetime.now()
-        
-        # Linha 1: Data e status
-        date_str = now.strftime("%d/%m/%Y")
-        time_str = now.strftime("%H:%M")
-        
-        if self.last_refresh:
-            refresh_str = self.last_refresh.strftime("%H:%M:%S")
-        else:
-            refresh_str = "Nunca"
-        
-        theme.print(f"📅 {date_str} | 🕐 {time_str} | 🔄 {refresh_str}", style="dim")
-        
-        # Linha 2: Status do backend
-        try:
-            is_ready = backend.is_ready()
-            status_icon = "✅" if is_ready else "⚠️"
-            status_text = "Conectado" if is_ready else "Modo Simulação"
-            theme.print(f"{status_icon} Backend: {status_text}", 
-                       style="success" if is_ready else "warning")
+            from src.cli.integration.backend_integration import backend
+            if backend and hasattr(backend, 'is_ready'):
+                return backend.is_ready()
         except:
-            theme.print("⚠️ Backend: Indisponível", style="error")
+            pass
+        return False
     
-    def _render_daily_message(self):
-        """Renderiza a mensagem diária da GLaDOS."""
-        messages = [
-            "Bem-vindo de volta. Espero que tenha usado seu tempo livre de forma produtiva.",
-            "Outro dia, outra oportunidade para fracassar de novas maneiras.",
-            "O sistema detectou que você está atrasado. Como sempre.",
-            "Você está aqui novamente. Vamos tentar não desperdiçar muito tempo hoje.",
-            "Análise completa: Você precisa melhorar em tudo. Mas vamos começar devagar."
-        ]
-        
-        import random
-        message = random.choice(messages)
-        
-        theme.print(f"\n{icon_text(Icon.GLADOS, 'GLaDOS diz:')}", style="accent")
-        theme.print(f"  \"{message}\"", style="info")
+    def _update_clock_if_needed(self):
+        """Verifica se precisa atualizar o relógio."""
+        current_time = time.time()
+        if current_time - self.last_clock_update >= self.clock_interval:
+            self.last_clock_update = current_time
+            # Redesenha apenas a linha do relógio
+            self._draw_clock_line()
+            self.terminal.flush()
     
-    def _render_daily_goals(self):
-        """Renderiza as metas do dia."""
-        daily_goals = self.dashboard_data.get('daily_goals', [])
+    def _draw_clock_line(self):
+        """Desenha apenas a linha do relógio (otimizado)."""
+        width, _ = self.terminal.get_size()
         
-        if daily_goals:
-            completed = sum(1 for goal in daily_goals if goal.get('completed', False))
-            total = len(daily_goals)
+        # Linha 1: Data/hora
+        now = datetime.datetime.now()
+        time_str = now.strftime("%H:%M:%S")
+        date_str = now.strftime("%d/%m/%Y")
+        clock_text = f"🕐 {time_str} | 📅 {date_str}"
+        
+        self.terminal.print_at(0, 0, clock_text, {"color": "primary"})
+    
+    def _draw(self):
+        """Desenha a tela inteira de uma vez."""
+        self.terminal.clear()
+        
+        width, height = self.terminal.get_size()
+        
+        # Linha 1: Data/hora (será atualizada separadamente)
+        self._draw_clock_line()
+        
+        # Linha 2: Título
+        title = "GLaDOS Planner"
+        x = max(0, (width - len(title)) // 2)
+        self.terminal.print_at(x, 1, title, {"color": "accent", "bold": True})
+        
+        # Linha 3: Status do backend
+        status = "✅ Conectado" if self.backend_status else "⚠️ Modo offline"
+        color = "success" if self.backend_status else "warning"
+        self.terminal.print_at(0, 2, status, {"color": color})
+        
+        # Separador
+        separator = "─" * width
+        self.terminal.print_at(0, 3, separator, {"color": "dim"})
+        
+        # Menu (começa na linha 5)
+        start_y = 5
+        self.terminal.print_at(0, 4, "📋 Menu Principal:", {"color": "primary", "bold": True})
+        
+        # Itens do menu
+        max_items = min(len(self.menu_items), height - start_y - 3)
+        for i in range(max_items):
+            y = start_y + i
+            name, _ = self.menu_items[i]
             
-            theme.print(f"\n{icon_text(Icon.TARGET, f'Metas do Dia ({completed}/{total} concluídas):')}", style="primary")
-            
-            for goal in daily_goals[:3]:  # Mostrar apenas 3
-                icon = "✅" if goal.get('completed', False) else "□"
-                progress = goal.get('progress', 0)
-                
-                # Barra de progresso
-                bar_length = 20
-                filled = int(bar_length * progress / 100)
-                bar = '█' * filled + '░' * (bar_length - filled)
-                
-                theme.print(f"  {icon} {goal.get('title', 'Sem título')}", style="info")
-                if progress > 0 and progress < 100:
-                    theme.print(f"     [{bar}] {progress}%", style="dim")
-    
-    def _render_quick_actions(self):
-        """Renderiza os atalhos rápidos."""
-        theme.print(f"\n{icon_text(Icon.ZAP, 'Atalhos Rápidos (tecla única):')}", style="primary")
-        
-        for key, description in self.quick_actions:
-            theme.print(f"  {key}) {description}", style="dim")
-    
-    def _render_selection_description(self):
-        """Renderiza descrição da seleção atual."""
-        category = self.categories[self.selected_category]
-        screens = category['screens']
-        
-        if self.selected_item < len(screens):
-            screen_name, screen_key = screens[self.selected_item]
-            
-            descriptions = {
-                'new_book': "Adicionar um novo livro ao sistema (PDF/EPUB/TXT)",
-                'reading': "Iniciar uma sessão de leitura focada",
-                'book_selection': "Selecionar e gerenciar livros",
-                'session': "Escolher tipo de sessão de estudo",
-                'pomodoro': "Timer Pomodoro com citações motivacionais",
-                'daily_checkin': "Check-in diário com análise de humor",
-                'weekly_planning': "Planejamento semanal com relatórios",
-                'agenda_config': "Configurar agenda e compromissos",
-                'task_management': "Gerenciar tarefas e prioridades",
-                'emergency_mode': "Reorganização emergencial da agenda",
-                'glados_query': "Consultar a GLaDOS sobre seus dados",
-                'settings': "Configurações do sistema",
-                'statistics': "Estatísticas detalhadas de produtividade",
-                'help': "Ajuda e documentação do sistema",
-                'shutdown': "Encerrar o sistema com estatísticas"
-            }
-            
-            if screen_key in descriptions:
-                theme.print(f"\n{icon_text(Icon.INFO, 'Descrição:')}", style="primary")
-                theme.print(f"  {descriptions[screen_key]}", style="dim")
-    
-    def _handle_category_navigation(self, key):
-        """Lida com navegação na tela de categorias."""
-        if key == Key.UP:
-            self.selected_category = (self.selected_category - 1) % len(self.categories)
-        elif key == Key.DOWN:
-            self.selected_category = (self.selected_category + 1) % len(self.categories)
-        elif key == Key.ENTER:
-            # Verificar se a categoria tem telas
-            if self.categories[self.selected_category]['screens']:
-                self.showing_categories = False
-                self.selected_item = 0
-        elif key == Key.P:
-            # Atalho direto para Pomodoro
-            return 'goto:pomodoro'
-    
-    def _handle_screen_navigation(self, key):
-        """Lida com navegação na tela de telas."""
-        category = self.categories[self.selected_category]
-        screens = category['screens']
-        
-        if key == Key.UP:
-            self.selected_item = (self.selected_item - 1) % len(screens)
-        elif key == Key.DOWN:
-            self.selected_item = (self.selected_item + 1) % len(screens)
-        elif key == Key.ENTER:
-            screen_name, screen_key = screens[self.selected_item]
-            
-            if screen_key is None:
-                theme.print(f"\n⚠️  {screen_name} está em desenvolvimento.", style="warning")
-                self.keyboard_handler.wait_for_input()
+            if i == self.selected:
+                prefix = "▶ "
+                style = {"color": "accent", "bold": True, "reverse": True}
             else:
-                # Navegar para a tela selecionada
-                return f'goto:{screen_key}'
+                prefix = "  "
+                style = {"color": "info"}
+            
+            text = f"{prefix}{name}"
+            if len(text) > width:
+                text = text[:width-3] + "..."
+            
+            self.terminal.print_at(0, y, text, style)
+        
+        # Rodapé (2 linhas do final)
+        footer_y = height - 2
+        shortcuts = "↑↓: Navegar | Enter: Selecionar | S: Sair | ESC: Voltar"
+        if len(shortcuts) > width:
+            shortcuts = shortcuts[:width-3] + "..."
+        self.terminal.print_at(0, footer_y, shortcuts, {"color": "dim"})
+        
+        footer_y2 = height - 1
+        shortcuts2 = "C: Check-in | E: Emergência | P: Pomodoro | H: Ajuda"
+        if len(shortcuts2) > width:
+            shortcuts2 = shortcuts2[:width-3] + "..."
+        self.terminal.print_at(0, footer_y2, shortcuts2, {"color": "dim"})
+        
+        self.terminal.flush()
     
-    def toggle_menu(self):
-        """Alterna entre mostrar categorias e telas."""
-        self.showing_categories = not self.showing_categories
+    def _handle_input(self, key: Key) -> Optional[str]:
+        """Processa input do usuário."""
+        # Debug: mostrar tecla pressionada
+        # print(f"\rDEBUG: Key pressed: {key}", end="", flush=True)
+        
+        # Navegação do menu
+        if key == Key.UP:
+            self.selected = (self.selected - 1) % len(self.menu_items)
+            return None  # Não sair, apenas atualizar
+        elif key == Key.DOWN:
+            self.selected = (self.selected + 1) % len(self.menu_items)
+            return None  # Não sair, apenas atualizar
+        elif key == Key.ENTER:
+            action = self.menu_items[self.selected][1]
+            # print(f"\rDEBUG: Executing: {action}", end="", flush=True)
+            return action
+        elif key == Key.ESC:
+            return 'back'
+        elif key == Key.SPACE:
+            return 'exit'
+        
+        # Atalhos de teclado
+        elif key == Key.S:
+            return 'exit'
+        elif key == Key.C:
+            return 'goto:daily_checkin'
+        elif key == Key.E:
+            return 'goto:emergency_mode'
+        elif key == Key.P:
+            return 'goto:pomodoro_session'
+        elif key == Key.H:
+            return 'goto:help'
+        elif key == Key.D:
+            return 'goto:dashboard'  # Recarregar
+        
+        return None  # Nenhuma ação

@@ -1,69 +1,154 @@
-# src/cli/main.py (atualizado)
 """
 Ponto de entrada principal do sistema GLaDOS CLI.
-Integra todas as telas através do ScreenManager.
+Integra todas as telas através do ScreenManager otimizado.
 """
 import sys
 import os
+import time
 
 # Adiciona o diretório src ao path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cli.theme import theme
-from cli.icons import Icon, icon_text
-from cli.interactive.screen_manager import ScreenManager
-from cli.interactive.screens.dashboard_screen import DashboardScreen
+from src.cli.theme import theme
+from src.cli.icons import Icon, icon_text
+from src.cli.interactive.screen_manager import ScreenManager
+from src.cli.interactive.screens.dashboard_screen import DashboardScreen
+from src.cli.interactive.terminal import GLTerminal, Key
+
 
 def main():
     """Função principal do sistema."""
     try:
-        # Mostrar tela de inicialização
-        theme.clear()
-        theme.rule("[GLaDOS Planner CLI]", style="accent")
+        # Criar terminal otimizado
+        terminal = GLTerminal()
         
-        theme.print(f"\n{icon_text(Icon.GLADOS, 'Inicializando sistema...')}", style="info")
-        theme.print("=" * 60, style="dim")
+        # 1. MOSTRAR BOOT SCREEN
+        terminal.clear_screen()
         
-        # Verificar dependências
-        theme.print("✓ Sistema de temas", style="success")
-        theme.print("✓ Sistema de ícones", style="success")
-        theme.print("✓ Gerenciador de telas", style="success")
-        theme.print("✓ Backend integration", style="success")
+    # Arte ASCII GLaDOS
+        gladios_art = [
+            "╔══════════════════════════════════════════════════════╗",
+            "║                                                      ║",
+            "║   ██████╗ ██╗      █████╗ ██████╗ ███████╗███████╗   ║",
+            "║  ██╔════╝ ██║     ██╔══██╗██╔══██╗██╔══██║██╔════╝   ║",
+            "║  ██║  ███╗██║     ███████║██║  ██║██║  ██║███████╗   ║",
+            "║  ██║   ██║██║     ██╔══██║██║  ██║██║  ██║╚════██║   ║",
+            "║  ╚██████╔╝███████╗██║  ██║██████╔╝███████║███████║   ║",
+            "║   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚══════╝   ║",
+            "║                                                      ║",
+            "║             GLaDOS Planner CLI - v1.0.0              ║",
+            "║    'Uma interface simples, mas feita com carinho'    ║",
+            "║                                                      ║",
+            "╚══════════════════════════════════════════════════════╝"
+        ]       
+        
+        # Renderizar arte
+        term_width, term_height = terminal.get_size()
+        start_y = max(0, (term_height - len(gladios_art)) // 2)
+        
+        for i, line in enumerate(gladios_art):
+            start_x = max(0, (term_width - len(line)) // 2)
+            terminal.print_at(start_x, start_y + i, line, {"color": "accent"})
+        
+        terminal.flush()
+        time.sleep(1)
+        
+        # 2. VERIFICAÇÃO DE MÓDULOS
+        terminal.clear_screen()
+        
+        status_y = 5
+        checks = [
+            ("Sistema de temas Portal", True),
+            ("Sistema de ícones GLaDOS", True),
+            (f"Terminal otimizado ({'blessed' if terminal.use_blessed else 'ANSI'})", True),
+            ("Backend integration", True),
+            ("Screen Manager", True),
+        ]
+        
+        terminal.print_at(0, status_y, "→ Inicializando GLaDOS Planner...", 
+                         {"color": "accent", "bold": True})
+        
+        for i, (check_name, check_status) in enumerate(checks):
+            y = status_y + i + 2
+            icon = "✓" if check_status else "✗"
+            color = "success" if check_status else "error"
+            terminal.print_at(2, y, f"{icon} {check_name}", {"color": color})
+            terminal.flush()
+            time.sleep(0.2)  # Efeito de carregamento
+        
+        terminal.flush()
+        time.sleep(0.5)
+        
+        # 3. LIMPAR TELA E INICIAR SCREEN MANAGER
+        terminal.clear_screen()
+        terminal.flush()
         
         # Criar e configurar gerenciador de telas
-        theme.print(f"\n{icon_text(Icon.LOADING, 'Carregando interface...')}", style="info")
-        
-        screen_manager = ScreenManager()
+        screen_manager = ScreenManager(terminal)
         
         # Adicionar dashboard como tela inicial
-        dashboard = DashboardScreen()
-        screen_manager.push(dashboard)
+        screen_manager.push(DashboardScreen)
         
-        # Iniciar sistema
-        theme.print(f"\n{icon_text(Icon.SUCCESS, 'Sistema pronto!')}", style="success")
-        theme.print("Pressione qualquer tecla para continuar...", style="dim")
+        # Mensagem de transição
+        ready_msg = "✨ Sistema GLaDOS Planner pronto!"
+        ready_x = max(0, (term_width - len(ready_msg)) // 2)
+        ready_y = term_height // 2
         
-        import readchar
-        readchar.readkey()
-        
-        # Executar loop principal
+        terminal.print_at(ready_x, ready_y, ready_msg, 
+                         {"color": "success", "bold": True})
+        terminal.flush()
+        time.sleep(0.3)
+        terminal.clear_screen()
+        # 4. EXECUTAR LOOP PRINCIPAL
         screen_manager.run()
         
     except KeyboardInterrupt:
-        theme.print(f"\n\n{icon_text(Icon.EXIT, 'Sistema interrompido.')}", style="warning")
+        terminal = GLTerminal()
+        terminal.clear_screen()
+        
+        term_width, term_height = terminal.get_size()
+        msg = "⚠️ Sistema interrompido pelo usuário."
+        msg_x = max(0, (term_width - len(msg)) // 2)
+        msg_y = term_height // 2
+        
+        terminal.print_at(msg_x, msg_y, msg, {"color": "warning", "bold": True})
+        terminal.flush()
+        
+        time.sleep(0.5)
+        terminal.cleanup()
         
     except Exception as e:
-        theme.print(f"\n❌ {icon_text(Icon.ERROR, 'Erro fatal:')}", style="error")
-        theme.print(f"   {str(e)}", style="error")
+        terminal = GLTerminal()
+        terminal.clear_screen()
+        
+        term_width, term_height = terminal.get_size()
+        
+        error_title = "✗ Erro fatal no sistema"
+        error_msg = f"   {str(e)}"
+        
+        title_x = max(0, (term_width - len(error_title)) // 2)
+        msg_x = max(0, (term_width - len(error_msg)) // 2)
+        
+        terminal.print_at(title_x, term_height // 2 - 1, error_title, 
+                         {"color": "error", "bold": True})
+        terminal.print_at(msg_x, term_height // 2, error_msg, {"color": "error"})
         
         import traceback
-        theme.print(traceback.format_exc(), style="error")
+        tb = traceback.format_exc()
+        tb_lines = tb.split('\n')[:10]
         
-        theme.print("\nPressione qualquer tecla para sair...", style="dim")
-        import readchar
-        readchar.readkey()
+        for i, line in enumerate(tb_lines):
+            terminal.print_at(0, term_height // 2 + 2 + i, line, {"color": "dim"})
+        
+        terminal.print_at(0, term_height - 1, "Pressione qualquer tecla para sair...", 
+                         {"color": "dim"})
+        terminal.flush()
+        
+        terminal.get_key()
+        terminal.cleanup()
         
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

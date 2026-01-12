@@ -1,259 +1,205 @@
+# src/cli/interactive/widgets/dashboard_widgets.py
 """
-dashboard_widgets.py - Widgets temáticos avançados para o dashboard.
+Widgets especializados para o dashboard do GLaDOS Planner.
 """
-from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime, timedelta
-from enum import Enum
-
-from ...components import components
-from ...theme import theme
-from ...icons import Icon
-from ...personality import personality, Context
+from typing import Dict, List, Optional
+from src.cli.interactive.terminal import GLTerminal
+from src.cli.theme import theme
+from src.cli.icons import Icon
 
 
-class WidgetType(Enum):
-    """Tipos de widgets disponíveis."""
-    PROGRESS_CIRCLE = "progress_circle"
-    STATS_GRID = "stats_grid"
-    TIMELINE = "timeline"
-    SPARKLINE = "sparkline"
-    HEATMAP = "heatmap"
-    GAUGE = "gauge"
-
-
-class DashboardWidgetFactory:
-    """Fábrica de widgets temáticos para dashboard."""
+class DashboardWidget:
+    """Classe base para widgets do dashboard."""
     
-    @staticmethod
-    def create_progress_circle(title: str, value: float, max_value: float = 100, 
-                               size: int = 8, show_percentage: bool = True) -> str:
-        """Cria widget de círculo de progresso."""
-        percentage = min(100, max(0, (value / max_value) * 100)) if max_value > 0 else 0
-        
-        # Caracteres para o círculo
-        circle_chars = "◐◓◑◒"
-        char_idx = int(datetime.now().timestamp() * 2) % len(circle_chars)
-        circle_char = circle_chars[char_idx]
-        
-        # Cores baseadas no progresso
-        if percentage >= 80:
-            color = "success"
-        elif percentage >= 50:
-            color = "warning"
-        else:
-            color = "error"
-        
-        # Criar círculo ASCII
-        circle_lines = []
-        for i in range(size):
-            line = ""
-            for j in range(size * 2):
-                dx = j - size
-                dy = i - size // 2
-                dist = (dx * dx + dy * dy * 4) ** 0.5
-                
-                if dist < size * 0.8 * (percentage / 100):
-                    line += theme.colorize("█", color)
-                elif dist < size:
-                    line += theme.colorize("░", "text_dim")
-                else:
-                    line += " "
-            circle_lines.append(line)
-        
-        circle = "\n".join(circle_lines)
-        
-        # Texto
-        if show_percentage:
-            text = f"{percentage:.1f}%"
-        else:
-            text = f"{value}/{max_value}"
-        
-        content = f"{circle}\n\n{text}"
-        return components.panel(content, title, border=True)
+    def __init__(self, terminal: GLTerminal):
+        self.terminal = terminal
+        self.data = None
+        self.width = 0
+        self.height = 0
     
-    @staticmethod
-    def create_stats_grid(stats: List[Tuple[str, str, str]], 
-                          columns: int = 2, title: str = "Estatísticas") -> str:
-        """Cria grid de estatísticas."""
-        if not stats:
-            return components.alert("Nenhuma estatística disponível", "info")
+    def update_data(self, data: Dict):
+        """Atualiza dados do widget."""
+        self.data = data
+    
+    def calculate_size(self, available_width: int, available_height: int):
+        """Calcula tamanho necessário para o widget."""
+        pass
+    
+    def render(self, x: int, y: int, width: int, height: int):
+        """Renderiza o widget na posição especificada."""
+        pass
+
+
+class GoalWidget(DashboardWidget):
+    """Widget para exibir metas do dia."""
+    
+    def __init__(self, terminal: GLTerminal):
+        super().__init__(terminal)
+        self.title = "🎯 Metas do Dia"
+        self.max_goals = 3
+    
+    def calculate_size(self, available_width: int, available_height: int):
+        goals = self.data.get('daily_goals', [])[:self.max_goals]
+        self.height = 2 + len(goals)  # Título + separador + cada meta
+        self.width = available_width
+    
+    def render(self, x: int, y: int, width: int, height: int):
+        goals = self.data.get('daily_goals', [])[:self.max_goals]
         
-        # Organizar em grid
-        rows = []
-        for i in range(0, len(stats), columns):
-            row_items = stats[i:i + columns]
-            row = []
+        # Título
+        self.terminal.print_at(x, y, self.title, {"color": "primary", "bold": True})
+        
+        if not goals:
+            self.terminal.print_at(x, y + 1, "  Nenhuma meta para hoje", {"color": "dim"})
+            return
+        
+        # Metas
+        for i, goal in enumerate(goals):
+            goal_y = y + 1 + i
             
-            for label, value, icon in row_items:
-                cell = f"{icon} {label}: {theme.colorize(value, 'highlight')}"
-                row.append(cell.ljust(30))
+            status = "✅" if goal.get('completed', False) else "□"
+            title = goal.get('title', 'Meta sem nome')
+            progress = goal.get('progress', 0)
             
-            rows.append("  ".join(row))
-        
-        content = "\n".join(rows)
-        return components.panel(content, title, border=True)
+            # Barra de progresso
+            bar_width = 20
+            filled = int(progress * bar_width / 100)
+            bar = "█" * filled + "░" * (bar_width - filled)
+            
+            goal_text = f"  {status} {title} [{bar}] {progress}%"
+            if len(goal_text) > width:
+                goal_text = goal_text[:width-3] + "..."
+            
+            color = "success" if goal.get('completed', False) else "info"
+            self.terminal.print_at(x, goal_y, goal_text, {"color": color})
+
+
+class EventWidget(DashboardWidget):
+    """Widget para exibir eventos do dia."""
     
-    @staticmethod
-    def create_timeline(events: List[Dict[str, Any]], title: str = "Linha do Tempo") -> str:
-        """Cria widget de linha do tempo."""
+    def __init__(self, terminal: GLTerminal):
+        super().__init__(terminal)
+        self.title = "📅 Agenda do Dia"
+        self.max_events = 3
+    
+    def calculate_size(self, available_width: int, available_height: int):
+        events = self.data.get('upcoming_events', [])[:self.max_events]
+        self.height = 2 + len(events)
+        self.width = available_width
+    
+    def render(self, x: int, y: int, width: int, height: int):
+        events = self.data.get('upcoming_events', [])[:self.max_events]
+        
+        # Título
+        self.terminal.print_at(x, y, self.title, {"color": "primary", "bold": True})
+        
         if not events:
-            return components.alert("Nenhum evento recente", "info")
+            self.terminal.print_at(x, y + 1, "  Nenhum compromisso para hoje", {"color": "dim"})
+            return
         
-        content_lines = []
-        for event in events[:5]:  # Limitar a 5 eventos
-            time = event.get("time", "")
-            icon = event.get("icon", "•")
-            title_event = event.get("title", "")
-            status = event.get("status", "")
+        # Eventos
+        for i, event in enumerate(events):
+            event_y = y + 1 + i
             
-            # Cor baseada no status
-            if status == "completed":
-                time_color = "text_dim"
-            elif status == "in_progress":
-                time_color = "highlight"
-            else:
-                time_color = "text"
+            time_str = event.get('time', '')
+            title = event.get('title', 'Evento sem nome')
             
-            time_formatted = theme.colorize(time, time_color)
-            line = f"{time_formatted} {icon} {title_event}"
-            content_lines.append(line)
-        
-        content = "\n".join(content_lines)
-        return components.panel(content, title, border=True)
+            # Ícone baseado no tipo
+            event_type = event.get('type', 'default')
+            icons = {
+                'leitura': '📚',
+                'aula': '🎓',
+                'escrita': '✍️',
+                'default': '📝'
+            }
+            icon = icons.get(event_type, icons['default'])
+            
+            event_text = f"  {icon} {time_str} {title}"
+            if len(event_text) > width:
+                event_text = event_text[:width-3] + "..."
+            
+            self.terminal.print_at(x, event_y, event_text, {"color": "info"})
+
+
+class AlertWidget(DashboardWidget):
+    """Widget para exibir alertas do sistema."""
     
-    @staticmethod
-    def create_sparkline(data: List[float], title: str = "Tendência", 
-                        width: int = 30, height: int = 4) -> str:
-        """Cria widget de sparkline."""
-        if not data:
-            return components.alert("Dados insuficientes", "info")
-        
-        # Normalizar dados
-        min_val = min(data)
-        max_val = max(data)
-        range_val = max_val - min_val if max_val > min_val else 1
-        
-        # Criar matriz
-        matrix = [[' ' for _ in range(width)] for _ in range(height)]
-        
-        # Plotar dados
-        for i, value in enumerate(data[-width:]):  # Últimos N pontos
-            if i >= width:
-                break
-            
-            # Normalizar para altura do gráfico
-            normalized = (value - min_val) / range_val
-            y = int(normalized * (height - 1))
-            y = height - 1 - y  # Inverter Y
-            
-            # Caracteres de plotagem
-            chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-            char_idx = int(normalized * (len(chars) - 1))
-            
-            if 0 <= y < height and 0 <= i < width:
-                matrix[y][i] = theme.colorize(chars[char_idx], "accent")
-        
-        # Converter para string
-        sparkline = "\n".join(["".join(row) for row in matrix])
-        
-        # Estatísticas
-        current = data[-1] if data else 0
-        change = ((current - data[0]) / data[0] * 100) if data[0] != 0 else 0
-        
-        stats = f"Atual: {current:.1f} | Variação: {change:+.1f}%"
-        
-        content = f"{sparkline}\n\n{stats}"
-        return components.panel(content, title, border=True)
+    def __init__(self, terminal: GLTerminal):
+        super().__init__(terminal)
+        self.title = "⚠️ Alertas"
+        self.max_alerts = 2
     
-    @staticmethod
-    def create_heatmap(data: Dict[str, List[int]], 
-                      days: int = 7, title: str = "Atividade") -> str:
-        """Cria widget de heatmap de atividade."""
-        if not data:
-            return components.alert("Sem dados de atividade", "info")
-        
-        # Dias da semana
-        days_abbr = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
-        
-        # Cores para intensidade
-        intensity_colors = ["text_dim", "accent", "warning", "error", "success"]
-        
-        # Criar heatmap
-        content_lines = []
-        
-        # Cabeçalho
-        header = "     " + " ".join(days_abbr)
-        content_lines.append(header)
-        
-        # Para cada hora do dia (simplificado: manhã, tarde, noite)
-        time_slots = ["Manhã", "Tarde", "Noite"]
-        
-        for time_slot in time_slots:
-            line = f"{time_slot:4} "
-            
-            for day in range(days):
-                # Calcular intensidade (simulado)
-                intensity = data.get(time_slot, [0] * days)[day % len(data.get(time_slot, []))]
-                intensity = min(4, max(0, intensity // 25))  # Normalizar para 0-4
-                
-                block = theme.colorize("█", intensity_colors[intensity])
-                line += block + " "
-            
-            content_lines.append(line)
-        
-        # Legenda
-        legend = "     " + theme.colorize("█", "text_dim") + " Baixa  " + \
-                        theme.colorize("█", "accent") + " Média  " + \
-                        theme.colorize("█", "warning") + " Alta"
-        
-        content_lines.append("\n" + legend)
-        
-        content = "\n".join(content_lines)
-        return components.panel(content, title, border=True)
+    def calculate_size(self, available_width: int, available_height: int):
+        alerts = self.data.get('alerts', [])[:self.max_alerts]
+        self.height = 2 + len(alerts)
+        self.width = available_width
     
-    @staticmethod
-    def create_gauge(value: float, min_val: float = 0, max_val: float = 100,
-                    label: str = "Progresso", unit: str = "%") -> str:
-        """Cria widget de gauge/medidor."""
-        percentage = min(100, max(0, (value - min_val) / (max_val - min_val) * 100))
+    def render(self, x: int, y: int, width: int, height: int):
+        alerts = self.data.get('alerts', [])[:self.max_alerts]
         
-        # Determinar cor
-        if percentage >= 75:
-            color = "success"
-            face = "😊"
-        elif percentage >= 50:
-            color = "warning"
-            face = "😐"
-        else:
-            color = "error"
-            face = "😟"
+        # Título
+        self.terminal.print_at(x, y, self.title, {"color": "warning", "bold": True})
         
-        # Criar gauge ASCII
-        gauge_width = 20
-        filled = int(gauge_width * percentage / 100)
+        if not alerts:
+            self.terminal.print_at(x, y + 1, "  Nenhum alerta no momento", {"color": "dim"})
+            return
         
-        gauge_line = "["
-        gauge_line += theme.colorize("█" * filled, color)
-        gauge_line += theme.colorize("░" * (gauge_width - filled), "text_dim")
-        gauge_line += "]"
-        
-        # Marcadores
-        markers = f"{min_val}{' ' * (gauge_width - 6)}{max_val}"
-        
-        # Valor atual
-        value_display = f"{value:.1f}{unit}"
-        
-        content = f"""
-{gauge_line}
-{markers}
-
-{face} {label}: {theme.colorize(value_display, color)}
-
-Progresso: {percentage:.1f}%
-"""
-        
-        return components.panel(content.strip(), "📊 Medidor", border=True)
+        # Alertas
+        for i, alert in enumerate(alerts):
+            alert_y = y + 1 + i
+            
+            alert_type = alert.get('type', 'info')
+            message = alert.get('message', 'Alerta sem mensagem')
+            
+            # Cor baseada no tipo
+            colors = {
+                'warning': 'warning',
+                'error': 'error',
+                'info': 'info',
+                'success': 'success'
+            }
+            color = colors.get(alert_type, 'info')
+            
+            alert_text = f"  • {message}"
+            if len(alert_text) > width:
+                alert_text = alert_text[:width-3] + "..."
+            
+            self.terminal.print_at(x, alert_y, alert_text, {"color": color})
 
 
-# Exemplos de uso
-widget_factory = DashboardWidgetFactory()
+class BookWidget(DashboardWidget):
+    """Widget para exibir livros ativos."""
+    
+    def __init__(self, terminal: GLTerminal):
+        super().__init__(terminal)
+        self.title = "📚 Livros Ativos"
+        self.max_books = 2
+    
+    def calculate_size(self, available_width: int, available_height: int):
+        books = self.data.get('active_books', [])[:self.max_books]
+        self.height = 2 + len(books)
+        self.width = available_width
+    
+    def render(self, x: int, y: int, width: int, height: int):
+        books = self.data.get('active_books', [])[:self.max_books]
+        
+        # Título
+        self.terminal.print_at(x, y, self.title, {"color": "primary", "bold": True})
+        
+        if not books:
+            self.terminal.print_at(x, y + 1, "  Nenhum livro ativo", {"color": "dim"})
+            return
+        
+        # Livros
+        for i, book in enumerate(books):
+            book_y = y + 1 + i
+            
+            title = book.get('title', 'Livro sem nome')
+            author = book.get('author', 'Autor desconhecido')
+            progress = book.get('progress', 0)
+            
+            book_text = f"  {title} ({author}) - {progress}%"
+            if len(book_text) > width:
+                book_text = book_text[:width-3] + "..."
+            
+            self.terminal.print_at(x, book_y, book_text, {"color": "info"})

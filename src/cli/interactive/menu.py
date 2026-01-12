@@ -195,10 +195,9 @@ class Menu:
     
     def run(self, clear_each_cycle: bool = False) -> Any:
         """Executa loop principal do menu"""
-        from cli.interactive.input.keyboard_handler import KeyboardHandler, Key
+        from cli.interactive.input.keyboard_handler import keyboar_handler
         
         self.running = True
-        handler = KeyboardHandler()
         result = None
         
         try:
@@ -211,7 +210,7 @@ class Menu:
                 self.render()
                 
                 # Aguarda input
-                key = handler.wait_for_input()
+                key = keyboard_handler.wait_for_input()
                 
                 # Processa tecla
                 if key == Key.UP:
@@ -231,8 +230,12 @@ class Menu:
                     idx = int(key) - 1
                     if 0 <= idx < len(self.items):
                         self.move_to(idx)
-        
+                elif isinstance(key, Key):
+                    # Outras teclas do enum
+                    pass
+
         except KeyboardInterrupt:
+            from cli.theme import theme
             theme.print("\nInterrompido pelo usuário", style="warning")
         finally:
             self.running = False
