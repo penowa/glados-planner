@@ -51,16 +51,16 @@ def main():
             terminal.print_at(start_x, start_y + i, line, {"color": "accent"})
         
         terminal.flush()
-        time.sleep(1)
+        time.sleep(3)
         
         # 2. VERIFICAÇÃO DE MÓDULOS
         terminal.clear_screen()
         
         status_y = 5
         checks = [
-            ("Sistema de temas Portal", True),
-            ("Sistema de ícones GLaDOS", True),
-            (f"Terminal otimizado ({'blessed' if terminal.use_blessed else 'ANSI'})", True),
+            ("Sistema de temas", True),
+            ("Sistema de ícones", True),
+            ("Terminal otimizado", True),
             ("Backend integration", True),
             ("Screen Manager", True),
         ]
@@ -77,7 +77,7 @@ def main():
             time.sleep(0.2)  # Efeito de carregamento
         
         terminal.flush()
-        time.sleep(0.5)
+        time.sleep(2)
         
         # 3. LIMPAR TELA E INICIAR SCREEN MANAGER
         terminal.clear_screen()
@@ -97,7 +97,7 @@ def main():
         terminal.print_at(ready_x, ready_y, ready_msg, 
                          {"color": "success", "bold": True})
         terminal.flush()
-        time.sleep(0.3)
+        time.sleep(2)
         terminal.clear_screen()
         # 4. EXECUTAR LOOP PRINCIPAL
         screen_manager.run()

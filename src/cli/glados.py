@@ -2,8 +2,8 @@
 # Vamos criar uma versão refatorada em português:
 
 import click
-from cli.components import GladosComponents
-from cli.personality import comentario_glados, frase_boas_vindas
+from src.cli.components import GladosComponents
+from src.cli.personality import comentario_glados, frase_boas_vindas
 import importlib
 
 @click.group()

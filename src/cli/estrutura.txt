@@ -15,7 +15,7 @@
 │   ├── event_system.py
 │   └── __pycache__
 │       └── event_system.cpython-313.pyc
-├── estrutura_do_cli.txt
+├── estrutura.txt
 ├── glados.py
 ├── icons.py
 ├── __init__.py
@@ -35,17 +35,22 @@
 │   │       ├── keyboard_handler.cpython-313.pyc
 │   │       └── navigation_state.cpython-313.pyc
 │   ├── integration
+│   │   ├── agenda_backend_bridge.py
 │   │   ├── backend_integration.py
 │   │   └── __pycache__
+│   │       ├── agenda_backend_bridge.cpython-313.pyc
 │   │       └── backend_integration.cpython-313.pyc
 │   ├── menu.py
 │   ├── __pycache__
 │   │   ├── __init__.cpython-313.pyc
 │   │   ├── menu.cpython-313.pyc
-│   │   └── screen_manager.cpython-313.pyc
+│   │   ├── screen_manager.cpython-313.pyc
+│   │   └── terminal.cpython-313.pyc
 │   ├── screen_manager.py
 │   ├── screens
 │   │   ├── agenda_config_screen.py
+│   │   ├── agenda_screen.py
+│   │   ├── agenda_submenus.py
 │   │   ├── base_screen.py
 │   │   ├── book_selection_screen.py
 │   │   ├── daily_checkin_screen.py
@@ -58,6 +63,7 @@
 │   │   ├── pomodoro_session_screen.py
 │   │   ├── __pycache__
 │   │   │   ├── agenda_config_screen.cpython-313.pyc
+│   │   │   ├── agenda_screen.cpython-313.pyc
 │   │   │   ├── base_screen.cpython-313.pyc
 │   │   │   ├── book_selection_screen.cpython-313.pyc
 │   │   │   ├── boot_screen.cpython-313.pyc
@@ -84,11 +90,14 @@
 │   │   ├── statistics_screen.py
 │   │   ├── task_management_screen.py
 │   │   └── weekly_planning_screen.py
+│   ├── terminal.py
 │   ├── utils
 │   │   └── __init__.py
 │   └── widgets
+│       ├── agenda_widgets.py
 │       ├── dashboard_widgets.py
 │       ├── __init__.py
+│       ├── notification_widget.py
 │       └── __pycache__
 │           ├── dashboard_widgets.cpython-313.pyc
 │           └── __init__.cpython-313.pyc
@@ -107,4 +116,4 @@
 │   └── __init__.py
 └── theme.py
 
-20 directories, 88 files
+20 directories, 97 files

@@ -4,6 +4,7 @@ Gerenciador de telas otimizado com Blessed/Curses para navegação entre telas.
 """
 import sys
 import time
+import logging
 from typing import Optional, Type, Any
 
 from src.cli.interactive.terminal import GLTerminal, Key
@@ -11,25 +12,20 @@ from src.cli.theme import theme
 from src.cli.icons import Icon, icon_text
 from .screens.base_screen import BaseScreen
 
+logger = logging.getLogger(__name__)
 
 class ScreenManager:
     """
     Gerencia a navegação entre telas com sistema de pilha e renderização otimizada.
-    
-    Padrões de uso:
-        terminal = GLTerminal()
-        manager = ScreenManager(terminal)
-        manager.push(DashboardScreen)
-        manager.run()
     """
     
     def __init__(self, terminal: GLTerminal):
         self.terminal = terminal
-        self.screen_stack = []  # Pilha de telas (instâncias de BaseScreen)
-        self.history = []       # Histórico de navegação
+        self.screen_stack = []
+        self.history = []
         self.running = False
         self.last_input_time = time.time()
-        self.input_timeout = 300  # 5 minutos de inatividade
+        self.input_timeout = 300
         
         # Cache de telas para reuso
         self.screen_cache = {}
@@ -41,10 +37,31 @@ class ScreenManager:
         self.show_perf_stats = False
         self.frame_count = 0
         self.start_time = time.time()
-        
+    
+    def _force_clean_transition(self):
+        """Força uma transição limpa entre telas."""
+        self.terminal.clear_screen()
+        self.terminal.flush()
+        time.sleep(0.05)  # Pequena pausa para garantir limpeza
+    
+    def _setup_global_shortcuts(self):
+        """Configura atalhos globais que funcionam em qualquer tela."""
+        return {
+            Key.H: self._show_help,
+            Key.S: self._handle_global_exit,
+            Key.R: self._refresh_current,
+            Key.C: self._quick_checkin,
+            Key.E: self._emergency_mode,
+            Key.M: self._toggle_menu,
+            Key.B: self._go_back,
+            Key.D: lambda: self._navigate_to_screen('dashboard'),
+            Key.F1: self._toggle_perf_stats
+        }
+    
     def push(self, screen_class: Type[BaseScreen], *args, **kwargs) -> BaseScreen:
-        """Empilha uma nova tela."""
-        # Registrar histórico se houver tela atual
+        """Empilha uma nova tela com transição limpa."""
+        self._force_clean_transition()
+        
         if self.screen_stack:
             current_screen = self.screen_stack[-1]
             self.history.append({
@@ -53,7 +70,6 @@ class ScreenManager:
                 'timestamp': time.time()
             })
         
-        # Criar tela com terminal injetado
         screen_key = f"{screen_class.__name__}:{str(args)}:{str(kwargs)}"
         
         if screen_key in self.screen_cache:
@@ -69,11 +85,14 @@ class ScreenManager:
         """Remove a tela atual da pilha e retorna à anterior."""
         if len(self.screen_stack) > 1:
             removed = self.screen_stack.pop()
+            self._force_clean_transition()
             return removed
         return None
     
     def replace(self, screen_class: Type[BaseScreen], *args, **kwargs) -> BaseScreen:
-        """Substitui a tela atual por uma nova."""
+        """Substitui a tela atual por uma nova com transição limpa."""
+        self._force_clean_transition()
+        
         if self.screen_stack:
             self.screen_stack.pop()
         return self.push(screen_class, *args, **kwargs)
@@ -83,44 +102,6 @@ class ScreenManager:
         if self.screen_stack:
             return self.screen_stack[-1]
         return None
-    
-    def run(self):
-        """Executa o loop principal otimizado do gerenciador de telas."""
-        if not self.screen_stack:
-            raise ValueError("Nenhuma tela na pilha. Use push() primeiro.")
-        
-        self.running = True
-        self.start_time = time.time()
-        
-        try:
-            while self.running and self.screen_stack:
-                current_screen = self.get_current_screen()
-                
-                # Verifica timeout de inatividade
-                if time.time() - self.last_input_time > self.input_timeout:
-                    self._handle_inactivity_timeout()
-                    continue
-                
-                # Executa tela atual
-                try:
-                    result = current_screen.show()
-                    self.frame_count += 1
-                    
-                    # Atualiza tempo da última interação
-                    self.last_input_time = time.time()
-                    
-                    # Processar resultado da tela
-                    self._handle_screen_result(result)
-                    
-                except KeyboardInterrupt:
-                    # Ctrl+C pressionado
-                    self._handle_keyboard_interrupt()
-                    
-                except Exception as e:
-                    self._handle_screen_error(current_screen, e)
-            
-        finally:
-            self.cleanup()
     
     def _handle_screen_result(self, result: Any):
         """Processa resultado retornado por uma tela."""
@@ -139,79 +120,90 @@ class ScreenManager:
                 screen_key = result[6:]
                 self._push_screen(screen_key)
         
-        # Atualiza tempo da última interação
         self.last_input_time = time.time()
     
     def _navigate_to_screen(self, screen_key: str):
-        """Navega para uma tela específica pelo nome."""
-        # Mapeamento dinâmico para evitar imports circulares
+        """Navega para uma tela específica pelo nome com limpeza garantida."""
         try:
+            # Garantir limpeza antes da transição
+            self._force_clean_transition()
+            
             if screen_key == 'dashboard':
                 from .screens.dashboard_screen import DashboardScreen
                 self.replace(DashboardScreen)
-            elif screen_key == 'new_book':
-                from .screens.new_book_screen import NewBookScreen
-                self.replace(NewBookScreen)
-            elif screen_key == 'reading':
-                from .screens.reading_session_screen import ReadingSessionScreen
-                self.replace(ReadingSessionScreen)
-            elif screen_key == 'book_selection':
-                from .screens.book_selection_screen import BookSelectionScreen
-                self.replace(BookSelectionScreen)
-            elif screen_key == 'session':
-                from .screens.session_screen import SessionScreen
-                self.replace(SessionScreen)
-            elif screen_key == 'pomodoro':
-                from .screens.pomodoro_session_screen import PomodoroSessionScreen
-                self.replace(PomodoroSessionScreen)
+            elif screen_key == 'agenda':
+                from .screens.agenda_screen import AgendaScreen
+                self.replace(AgendaScreen)
             elif screen_key == 'daily_checkin':
                 from .screens.daily_checkin_screen import DailyCheckinScreen
                 self.replace(DailyCheckinScreen)
-            elif screen_key == 'weekly_planning':
-                from .screens.weekly_planning_screen import WeeklyPlanningScreen
-                self.replace(WeeklyPlanningScreen)
-            elif screen_key == 'agenda_config':
-                from .screens.agenda_config_screen import AgendaConfigScreen
-                self.replace(AgendaConfigScreen)
-            elif screen_key == 'task_management':
-                from .screens.task_management_screen import TaskManagementScreen
-                self.replace(TaskManagementScreen)
             elif screen_key == 'emergency_mode':
-                from .screens.emergency_mode_screen import EmergencyModeScreen
-                self.replace(EmergencyModeScreen)
-            elif screen_key == 'glados_query':
-                from .screens.glados_query_screen import GladosQueryScreen
-                self.replace(GladosQueryScreen)
-            elif screen_key == 'settings':
-                from .screens.settings_screen import SettingsScreen
-                self.replace(SettingsScreen)
-            elif screen_key == 'statistics':
-                from .screens.statistics_screen import StatisticsScreen
-                self.replace(StatisticsScreen)
+                from .screens.emergency_screen import EmergencyScreen
+                self.replace(EmergencyScreen)
+            elif screen_key == 'pomodoro_session':
+                from .screens.pomodoro_screen import PomodoroScreen
+                self.replace(PomodoroScreen)
             elif screen_key == 'help':
                 from .screens.help_screen import HelpScreen
                 self.replace(HelpScreen)
-            elif screen_key == 'shutdown':
-                from .screens.shutdown_screen import ShutdownScreen
-                self.replace(ShutdownScreen)
             else:
                 self._show_error(f"Tela '{screen_key}' não encontrada.")
                 
         except ImportError as e:
             self._show_error(f"Não foi possível carregar a tela {screen_key}: {e}")
+        except Exception as e:
+            logger.error(f"Erro ao navegar para {screen_key}: {e}")
+            self._show_error(f"Erro: {str(e)}")
     
     def _push_screen(self, screen_key: str):
         """Adiciona uma tela à pilha sem substituir a atual."""
-        # Similar a _navigate_to_screen mas com push em vez de replace
         try:
+            self._force_clean_transition()
+            
             if screen_key == 'dashboard':
                 from .screens.dashboard_screen import DashboardScreen
                 self.push(DashboardScreen)
+            elif screen_key == 'agenda':
+                from .screens.agenda_screen import AgendaScreen
+                self.push(AgendaScreen)
             else:
-                self._navigate_to_screen(screen_key)  # Fallback para replace
+                # Fallback para navigate se não for push específico
+                self._navigate_to_screen(screen_key)
                 
         except ImportError as e:
             self._show_error(f"Não foi possível carregar a tela {screen_key}: {e}")
+    
+    def run(self):
+        """Executa o loop principal otimizado do gerenciador de telas."""
+        if not self.screen_stack:
+            raise ValueError("Nenhuma tela na pilha. Use push() primeiro.")
+        
+        self.running = True
+        self.start_time = time.time()
+        
+        try:
+            while self.running and self.screen_stack:
+                current_screen = self.get_current_screen()
+                
+                if time.time() - self.last_input_time > self.input_timeout:
+                    self._handle_inactivity_timeout()
+                    continue
+                
+                try:
+                    # Executa tela atual
+                    result = current_screen.show()
+                    self.frame_count += 1
+                    
+                    self.last_input_time = time.time()
+                    self._handle_screen_result(result)
+                    
+                except KeyboardInterrupt:
+                    self._handle_keyboard_interrupt()
+                except Exception as e:
+                    self._handle_screen_error(current_screen, e)
+            
+        finally:
+            self.cleanup()
     
     def _handle_inactivity_timeout(self):
         """Lida com timeout de inatividade."""
@@ -279,20 +271,6 @@ class ScreenManager:
         self.terminal.flush()
         
         time.sleep(2)
-    
-    def _setup_global_shortcuts(self):
-        """Configura atalhos globais que funcionam em qualquer tela."""
-        return {
-            Key.H: self._show_help,
-            Key.S: self._handle_global_exit,
-            Key.R: self._refresh_current,
-            Key.C: self._quick_checkin,
-            Key.E: self._emergency_mode,
-            Key.M: self._toggle_menu,
-            Key.B: self._go_back,
-            Key.D: lambda: self._navigate_to_screen('dashboard'),
-            Key.F1: self._toggle_perf_stats
-        }
     
     def _show_help(self):
         """Mostra a tela de ajuda."""

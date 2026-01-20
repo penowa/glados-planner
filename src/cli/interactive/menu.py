@@ -195,7 +195,7 @@ class Menu:
     
     def run(self, clear_each_cycle: bool = False) -> Any:
         """Executa loop principal do menu"""
-        from cli.interactive.input.keyboard_handler import keyboar_handler
+        from src.cli.interactive.terminal import key
         
         self.running = True
         result = None

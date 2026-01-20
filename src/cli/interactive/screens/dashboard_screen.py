@@ -6,6 +6,7 @@ import time
 from typing import Optional
 from .base_screen import BaseScreen
 from src.cli.interactive.terminal import Key
+from src.cli.integration.backend_integration import get_backend
 
 
 class DashboardScreen(BaseScreen):
@@ -14,14 +15,14 @@ class DashboardScreen(BaseScreen):
     def __init__(self, terminal):
         super().__init__(terminal)
         self.title = "Dashboard"
-        
+        self.backend = get_backend()        
         # Menu simples
         self.menu_items = [
             ("📚 Adicionar Livro", "new_book"),
             ("📖 Sessão de Leitura", "reading_session"),
             ("🍅 Pomodoro", "pomodoro_session"),
             ("✅ Check-in Diário", "daily_checkin"),
-            ("📅 Configurar Agenda", "agenda_config"),
+            ("📅 Agenda", "goto:agenda"),
             ("⚠️ Modo Emergência", "emergency_mode"),
             ("🤖 Consultar GLaDOS", "glados_query"),
             ("❓ Ajuda", "help"),
@@ -63,7 +64,7 @@ class DashboardScreen(BaseScreen):
     def _check_backend(self):
         """Verifica backend de forma simples."""
         try:
-            from src.cli.integration.backend_integration import backend
+            from src.cli.integration.backend_integration import get_backend
             if backend and hasattr(backend, 'is_ready'):
                 return backend.is_ready()
         except:
