@@ -1,4 +1,4 @@
-# src/cli/interactive/screen_manager.py
+# src/cli/interactive/screen_manager.py (atualização do método _setup_global_shortcuts)
 """
 Gerenciador de telas otimizado com Blessed/Curses para navegação entre telas.
 """
@@ -55,6 +55,7 @@ class ScreenManager:
             Key.M: self._toggle_menu,
             Key.B: self._go_back,
             Key.D: lambda: self._navigate_to_screen('dashboard'),
+            Key.P: self._go_to_dashboard,  # <-- NOVO ATALHO P
             Key.F1: self._toggle_perf_stats
         }
     
@@ -194,6 +195,11 @@ class ScreenManager:
                     result = current_screen.show()
                     self.frame_count += 1
                     
+                    # Verifica se a tecla pressionada é um atalho global
+                    if isinstance(result, Key) and result in self.global_shortcuts:
+                        self.global_shortcuts[result]()
+                        continue
+                    
                     self.last_input_time = time.time()
                     self._handle_screen_result(result)
                     
@@ -219,7 +225,7 @@ class ScreenManager:
         time.sleep(1.5)
         
         # Retorna ao dashboard
-        self._navigate_to_screen('dashboard')
+        self._go_to_dashboard()
     
     def _handle_keyboard_interrupt(self):
         """Lida com interrupção por teclado (Ctrl+C)."""
@@ -329,6 +335,10 @@ class ScreenManager:
             self.terminal.print_at(msg_x, term_height // 2, msg, {"color": "warning"})
             self.terminal.flush()
             time.sleep(1)
+    
+    def _go_to_dashboard(self):
+        """NOVO MÉTODO: Atalho para retornar ao dashboard de qualquer tela."""
+        self._navigate_to_screen('dashboard')
     
     def _toggle_perf_stats(self):
         """Alterna exibição de estatísticas de performance."""
