@@ -10,7 +10,7 @@ from .dashboard_screen import DashboardScreen
 #from .weekly_planning_screen import WeeklyPlanningScreen
 #from .agenda_config_screen import AgendaConfigScreen
 #from .emergency_mode_screen import EmergencyModeScreen
-#from .glados_query_screen import GladosQueryScreen
+from .glados_chat_screen import GladosChatScreen
 #from .help_screen import HelpScreen
 from .shutdown_screen import ShutdownScreen
 #from .pomodoro_session_screen import PomodoroSessionScreen
@@ -31,7 +31,7 @@ __all__ = [
     #'WeeklyPlanningScreen',
     #'AgendaConfigScreen',
     #'EmergencyModeScreen',
-    #'GladosQueryScreen',
+    'GladosChatScreen',
     #'HelpScreen',
     'ShutdownScreen',
     #'PomodoroSessionScreen',

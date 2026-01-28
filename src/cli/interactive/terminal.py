@@ -935,3 +935,79 @@ class GLTerminal:
                     test_y = 4
                 else:
                     test_y += 1
+    def get_input_line(self, prompt: str = "", max_length: int = 200) -> str:
+        """Captura uma linha de input do usuário - Versão corrigida."""
+        import sys
+        import termios
+        import tty
+        
+        # Se Blessed estiver disponível, usar sua implementação
+        if self.use_blessed and HAS_BLESSED:
+            self.show_cursor()
+            try:
+                with self.term.cbreak():
+                    input_text = ""
+                    
+                    while True:
+                        # Mostrar prompt
+                        print(f"\r{prompt}{input_text}", end="", flush=True)
+                        
+                        # Ler tecla
+                        key = self.term.inkey(timeout=0.1)
+                        
+                        if not key:
+                            continue
+                            
+                        if key.name == 'KEY_ENTER':
+                            print()  # Nova linha
+                            return input_text
+                        elif key.name == 'KEY_ESCAPE':
+                            return ""
+                        elif key.name == 'KEY_BACKSPACE':
+                            if input_text:
+                                input_text = input_text[:-1]
+                        elif key.name == 'KEY_DELETE':
+                            # Delete não funciona bem em alguns terminais
+                            continue
+                        elif key.name in ['KEY_LEFT', 'KEY_RIGHT', 'KEY_HOME', 'KEY_END']:
+                            # Navegação não suportada nesta versão simplificada
+                            continue
+                        elif len(key) == 1 and key.isprintable():
+                            if len(input_text) < max_length:
+                                input_text += key
+                                
+            finally:
+                self.hide_cursor()
+        else:
+            # Fallback para terminais sem Blessed
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            
+            self.show_cursor()
+            try:
+                tty.setraw(fd)
+                
+                input_text = ""
+                print(prompt, end="", flush=True)
+                
+                while True:
+                    char = sys.stdin.read(1)
+                    
+                    if char == '\r' or char == '\n':  # Enter
+                        print()  # Nova linha
+                        return input_text
+                    elif char == '\x1b':  # ESC
+                        return ""
+                    elif char == '\x7f' or char == '\x08':  # Backspace
+                        if input_text:
+                            input_text = input_text[:-1]
+                            # Apagar caractere visualmente
+                            print('\b \b', end="", flush=True)
+                    elif char.isprintable():
+                        if len(input_text) < max_length:
+                            input_text += char
+                            print(char, end="", flush=True)
+                            
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                self.hide_cursor()

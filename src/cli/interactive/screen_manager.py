@@ -147,6 +147,9 @@ class ScreenManager:
             elif screen_key == 'help':
                 from .screens.help_screen import HelpScreen
                 self.replace(HelpScreen)
+            elif screen_key == 'glados_chat':
+                from .screens.glados_chat_screen import GladosChatScreen
+                self.replace(GladosChatScreen)
             else:
                 self._show_error(f"Tela '{screen_key}' não encontrada.")
                 

@@ -1,0 +1,121 @@
+.
+├── commands
+│   ├── agenda.py
+│   ├── book_commands.py
+│   ├── data_commands.py
+│   ├── __init__.py
+│   ├── obsidian_commands.py
+│   └── __pycache__
+│       ├── data_commands.cpython-313.pyc
+│       ├── __init__.cpython-313.pyc
+│       ├── __init__.py
+│       └── obsidian_commands.cpython-313.pyc
+├── components.py
+├── core
+│   ├── event_system.py
+│   └── __pycache__
+│       └── event_system.cpython-313.pyc
+├── estrutura_cli.txt
+├── estrutura.txt
+├── glados.py
+├── icons.py
+├── __init__.py
+├── integration
+│   ├── agenda_bridge.py
+│   ├── backend_integration.py
+│   ├── database_bridge.py
+│   ├── llm_bridge.py
+│   ├── obsidian_bridge.py
+│   ├── __pycache__
+│   │   ├── agenda_bridge.cpython-313.pyc
+│   │   ├── backend_integration.cpython-313.pyc
+│   │   ├── llm_bridge.cpython-313.pyc
+│   │   └── obsidian_bridge.cpython-313.pyc
+│   └── reading_bridge.py
+├── interactive
+│   ├── __init__.py
+│   ├── input
+│   │   ├── __init__.py
+│   │   ├── input_manager.py
+│   │   ├── keyboard_handler.py
+│   │   └── __pycache__
+│   │       ├── __init__.cpython-313.pyc
+│   │       ├── input_manager.cpython-313.pyc
+│   │       ├── keyboard_handler.cpython-313.pyc
+│   │       └── navigation_state.cpython-313.pyc
+│   ├── integration
+│   │   ├── agenda_backend_bridge.py
+│   │   ├── backend_integration.py
+│   │   └── __pycache__
+│   │       ├── agenda_backend_bridge.cpython-313.pyc
+│   │       └── backend_integration.cpython-313.pyc
+│   ├── menu.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── menu.cpython-313.pyc
+│   │   ├── screen_manager.cpython-313.pyc
+│   │   └── terminal.cpython-313.pyc
+│   ├── screen_manager.py
+│   ├── screens
+│   │   ├── agenda_screen.py
+│   │   ├── agenda_submenus.py
+│   │   ├── base_screen.py
+│   │   ├── dashboard_screen.py
+│   │   ├── glados_chat_screen.py
+│   │   ├── glados_templates
+│   │   │   ├── concept_note.md
+│   │   │   ├── conversation.md
+│   │   │   └── reading_note.md
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── agenda_config_screen.cpython-313.pyc
+│   │   │   ├── agenda_screen.cpython-313.pyc
+│   │   │   ├── agenda_submenus.cpython-313.pyc
+│   │   │   ├── base_screen.cpython-313.pyc
+│   │   │   ├── book_selection_screen.cpython-313.pyc
+│   │   │   ├── boot_screen.cpython-313.pyc
+│   │   │   ├── daily_checkin_screen.cpython-313.pyc
+│   │   │   ├── dashboard_screen.cpython-313.pyc
+│   │   │   ├── emergency_mode_screen.cpython-313.pyc
+│   │   │   ├── glados_chat_screen.cpython-313.pyc
+│   │   │   ├── glados_query_screen.cpython-313.pyc
+│   │   │   ├── help_screen.cpython-313.pyc
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── new_book_screen.cpython-313.pyc
+│   │   │   ├── pomodoro_session_screen.cpython-313.pyc
+│   │   │   ├── reading_session_screen.cpython-313.pyc
+│   │   │   ├── session_screen.cpython-313.pyc
+│   │   │   ├── settings_screen.cpython-313.pyc
+│   │   │   ├── shutdown_screen.cpython-313.pyc
+│   │   │   ├── statistics_screen.cpython-313.pyc
+│   │   │   ├── task_management_screen.cpython-313.pyc
+│   │   │   ├── test_screen.cpython-313.pyc
+│   │   │   └── weekly_planning_screen.cpython-313.pyc
+│   │   └── shutdown_screen.py
+│   ├── terminal.py
+│   ├── utils
+│   │   └── __init__.py
+│   └── widgets
+│       ├── agenda_widgets.py
+│       ├── dashboard_widgets.py
+│       ├── __init__.py
+│       ├── notification_widget.py
+│       └── __pycache__
+│           ├── dashboard_widgets.cpython-313.pyc
+│           └── __init__.cpython-313.pyc
+├── main.py
+├── personality.py
+├── __pycache__
+│   ├── components.cpython-313.pyc
+│   ├── glados.cpython-313.pyc
+│   ├── icons.cpython-313.pyc
+│   ├── __init__.cpython-313.pyc
+│   ├── __init__.py
+│   ├── main.cpython-313.pyc
+│   ├── personality.cpython-313.pyc
+│   └── theme.cpython-313.pyc
+├── templates
+│   └── __init__.py
+└── theme.py
+
+21 directories, 98 files

@@ -16,6 +16,7 @@ markdown>=3.5.2
 llama-cpp-python>=0.2.26
 sentence-transformers>=2.2.2
 transformers>=4.36.2
+pyprclip==1.8.2
 
 # torch será instalado via sistema ou conda
 safetensors>=0.4.2

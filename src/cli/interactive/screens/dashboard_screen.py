@@ -24,7 +24,7 @@ class DashboardScreen(BaseScreen):
             ("✅ Check-in Diário", "daily_checkin"),
             ("📅 Agenda", "goto:agenda"),
             ("⚠️ Modo Emergência", "emergency_mode"),
-            ("🤖 Consultar GLaDOS", "glados_query"),
+            ("🤖 Consultar GLaDOS", "goto:glados_chat"),
             ("❓ Ajuda", "help"),
             ("⚙️ Configurações", "settings"),
             ("🚪 Sair", "exit")
