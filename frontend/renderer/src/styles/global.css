@@ -1,0 +1,31 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+
+  background-color: #0A0A0A;
+  color: #C0C0C0;
+
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 14px;
+}
+
+::selection {
+  background-color: #FF5500;
+  color: #0A0A0A;
+}
+
+button {
+  font-family: inherit;
+  background: none;
+  border: none;
+  color: inherit;
+}
+
+button:focus-visible {
+  outline: 1px solid #FF5500;
+}
