@@ -39,6 +39,14 @@ class ObsidianNote:
 
 class ObsidianVaultManager:
     """Gerenciador de vault do Obsidian."""
+        # Adicionando padrão singleton
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, vault_path: Optional[str] = None):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
     
     def __init__(self, vault_path: Optional[str] = None):
         """
@@ -47,16 +55,37 @@ class ObsidianVaultManager:
         Args:
             vault_path: Caminho para o vault do Obsidian. Se None, usa o das configurações.
         """
-        self.vault_path = Path(vault_path or settings.vault_path or "")
-        
-        if not self.vault_path.exists():
-            raise ValueError(f"Vault path não existe: {self.vault_path}")
-        
-        logger.info(f"Initialized ObsidianVaultManager for vault: {self.vault_path}")
+        if vault_path is None:
+            # Tentar obter do settings do backend
+            if hasattr(settings, 'paths') and hasattr(settings.paths, 'vault'):
+                vault_path = settings.paths.vault
+            else:
+                # Fallback para caminho padrão
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
+
+        # Definir o caminho do vault como um objeto Path
+        self.vault_path = Path(vault_path)        
         
         # Cache de notas
         self._notes_cache: Dict[Path, ObsidianNote] = {}
         self._scan_vault()
+
+        ObsidianVaultManager._initialized = True
+    
+    @classmethod
+    def instance(cls, vault_path: Optional[str] = None) -> 'ObsidianVaultManager':
+        """
+        Retorna a instância singleton do gerenciador de vault.
+        
+        Args:
+            vault_path: Caminho para o vault (opcional, apenas na primeira chamada)
+            
+        Returns:
+            Instância singleton do ObsidianVaultManager
+        """
+        if cls._instance is None:
+            cls._instance = cls(vault_path)
+        return cls._instance
     
     def _scan_vault(self) -> None:
         """Escaneia o vault e carrega todas as notas em cache."""

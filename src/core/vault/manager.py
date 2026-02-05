@@ -18,13 +18,29 @@ console = Console()
 
 class VaultManager:
     """Gerencia a estrutura e operações do vault do Obsidian"""
+    _instance = None
+    _initialized = False
     
+    def __new__(cls, vault_path: Optional[str] = None):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self, vault_path: Optional[str] = None):
-        """Inicializa o gerenciador do vault"""
-        if vault_path:
-            self.vault_path = Path(vault_path).expanduser()
-        else:
-            self.vault_path = Path(settings.paths.vault).expanduser()
+        """
+        Inicializa o gerenciador do vault.
+        
+        Args:
+            vault_path: Caminho para o vault do Obsidian. Se None, usa o das configurações.
+        """
+        if vault_path is None:
+            # Tentar obter do settings do backend
+            if hasattr(settings, 'paths') and hasattr(settings.paths, 'vault'):
+                vault_path = settings.paths.vault
+            else:
+                # Fallback para caminho padrão
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
+
         
         self.structure = settings.obsidian.vault_structure
         self.brain_regions = settings.obsidian.brain_regions

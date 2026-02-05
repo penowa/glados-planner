@@ -24,7 +24,7 @@ class ReadingProgress:
 class ReadingManager:
     """Gerencia leituras e progresso"""
     
-    def __init__(self, vault_path: str):
+    def __init__(self, vault_path: str = None):
         """
         Inicializa o gerenciador de leituras
         
@@ -32,6 +32,14 @@ class ReadingManager:
             vault_path: Caminho para o vault do Obsidian
         """
         from pathlib import Path
+        import os
+        if vault_path is None:
+            try:
+                from ...config.settings import settings
+                vault_path = settings.paths.vault
+            except (ImportError, AttributeError):
+                # Fallback para caminho padrão
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
         self.vault_path = Path(vault_path).expanduser()
         self.progress_file = self.vault_path / "01-LEITURAS" / "progresso_leitura.json"
         

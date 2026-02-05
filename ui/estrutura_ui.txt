@@ -1,0 +1,97 @@
+.
+├── controllers
+│   ├── agenda_controller.py
+│   ├── book_controller.py
+│   ├── focus_controller.py
+│   ├── glados_controller.py
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── book_controller.cpython-313.pyc
+│   │   └── __init__.cpython-313.pyc
+│   └── reading_controller.py
+├── core
+│   ├── errors
+│   │   └── error_manager.py
+│   ├── monitoring
+│   │   └── performance_monitor.py
+│   └── recovery
+│       └── state_recovery.py
+├── estrutura_ui.txt
+├── __init__.py
+├── main.py
+├── main_window.py
+├── __pycache__
+│   ├── __init__.cpython-313.pyc
+│   ├── main.cpython-313.pyc
+│   └── main_window.cpython-313.pyc
+├── resources
+│   ├── fonts
+│   │   └── __init__.py
+│   ├── icons
+│   │   └── __init__.py
+│   └── styles
+│       └── __init__.py
+├── themes
+│   ├── __init__.py
+│   ├── philosophy_dark.qss
+│   ├── philosophy_light.qss
+│   └── philosophy_night.qss
+├── utils
+│   ├── animation.py
+│   ├── __init__.py
+│   ├── logger.py
+│   ├── __pycache__
+│   │   ├── animation.cpython-313.pyc
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── responsive.cpython-313.pyc
+│   │   └── theme_manager.cpython-313.pyc
+│   ├── responsive.py
+│   ├── shortcut_manager.py
+│   └── theme_manager.py
+├── views
+│   ├── agenda.py
+│   ├── concepts.py
+│   ├── dashboard.py
+│   ├── focus.py
+│   ├── __init__.py
+│   ├── library.py
+│   └── __pycache__
+│       ├── agenda.cpython-313.pyc
+│       ├── dashboard.cpython-313.pyc
+│       ├── __init__.cpython-313.pyc
+│       └── library.cpython-313.pyc
+└── widgets
+    ├── buttons.py
+    ├── cards
+    │   ├── action_card.py
+    │   ├── base_card.py
+    │   ├── book_card.py
+    │   ├── concept_card.py
+    │   ├── glados_card.py
+    │   ├── goal_card.py
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   │   ├── action_card.cpython-313.pyc
+    │   │   ├── base_card.cpython-313.pyc
+    │   │   ├── book_card.cpython-313.pyc
+    │   │   ├── concept_card.cpython-313.pyc
+    │   │   ├── glados_card.cpython-313.pyc
+    │   │   ├── goal_card.cpython-313.pyc
+    │   │   ├── __init__.cpython-313.pyc
+    │   │   ├── stats_card.cpython-313.pyc
+    │   │   └── time_card.cpython-313.pyc
+    │   ├── stats_card.py
+    │   └── time_card.py
+    ├── error.py
+    ├── __init__.py
+    ├── navigation.py
+    ├── notification.py
+    ├── progress.py
+    ├── __pycache__
+    │   ├── cards.cpython-313.pyc
+    │   ├── __init__.cpython-313.pyc
+    │   ├── navigation.cpython-313.pyc
+    │   └── progress.cpython-313.pyc
+    └── search.py
+
+21 directories, 74 files

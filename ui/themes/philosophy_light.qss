@@ -1,0 +1,755 @@
+/* philosophy_dark.qss - Tema Nórdico com Paleta de Cores Vibrantes */
+
+:root {
+    /* Cores base nórdicas */
+    --color-bg-dark: #2E3440;        /* Fundo principal */
+    --color-bg-medium: #3B4252;      /* Fundo secundário */
+    --color-bg-light: #434C5E;       /* Fundo terciário */
+    --color-bg-snow: #4C566A;        /* Fundo sutil */
+    
+    /* Cores de texto */
+    --color-text-primary: #ECEFF4;   /* Texto primário */
+    --color-text-secondary: #D8DEE9; /* Texto secundário */
+    --color-text-muted: #81A1C1;     /* Texto muted */
+    --color-text-frost: #88C0D0;     /* Texto frost */
+    
+    /* Cores de acento vibrantes */
+    --color-red: #bf616a;            /* Botões de ação perigosa */
+    --color-orange: #d08770;         /* Avisos e destaque médio */
+    --color-yellow-light: #ebcb8b;   /* Avisos leves */
+    --color-yellow-dark: #e4b860;    /* Avisos fortes */
+    --color-green: #a3be8c;          /* Sucesso e confirmação */
+    --color-purple: #b48ead;         /* Ações especiais */
+    --color-sea-green: #8fbcbb;      /* Status ativo */
+    --color-cyan: #88c0d0;           /* Links e ações */
+    --color-frost: #81a1c1;          /* Cor base - elementos principais */
+    --color-blue: #5e81ac;           /* Contraste - destaques */
+    --color-salmon: #FC6E68;         /* Chamadas de atenção */
+    
+    /* Estados */
+    --color-hover: rgba(129, 161, 193, 0.1);     /* Hover frost */
+    --color-active: rgba(94, 129, 172, 0.2);     /* Active blue */
+    --color-disabled: rgba(76, 86, 106, 0.5);    /* Disabled */
+    
+    /* Bordas */
+    --border-color: #4C566A;
+    --border-color-hover: #81A1C1;
+    --border-color-active: #5E81AC;
+    
+    /* Sombras */
+    --shadow-color: rgba(46, 52, 64, 0.3);
+    --shadow-light: rgba(236, 239, 244, 0.05);
+    
+    /* Radii */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-round: 50%;
+    
+    /* Espaçamento */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 24px;
+    --spacing-xxl: 32px;
+    
+    /* Tipografia */
+    --font-family: "FiraCode Nerd Font Propo", monospace;
+    --font-size-xs: 10px;
+    --font-size-sm: 11px;
+    --font-size-md: 12px;
+    --font-size-lg: 14px;
+    --font-size-xl: 16px;
+    --font-size-xxl: 18px;
+}
+
+/* ============ APLICAÇÃO PRINCIPAL ============ */
+PhilosophyPlanner {
+    background-color: var(--color-bg-dark);
+    color: var(--color-text-primary);
+    font-family: var(--font-family);
+    font-size: var(--font-size-md);
+}
+
+QWidget {
+    font-family: var(--font-family);
+    selection-background-color: var(--color-blue);
+    selection-color: var(--color-text-primary);
+}
+
+/* ============ DASHBOARD ============ */
+QWidget#dashboard_view {
+    background: transparent;
+}
+
+QWidget#content_widget {
+    background: transparent;
+}
+
+/* Cabeçalho minimalista */
+QWidget#minimal_header {
+    background: transparent;
+}
+
+QLabel#minimal_greeting {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xxl);
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+
+QLabel#minimal_date {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+/* Títulos de seção */
+QLabel#section_title_minimal {
+    color: var(--color-frost);
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    padding-bottom: var(--spacing-sm);
+    border-bottom: 1px solid var(--border-color);
+}
+
+QLabel#section_subtitle_minimal {
+    color: var(--color-cyan);
+    font-size: var(--font-size-md);
+    font-weight: 500;
+}
+
+/* Estados vazios */
+QLabel#empty_state_minimal {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+QLabel#loading_text {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+/* ============ BOTÕES PRINCIPAIS ============ */
+/* Botão primário - usando frost como base */
+QPushButton#minimal_button {
+    background: linear-gradient(135deg, var(--color-frost), var(--color-cyan));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    min-height: 36px;
+    min-width: 120px;
+}
+
+QPushButton#minimal_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-frost) 90%, var(--color-text-primary) 10%),
+        color-mix(in srgb, var(--color-cyan) 90%, var(--color-text-primary) 10%)
+    );
+    transform: translateY(-1px);
+}
+
+QPushButton#minimal_button:pressed {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-frost) 80%, var(--color-bg-dark) 20%),
+        color-mix(in srgb, var(--color-cyan) 80%, var(--color-bg-dark) 20%)
+    );
+    transform: translateY(0);
+}
+
+QPushButton#minimal_button:disabled {
+    background: var(--color-disabled);
+    color: var(--color-text-muted);
+}
+
+/* Botão secundário - usando blue como contraste */
+QPushButton#minimal_button_secondary {
+    background: transparent;
+    color: var(--color-text-muted);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    min-height: 36px;
+}
+
+QPushButton#minimal_button_secondary:hover {
+    border-color: var(--color-blue);
+    color: var(--color-blue);
+    background: var(--color-hover);
+}
+
+QPushButton#minimal_button_secondary:pressed {
+    background: var(--color-active);
+}
+
+/* Botão de texto minimalista */
+QPushButton#text_button_minimal {
+    background: transparent;
+    color: var(--color-text-muted);
+    border: none;
+    padding: var(--spacing-sm) 0;
+    font-size: var(--font-size-sm);
+}
+
+QPushButton#text_button_minimal:hover {
+    color: var(--color-blue);
+}
+
+/* Botão de ação rápida como link */
+QPushButton#minimal_action_link {
+    background: transparent;
+    color: var(--color-text-muted);
+    border: none;
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+}
+
+QPushButton#minimal_action_link:hover {
+    color: var(--color-cyan);
+    background: var(--color-hover);
+}
+
+/* Botão de ícone */
+QPushButton#minimal_icon_button {
+    background: var(--color-blue);
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    font-size: var(--font-size-md);
+    font-weight: 500;
+}
+
+QPushButton#minimal_icon_button:hover {
+    background: color-mix(in srgb, var(--color-blue) 90%, white 10%);
+}
+
+/* ============ NAVEGAÇÃO ============ */
+/* Botões de navegação principal */
+QPushButton#navigation_button {
+    background: transparent;
+    color: var(--color-text-muted);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#navigation_button:hover {
+    border-color: var(--color-blue);
+    color: var(--color-blue);
+    background: var(--color-hover);
+}
+
+QPushButton#navigation_button:pressed {
+    background: var(--color-active);
+}
+
+/* Botões de navegação em cards */
+QPushButton#nav_card_button {
+    background: rgba(59, 66, 82, 0.3);
+    color: var(--color-text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    text-align: center;
+    min-height: 80px;
+}
+
+QPushButton#nav_card_button:hover {
+    background: rgba(94, 129, 172, 0.1);
+    border-color: var(--color-blue);
+    color: var(--color-frost);
+}
+
+/* Botões de navegação rápida */
+QPushButton#nav_quick_button {
+    background: transparent;
+    color: var(--color-text-muted);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+}
+
+QPushButton#nav_quick_button:hover {
+    border-color: var(--color-blue);
+    color: var(--color-blue);
+    background: var(--color-hover);
+}
+
+/* ============ ELEMENTOS DE DASHBOARD ============ */
+/* Títulos de view */
+QLabel#view_title {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xxl);
+    font-weight: 500;
+}
+
+/* Títulos de seção */
+QLabel#section_label {
+    color: var(--color-frost);
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: var(--spacing-sm);
+}
+
+/* Estatísticas minimalistas */
+QWidget#minimal_stat_widget {
+    background: transparent;
+}
+
+QLabel#minimal_stat_value {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xl);
+    font-weight: 500;
+}
+
+QLabel#minimal_stat_label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+/* Títulos de livro */
+QLabel#minimal_book_title {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+}
+
+QLabel#minimal_book_author {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+/* ============ AGENDA E TAREFAS ============ */
+/* Widgets de tarefa minimalista */
+QWidget#minimal_task_widget {
+    background: transparent;
+    border-radius: var(--radius-md);
+}
+
+QWidget#minimal_task_widget:hover {
+    background: var(--color-hover);
+}
+
+QLabel#minimal_task_desc {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+QLabel#minimal_task_time {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 400;
+}
+
+QLabel#minimal_task_status {
+    font-size: var(--font-size-md);
+}
+
+/* Contador de agenda */
+QLabel#agenda_count_minimal {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+/* ============ GLADOS ASSISTANT ============ */
+/* Campo de entrada */
+QLineEdit#minimal_glados_input {
+    background: var(--color-bg-medium);
+    color: var(--color-text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    selection-background-color: var(--color-blue);
+}
+
+QLineEdit#minimal_glados_input:focus {
+    border-color: var(--color-blue);
+    background: var(--color-bg-light);
+}
+
+QLineEdit#minimal_glados_input:disabled {
+    background: var(--color-disabled);
+    color: var(--color-text-muted);
+}
+
+/* Mensagens do GLaDOS */
+QLabel#glados_message_minimal {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+    background: rgba(136, 192, 208, 0.05);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+}
+
+QWidget#glados_message_container {
+    background: transparent;
+}
+
+/* ============ BIBLIOTECA ============ */
+/* Cards de livro */
+QFrame#book_card {
+    background: rgba(59, 66, 82, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+}
+
+QFrame#book_card:hover {
+    border-color: var(--color-blue);
+    background: rgba(94, 129, 172, 0.1);
+}
+
+/* ============ CONCEITOS ============ */
+/* Frame de rede de conceitos */
+QFrame#concepts_network_frame {
+    background: rgba(59, 66, 82, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-xl);
+}
+
+QFrame#concept_details_frame {
+    background: rgba(59, 66, 82, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-xl);
+}
+
+/* Botões de conceito */
+QPushButton#concept_button {
+    background: rgba(59, 66, 82, 0.3);
+    color: var(--color-text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    font-size: var(--font-size-sm);
+    min-width: 100px;
+    min-height: 60px;
+}
+
+QPushButton#concept_button:hover {
+    border-color: var(--color-purple);
+    background: rgba(180, 142, 173, 0.1);
+    color: var(--color-purple);
+}
+
+/* Botões de ação de conceito */
+QPushButton#concept_action_button {
+    background: rgba(59, 66, 82, 0.3);
+    color: var(--color-text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+}
+
+QPushButton#concept_action_button:hover {
+    border-color: var(--color-blue);
+    background: var(--color-hover);
+    color: var(--color-blue);
+}
+
+/* Botões de detalhe de conceito */
+QPushButton#concept_detail_button {
+    background: rgba(94, 129, 172, 0.1);
+    color: var(--color-blue);
+    border: 1px solid var(--color-blue);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+}
+
+QPushButton#concept_detail_button:hover {
+    background: rgba(94, 129, 172, 0.2);
+}
+
+QLabel#concept_title {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xl);
+    font-weight: 500;
+}
+
+QLabel#concept_info {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+/* ============ MODO FOCO ============ */
+/* Estatísticas de foco */
+QFrame#focus_stats_frame {
+    background: rgba(59, 66, 82, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+}
+
+QLabel#focus_stats {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+}
+
+QLabel#focus_status {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-md);
+    font-weight: 500;
+}
+
+QLabel#focus_quote {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-style: italic;
+}
+
+/* Botões de foco com cores específicas */
+QPushButton#focus_start_button {
+    background: linear-gradient(135deg, var(--color-green), var(--color-sea-green));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#focus_start_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-green) 90%, white 10%),
+        color-mix(in srgb, var(--color-sea-green) 90%, white 10%)
+    );
+}
+
+QPushButton#focus_pause_button {
+    background: linear-gradient(135deg, var(--color-yellow-dark), var(--color-orange));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#focus_pause_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-yellow-dark) 90%, white 10%),
+        color-mix(in srgb, var(--color-orange) 90%, white 10%)
+    );
+}
+
+QPushButton#focus_reset_button {
+    background: linear-gradient(135deg, var(--color-frost), var(--color-cyan));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#focus_reset_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-frost) 90%, white 10%),
+        color-mix(in srgb, var(--color-cyan) 90%, white 10%)
+    );
+}
+
+QPushButton#focus_skip_button {
+    background: linear-gradient(135deg, var(--color-purple), var(--color-red));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#focus_skip_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-purple) 90%, white 10%),
+        color-mix(in srgb, var(--color-red) 90%, white 10%)
+    );
+}
+
+/* ============ BOTÕES ESPECIAIS ============ */
+/* Botão com cor salmon para chamadas de atenção */
+QPushButton#attention_button {
+    background: linear-gradient(135deg, var(--color-salmon), var(--color-orange));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    min-height: 40px;
+}
+
+QPushButton#attention_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-salmon) 90%, white 10%),
+        color-mix(in srgb, var(--color-orange) 90%, white 10%)
+    );
+}
+
+/* Botão com cor verde para sucesso */
+QPushButton#success_button {
+    background: linear-gradient(135deg, var(--color-green), var(--color-sea-green));
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#success_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-green) 90%, white 10%),
+        color-mix(in srgb, var(--color-sea-green) 90%, white 10%)
+    );
+}
+
+/* Botão com cor vermelha para ações perigosas */
+QPushButton#danger_button {
+    background: linear-gradient(135deg, var(--color-red), #c16068);
+    color: var(--color-text-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+QPushButton#danger_button:hover {
+    background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--color-red) 90%, white 10%),
+        color-mix(in srgb, #c16068 90%, white 10%)
+    );
+}
+
+/* ============ SCROLLBARS ============ */
+QScrollBar:vertical {
+    background: var(--color-bg-medium);
+    width: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical {
+    background: var(--color-bg-snow);
+    border-radius: 6px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: var(--color-frost);
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    border: none;
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background: var(--color-bg-medium);
+    height: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:horizontal {
+    background: var(--color-bg-snow);
+    border-radius: 6px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: var(--color-frost);
+}
+
+/* ============ SEPARADORES ============ */
+QFrame {
+    color: var(--border-color);
+}
+
+/* ============ PROGRESS BARS ============ */
+QProgressBar {
+    border: none;
+    background-color: var(--color-bg-snow);
+    border-radius: var(--radius-sm);
+    text-align: center;
+    color: var(--color-text-primary);
+    height: 6px;
+}
+
+QProgressBar::chunk {
+    background: linear-gradient(90deg, var(--color-blue), var(--color-cyan));
+    border-radius: var(--radius-sm);
+}
+
+/* ============ COMBO BOXES ============ */
+QComboBox {
+    background: var(--color-bg-medium);
+    color: var(--color-text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+    min-height: 32px;
+}
+
+QComboBox:hover {
+    border-color: var(--color-blue);
+    background: var(--color-bg-light);
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+
+QComboBox::down-arrow {
+    image: url(down_arrow.svg);
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox QAbstractItemView {
+    background: var(--color-bg-medium);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    selection-background-color: var(--color-blue);
+    selection-color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+}
+
+/* ============ TOOLTIPS ============ */
+QToolTip {
+    background: var(--color-bg-dark);
+    color: var(--color-text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+    opacity: 230;
+}

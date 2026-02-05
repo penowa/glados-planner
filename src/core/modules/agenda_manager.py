@@ -135,14 +135,22 @@ class TimeSlot:
 class AgendaManager:
     """Gestor principal de agenda - Cérebro do sistema"""
     
-    def __init__(self, vault_path: str, user_id: str = "default"):
+    def __init__(self, vault_path: str = None, user_id: str = "default_user"):
         """
-        Inicializa o AgendaManager
+        Inicializa o gerenciador de leituras
         
         Args:
             vault_path: Caminho para o vault do Obsidian
-            user_id: ID do usuário para personalização
         """
+        from pathlib import Path
+        import os
+        if vault_path is None:
+            try:
+                from ...config.settings import settings
+                vault_path = settings.paths.vault
+            except (ImportError, AttributeError):
+                # Fallback para caminho padrão
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
         self.vault_path = Path(vault_path).expanduser()
         self.user_id = user_id
         

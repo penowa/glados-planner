@@ -1,6 +1,11 @@
 .
 ├── api
-│   └── __init__.py
+│   ├── agendaApi.ts
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-313.pyc
+│   │   └── ui_bridge.cpython-313.pyc
+│   └── ui_bridge.py
 ├── cli
 │   ├── commands
 │   │   ├── agenda.py
@@ -18,13 +23,23 @@
 │   │   ├── event_system.py
 │   │   └── __pycache__
 │   │       └── event_system.cpython-313.pyc
+│   ├── estrutura_cli.txt
+│   ├── estrutura.txt
 │   ├── glados.py
 │   ├── icons.py
 │   ├── __init__.py
 │   ├── integration
+│   │   ├── agenda_bridge.py
 │   │   ├── backend_integration.py
-│   │   └── __pycache__
-│   │       └── backend_integration.cpython-313.pyc
+│   │   ├── database_bridge.py
+│   │   ├── llm_bridge.py
+│   │   ├── obsidian_bridge.py
+│   │   ├── __pycache__
+│   │   │   ├── agenda_bridge.cpython-313.pyc
+│   │   │   ├── backend_integration.cpython-313.pyc
+│   │   │   ├── llm_bridge.cpython-313.pyc
+│   │   │   └── obsidian_bridge.cpython-313.pyc
+│   │   └── reading_bridge.py
 │   ├── interactive
 │   │   ├── __init__.py
 │   │   ├── input
@@ -37,35 +52,40 @@
 │   │   │       ├── keyboard_handler.cpython-313.pyc
 │   │   │       └── navigation_state.cpython-313.pyc
 │   │   ├── integration
+│   │   │   ├── agenda_backend_bridge.py
 │   │   │   ├── backend_integration.py
 │   │   │   └── __pycache__
+│   │   │       ├── agenda_backend_bridge.cpython-313.pyc
 │   │   │       └── backend_integration.cpython-313.pyc
 │   │   ├── menu.py
 │   │   ├── __pycache__
 │   │   │   ├── __init__.cpython-313.pyc
 │   │   │   ├── menu.cpython-313.pyc
-│   │   │   └── screen_manager.cpython-313.pyc
+│   │   │   ├── screen_manager.cpython-313.pyc
+│   │   │   └── terminal.cpython-313.pyc
 │   │   ├── screen_manager.py
 │   │   ├── screens
-│   │   │   ├── agenda_config_screen.py
+│   │   │   ├── agenda_screen.py
+│   │   │   ├── agenda_submenus.py
 │   │   │   ├── base_screen.py
-│   │   │   ├── book_selection_screen.py
-│   │   │   ├── daily_checkin_screen.py
 │   │   │   ├── dashboard_screen.py
-│   │   │   ├── emergency_mode_screen.py
-│   │   │   ├── glados_query_screen.py
-│   │   │   ├── help_screen.py
+│   │   │   ├── glados_chat_screen.py
+│   │   │   ├── glados_templates
+│   │   │   │   ├── concept_note.md
+│   │   │   │   ├── conversation.md
+│   │   │   │   └── reading_note.md
 │   │   │   ├── __init__.py
-│   │   │   ├── new_book_screen.py
-│   │   │   ├── pomodoro_session_screen.py
 │   │   │   ├── __pycache__
 │   │   │   │   ├── agenda_config_screen.cpython-313.pyc
+│   │   │   │   ├── agenda_screen.cpython-313.pyc
+│   │   │   │   ├── agenda_submenus.cpython-313.pyc
 │   │   │   │   ├── base_screen.cpython-313.pyc
 │   │   │   │   ├── book_selection_screen.cpython-313.pyc
 │   │   │   │   ├── boot_screen.cpython-313.pyc
 │   │   │   │   ├── daily_checkin_screen.cpython-313.pyc
 │   │   │   │   ├── dashboard_screen.cpython-313.pyc
 │   │   │   │   ├── emergency_mode_screen.cpython-313.pyc
+│   │   │   │   ├── glados_chat_screen.cpython-313.pyc
 │   │   │   │   ├── glados_query_screen.cpython-313.pyc
 │   │   │   │   ├── help_screen.cpython-313.pyc
 │   │   │   │   ├── __init__.cpython-313.pyc
@@ -79,18 +99,15 @@
 │   │   │   │   ├── task_management_screen.cpython-313.pyc
 │   │   │   │   ├── test_screen.cpython-313.pyc
 │   │   │   │   └── weekly_planning_screen.cpython-313.pyc
-│   │   │   ├── reading_session_screen.py
-│   │   │   ├── session_screen.py
-│   │   │   ├── settings_screen.py
-│   │   │   ├── shutdown_screen.py
-│   │   │   ├── statistics_screen.py
-│   │   │   ├── task_management_screen.py
-│   │   │   └── weekly_planning_screen.py
+│   │   │   └── shutdown_screen.py
+│   │   ├── terminal.py
 │   │   ├── utils
 │   │   │   └── __init__.py
 │   │   └── widgets
+│   │       ├── agenda_widgets.py
 │   │       ├── dashboard_widgets.py
 │   │       ├── __init__.py
+│   │       ├── notification_widget.py
 │   │       └── __pycache__
 │   │           ├── dashboard_widgets.cpython-313.pyc
 │   │           └── __init__.cpython-313.pyc
@@ -108,7 +125,23 @@
 │   ├── templates
 │   │   └── __init__.py
 │   └── theme.py
+├── contracts
+│   └── agenda.ts
 ├── core
+│   ├── communication
+│   │   ├── base_controller.py
+│   │   ├── debouncer.py
+│   │   ├── event_bus.py
+│   │   ├── __init__.py
+│   │   ├── message_queue.py
+│   │   ├── __pycache__
+│   │   │   ├── base_controller.cpython-313.pyc
+│   │   │   ├── debouncer.cpython-313.pyc
+│   │   │   ├── event_bus.cpython-313.pyc
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── message_queue.cpython-313.pyc
+│   │   │   └── worker.cpython-313.pyc
+│   │   └── worker.py
 │   ├── config
 │   │   ├── __init__.py
 │   │   ├── __pycache__
@@ -127,6 +160,7 @@
 │   │   │   ├── obsidian_sync.cpython-313.pyc
 │   │   │   └── repository.cpython-313.pyc
 │   │   └── repository.py
+│   ├── errors
 │   ├── __init__.py
 │   ├── integration
 │   │   ├── book_integration.py
@@ -177,6 +211,7 @@
 │   │       ├── __init__.cpython-313.pyc
 │   │       ├── __init__.py
 │   │       └── local_llm.cpython-313.pyc
+│   ├── logging
 │   ├── models
 │   │   ├── base.py
 │   │   ├── book.py
@@ -231,9 +266,11 @@
 │   │   ├── smart_allocator.py
 │   │   ├── translation_module.py
 │   │   └── writing_assistant.py
+│   ├── monitoring
 │   ├── __pycache__
 │   │   ├── __init__.cpython-313.pyc
 │   │   └── __init__.py
+│   ├── recovery
 │   ├── repositories
 │   │   ├── book_repository.py
 │   │   ├── __init__.py
@@ -258,10 +295,36 @@
 ├── data
 │   └── database
 ├── estrutura_src.txt
+├── estrutura.txt
 ├── __init__.py
 ├── __pycache__
 │   ├── __init__.cpython-313.pyc
 │   └── __init__.py
-└── teste.py
+├── teste.py
+└── ui
+    └── design_system
+        ├── animations
+        │   ├── feedback.py
+        │   ├── loading.py
+        │   └── transitions.py
+        ├── components
+        │   ├── buttons.py
+        │   ├── card.py
+        │   ├── dialogs.py
+        │   └── input.py
+        ├── icons
+        │   └── svg
+        │       ├── books.svg
+        │       ├── glados.svg
+        │       └── tasks.svg
+        ├── themes
+        │   ├── philosophy_dark.qss
+        │   ├── philosophy_light.qss
+        │   ├── philosophy_night.qss
+        │   └── philosophy_sepia.qss
+        └── utils
+            ├── icon_manager.py
+            ├── responsive.py
+            └── theme_manager.py
 
-58 directories, 207 files
+75 directories, 253 files
