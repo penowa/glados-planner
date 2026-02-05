@@ -26,8 +26,8 @@ class PhilosophyCard(QFrame):
         """Configura UI base do card"""
         # Layout principal
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(16, 16, 16, 16)
-        self.main_layout.setSpacing(8)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
         
         # Título do card
         self.title_label = QLabel()
