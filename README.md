@@ -35,7 +35,7 @@
 ```bash
 # Clone o repositório
 git clone https://github.com/penowa/glados-planner.git
-cd philosophy-planner
+cd glados-planner
 
 # Configure o ambiente
 chmod +x setup.sh
