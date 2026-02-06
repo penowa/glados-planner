@@ -27,7 +27,7 @@ from core.communication.event_bus import GlobalEventBus
 from core.errors.error_manager import ErrorManager
 from core.monitoring.performance_monitor import PerformanceMonitor
 from core.recovery.state_recovery import StateRecoveryManager
-
+from core.modules.obsidian.vault_manager import ObsidianVaultManager
 from core.modules.book_processor import BookProcessor
 from core.modules.reading_manager import ReadingManager
 from core.modules.agenda_manager import AgendaManager
@@ -105,8 +105,8 @@ class PhilosophyPlannerApp:
         """Executa a aplicação com todos os sistemas integrados"""
         try:
             self.app = QApplication(sys.argv)
-            self.app.setApplicationName("GLaDOS Philosophy Planner")
-            self.app.setOrganizationName("GLaDOS Project")
+            self.app.setApplicationName("GLaDOS's Planner")
+            self.app.setOrganizationName("Penowa")
             self.app.setOrganizationDomain("glados.philosophy")
             
             self.app.setStyle("Fusion")
@@ -246,7 +246,7 @@ class PhilosophyPlannerApp:
         self.logger.info("Interface principal criada com sucesso")
         self.event_bus.notification.emit(
             "success", 
-            "Bem-vindo ao GLaDOS Philosophy Planner",
+            "Bem-vindo ao seu Planner",
             "Sistema inicializado com sucesso"
         )
     
@@ -322,7 +322,7 @@ class PhilosophyPlannerApp:
         
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Critical)
-        msg_box.setWindowTitle("Erro Fatal - GLaDOS Philosophy Planner")
+        msg_box.setWindowTitle("Erro Fatal - Planner")
         msg_box.setText("Ocorreu um erro crítico durante a inicialização.")
         msg_box.setDetailedText(str(error))
         msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)

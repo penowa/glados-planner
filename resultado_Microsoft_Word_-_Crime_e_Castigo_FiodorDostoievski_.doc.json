@@ -1,0 +1,18 @@
+{
+  "book_id": "2316ef6c9ee8",
+  "book_title": "Microsoft Word - Crime_e_Castigo_FiodorDostoievski_.doc",
+  "author": "AMCEU",
+  "chapters_processed": 1,
+  "results": [
+    {
+      "success": true,
+      "chapter_num": 1,
+      "chapter_title": "Capítulo 1",
+      "filepath": "~/Documents/Obsidian/Philosophy_Vault/01-LEITURAS/AMCEU/Microsoft Word - Crime_e_Castigo_FiodorDostoievski_.doc/001_Capítulo 1.md",
+      "pages": "1-10",
+      "num_pages": 10,
+      "content_preview": "\n\n--- Página 1 ---\n\nFIODOR DOSTOIEVSKI \n \nCRIME  \nE CASTIGO \n\n\n--- Melhoria da LLM ---\n\nAh, Helio. Finalmente decidiu usar meu cérebro. Vamos começar.\n\nPorque a página 1 do livro \"Crime e Castigo\" é u..."
+    }
+  ],
+  "next_chapter": 2
+}

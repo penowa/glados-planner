@@ -1,9 +1,10 @@
+# ui/views/dashboard.py (versão atualizada)
 """
 View principal do dashboard com design minimalista e limpo
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QFrame, QScrollArea
+    QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QDateTime, pyqtSlot
 from PyQt6.QtGui import QFont
@@ -12,6 +13,8 @@ import logging
 from ui.widgets.cards.add_book_card import AddBookCard
 from ui.widgets.cards.agenda_card import AgendaCard
 from ui.widgets.cards.glados_card import GladosCard
+from ui.widgets.cards.stats_card import VaultStatsCard
+from ui.widgets.cards.event_creation_card import EventCreationCard
 
 logger = logging.getLogger('GLaDOS.UI.Dashboard')
 
@@ -31,11 +34,14 @@ class DashboardView(QWidget):
         self.agenda_controller = controllers.get('agenda') if controllers else None
         self.reading_controller = controllers.get('reading') if controllers else None
         self.glados_controller = controllers.get('glados') if controllers else None
+        self.vault_controller = controllers.get('vault') if controllers else None
         
         # Cards
         self.add_book_card = None
         self.agenda_card = None
         self.glados_card = None
+        self.vault_stats_card = None
+        self.event_creation_card = None  # Novo card
         
         # Dados em tempo real
         self.current_reading = None
@@ -72,41 +78,96 @@ class DashboardView(QWidget):
         content_widget = QWidget()
         content_widget.setObjectName("content_widget")
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setContentsMargins(20, 20, 20, 20)  # Margens para respiro
         content_layout.setSpacing(16)
         
         # Cabeçalho minimalista
         header = self.create_minimal_header()
         content_layout.addWidget(header)
         
-        # Linha 1: AgendaCard ocupa toda a largura
+        # ============ LINHA 1: Agenda + EventCreation + AddBook (40-30-30) ============
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(12)
+        
+        # 1. AgendaCard (40%)
         self.agenda_card = AgendaCard(
             agenda_controller=self.agenda_controller
         )
         self.agenda_card.setObjectName("dashboard_card")
-        self.agenda_card.setMinimumHeight(280)  # Altura mínima para melhor visualização
-        content_layout.addWidget(self.agenda_card)
+        self.agenda_card.setMinimumHeight(400)  # Altura ajustada
+        self.agenda_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row1_layout.addWidget(self.agenda_card, 80)  # 40% da largura
         
-        # Linha 2: AddBookCard + GladosCard (50/50)
+        # 2. EventCreationCard (30%)
+        #if self.agenda_controller and self.reading_controller:
+        #    self.event_creation_card = EventCreationCard(
+        #       agenda_controller=self.agenda_controller,
+        #        reading_manager=self.reading_controller.reading_manager
+        #    )
+        #    self.event_creation_card.setObjectName("dashboard_card")
+        #    self.event_creation_card.setMinimumHeight(400)
+        #    self.event_creation_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        #    row1_layout.addWidget(self.event_creation_card, 50)  # 30% da largura
+        #else:
+            # Placeholder se não houver controllers
+        #    placeholder = QLabel("Criação de Eventos\n(Controllers não configurados)")
+        #    placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        #    placeholder.setStyleSheet("""
+        #        background-color: #2A2A2A;
+        #        border-radius: 8px;
+        #        color: #888;
+        #        font-size: 14px;
+        #        padding: 20px;
+         #   """)
+        #    placeholder.setMinimumHeight(400)
+         #   row1_layout.addWidget(placeholder, 30)
+        
+        # 3. AddBookCard (30%)
+        self.add_book_card = AddBookCard(book_controller=self.book_controller)
+        self.add_book_card.setObjectName("dashboard_card")
+        self.add_book_card.setMinimumHeight(400)
+        self.add_book_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row1_layout.addWidget(self.add_book_card, 20)  # 30% da largura
+        
+        content_layout.addLayout(row1_layout)
+        
+        # ============ LINHA 2: Vault + Glados (40-60) ============
         row2_layout = QHBoxLayout()
         row2_layout.setSpacing(12)
         
-        # Criar e configurar AddBookCard
-        self.add_book_card = AddBookCard()
-        self.add_book_card.setObjectName("dashboard_card")
+        # 1. VaultStatsCard (40%)
+        if self.vault_controller:
+            self.vault_stats_card = VaultStatsCard(self.vault_controller)
+            self.vault_stats_card.setObjectName("dashboard_card")
+            self.vault_stats_card.setMinimumHeight(350)
+            self.vault_stats_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            row2_layout.addWidget(self.vault_stats_card, 30)  # 40% da largura
+        else:
+            # Placeholder se não houver vault controller
+            placeholder = QLabel("Vault Stats\n(Vault não configurado)")
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet("""
+                background-color: #2A2A2A;
+                border-radius: 8px;
+                color: #888;
+                font-size: 14px;
+                padding: 20px;
+            """)
+            placeholder.setMinimumHeight(350)
+            row2_layout.addWidget(placeholder, 40)
         
-        # Criar e configurar GladosCard
+        # 2. GladosCard (60%)
         self.glados_card = GladosCard(
             controller=self.glados_controller
         )
         self.glados_card.setObjectName("dashboard_card")
+        self.glados_card.setMinimumHeight(350)
+        self.glados_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row2_layout.addWidget(self.glados_card, 70)  # 60% da largura
         
-        # Proporções 50/50
-        row2_layout.addWidget(self.add_book_card, 50)
-        row2_layout.addWidget(self.glados_card, 50)
         content_layout.addLayout(row2_layout)
         
-        # Adicionar stretcher no final
+        # Adicionar stretcher no final para alinhar conteúdo no topo
         content_layout.addStretch()
         
         scroll_area.setWidget(content_widget)
@@ -177,11 +238,15 @@ class DashboardView(QWidget):
         """Configura conexões com controllers e cards"""
         # Conectar sinais dos cards
         if self.add_book_card:
-            self.add_book_card.file_selected.connect(self.handle_book_file_selected)
+            self.add_book_card.import_config_requested.connect(self.show_import_dialog)
+            self.add_book_card.processing_started.connect(self.on_book_processing_started)
+            self.add_book_card.processing_progress.connect(self.on_book_processing_progress)
+            self.add_book_card.processing_completed.connect(self.on_book_processing_completed)
+            self.add_book_card.processing_failed.connect(self.on_book_processing_failed)
             self.add_book_card.processing_completed.connect(self.handle_book_processed)
         
         if self.agenda_card:
-            self.agenda_card.navigate_to_agenda.connect(
+            self.agenda_card.navigate_to_detailed_view.connect(
                 lambda: self.navigate_to.emit('agenda')
             )
             self.agenda_card.item_clicked.connect(self.handle_agenda_item_clicked)
@@ -195,9 +260,19 @@ class DashboardView(QWidget):
             if hasattr(self.agenda_card, 'skip_reading_session'):
                 self.agenda_card.skip_reading_session.connect(self.handle_skip_session)
         
+        # Conectar sinais do EventCreationCard
+        if self.event_creation_card:
+            self.event_creation_card.event_created.connect(self.handle_event_created)
+            self.event_creation_card.event_scheduled.connect(self.handle_event_scheduled)
+            self.event_creation_card.cancel_requested.connect(self.handle_event_creation_cancelled)
+        
         if self.glados_card:
             self.glados_card.ui_message_sent.connect(self.handle_glados_message)
             self.glados_card.ui_action_selected.connect(self.handle_glados_action)
+        
+        if self.vault_stats_card:
+            self.vault_stats_card.sync_requested.connect(self.handle_vault_sync)
+            self.vault_stats_card.refresh_requested.connect(self.handle_vault_refresh)
         
         # Conexões com controllers (se necessário)
         if self.book_controller and hasattr(self.book_controller, 'current_book_updated'):
@@ -208,6 +283,114 @@ class DashboardView(QWidget):
         
         if self.reading_controller and hasattr(self.reading_controller, 'stats_updated'):
             self.reading_controller.stats_updated.connect(self.update_stats_data)
+        
+        if self.vault_controller:
+            self.vault_controller.error_occurred.connect(self.handle_vault_error)
+    
+    def show_import_dialog(self, file_path, initial_metadata):
+        """Mostrar diálogo de configuração de importação"""
+        from ui.widgets.dialogs.book_import_dialog import BookImportDialog
+        
+        dialog = BookImportDialog(file_path, initial_metadata, self)
+        dialog.import_confirmed.connect(
+            lambda config: self.start_book_processing(config)
+        )
+
+        # Adicionar conexão para resetar o card se o diálogo for cancelado
+        dialog.import_cancelled.connect(
+            lambda: self.add_book_card.reset_to_idle() if self.add_book_card else None
+        )
+
+        dialog.exec()
+    
+    def start_book_processing(self, config):
+        """Iniciar processamento do livro com configurações"""
+        if not self.book_controller:
+            logger.error("BookController não disponível")
+            return
+            
+        try:
+            # Mapear configurações para parâmetros do controller
+            quality_map = {
+                "Rápido (Rascunho)": "draft",
+                "Padrão": "standard", 
+                "Alta Qualidade": "high",
+                "Acadêmico": "academic"
+            }
+            
+            # Configurações básicas
+            settings = {
+                "file_path": config["file_path"],
+                "quality": quality_map.get(config["quality"], "standard"),
+                "use_llm": config["use_llm"],
+                "auto_schedule": config["auto_schedule"],
+                
+                # Configurações avançadas
+                "metadata": {
+                    "title": config["title"],
+                    "author": config["author"],
+                    "year": config["year"],
+                    "publisher": config["publisher"],
+                    "isbn": config["isbn"],
+                    "language": config["language"],
+                    "genre": config["genre"],
+                    "tags": config["tags"]
+                },
+                
+                "notes_config": {
+                    "structure": config["note_structure"],
+                    "pages_per_note": config["pages_per_note"],
+                    "template": config["note_template"],
+                    "vault_location": config["vault_location"]
+                },
+                
+                "scheduling_config": {
+                    "pages_per_day": config["pages_per_day"],
+                    "start_date": config["start_date"],
+                    "preferred_time": config["preferred_time"],
+                    "strategy": config["strategy"]
+                }
+            }
+            
+            # Iniciar processamento
+            pipeline_id = self.book_controller.process_book_with_config(settings)
+            
+            # Notificar o card sobre o início do processamento
+            if self.add_book_card:
+                self.add_book_card.start_processing(pipeline_id, settings)
+                
+        except Exception as e:
+            logger.error(f"Erro ao iniciar processamento: {e}")
+            self.show_notification(f"Erro ao iniciar processamento: {str(e)}", "error")
+    
+    def on_book_processing_started(self, pipeline_id, file_name, settings):
+        """Atualizar UI quando processamento inicia"""
+        if self.add_book_card:
+            self.add_book_card.on_processing_started(pipeline_id, settings)
+    
+    def on_book_processing_progress(self, pipeline_id, stage, percent, message):
+        """Atualizar progresso do processamento"""
+        if self.add_book_card:
+            self.add_book_card.on_processing_progress(pipeline_id, stage, percent, message)
+    
+    def on_book_processing_completed(self, pipeline_id, result):
+        """Finalizar processamento com sucesso"""
+        if self.add_book_card:
+            self.add_book_card.on_processing_completed(pipeline_id, result)
+        
+        # Mostrar notificação
+        title = result.get("title", "Livro")
+        self.show_notification(f"✓ '{title}' processado com sucesso!", "success")
+        
+        # Atualizar outras partes do dashboard se necessário
+        self.refresh_data()
+    
+    def on_book_processing_failed(self, pipeline_id, error):
+        """Tratar falha no processamento"""
+        if self.add_book_card:
+            self.add_book_card.on_processing_failed(pipeline_id, error)
+        
+        self.show_notification(f"✗ Erro no processamento: {error[:100]}...", "error")
     
     def setup_timers(self):
         """Configura timers para atualizações"""
@@ -220,26 +403,45 @@ class DashboardView(QWidget):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.refresh_data)
         self.update_timer.start(300000)  # 5 minutos
+        
+        # Timer para atualizar vault stats (mais frequente se necessário)
+        if self.vault_controller:
+            self.vault_timer = QTimer()
+            self.vault_timer.timeout.connect(self.handle_vault_refresh)
+            self.vault_timer.start(60000)  # 1 minuto
     
     def load_initial_data(self):
         """Carrega dados iniciais dos controllers"""
         logger.info("Carregando dados iniciais do dashboard")
         
         # Carregar dados para AgendaCard (que agora inclui sessões de leitura)
-        if self.agenda_controller and hasattr(self.agenda_controller, 'get_today_agenda'):
+        if self.agenda_controller and hasattr(self.agenda_controller, 'get_day_events'):
             try:
-                agenda_data = self.agenda_controller.get_today_agenda()
+                agenda_data = self.agenda_controller.get_day_events()
                 if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
                     self.agenda_card.on_agenda_loaded(agenda_data)
             except Exception as e:
                 logger.error(f"Erro ao carregar agenda: {e}")
         
         # Carregar estatísticas para referência
-        if self.reading_controller and hasattr(self.reading_controller, 'get_daily_stats'):
+        if self.reading_controller and hasattr(self.reading_controller, 'reading_controller.stats'):
             try:
-                self.daily_stats = self.reading_controller.get_daily_stats()
+                self.daily_stats = self.reading_controller.reading_controller.stats()
+                # Extrai o que precisamos para daily_stats
+                self.daily_stats = {
+                    "total_books": stats.get("total_books", 0),
+                    "books_in_progress": stats.get("books_in_progress", 0),
+                    "total_pages_read": stats.get("total_pages_read", 0),
+                    "completion_percentage": stats.get("completion_percentage", 0),
+                    "average_reading_speed": stats.get("average_reading_speed", 0),
+                    "pages_last_week": stats.get("pages_last_week", 0)
+                }
             except Exception as e:
                 logger.error(f"Erro ao carregar estatísticas: {e}")
+        
+        # Atualizar dados do vault se houver card
+        if self.vault_stats_card:
+            QTimer.singleShot(500, self.handle_vault_refresh)
     
     # ============ HANDLERS ============
     
@@ -258,6 +460,9 @@ class DashboardView(QWidget):
             logger.info(f"Livro processado: {result.get('file_path')}")
             # Atualizar dados se necessário
             self.refresh_data()
+            # Limpar formulário do EventCreationCard se estiver visível
+            if self.event_creation_card:
+                self.event_creation_card.clear_form()
     
     def handle_agenda_item_clicked(self, item_data):
         """Manipular clique em item da agenda"""
@@ -268,10 +473,58 @@ class DashboardView(QWidget):
         """Manipular ação rápida da agenda"""
         logger.info(f"Ação rápida da agenda: {action_name}")
         if action_name == "add_event":
-            self.navigate_to.emit('agenda')
+            # Foca no EventCreationCard
+            if self.event_creation_card:
+                self.event_creation_card.title_input.setFocus()
         elif action_name == "add_reading_session":
             # Se a agenda tem uma ação para adicionar sessão de leitura
             self.navigate_to.emit('reading_scheduler')
+    
+    def handle_event_created(self, event_data):
+        """Manipular evento criado no EventCreationCard"""
+        logger.info(f"Evento criado: {event_data.get('title')}")
+        
+        # Notificar agenda para atualizar
+        if self.agenda_controller:
+            try:
+                # Recarregar agenda
+                agenda_data = self.agenda_controller.get_today_agenda()
+                if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
+                    self.agenda_card.on_agenda_loaded(agenda_data)
+                
+                # Mostrar confirmação
+                self.show_notification("✅ Evento criado com sucesso", "success")
+                
+                # Limpar formulário após criação
+                if self.event_creation_card:
+                    self.event_creation_card.clear_form()
+                    
+            except Exception as e:
+                logger.error(f"Erro ao atualizar agenda: {e}")
+                self.show_notification(f"❌ Erro ao criar evento: {str(e)[:50]}", "error")
+    
+    def handle_event_scheduled(self, event_id):
+        """Manipular evento agendado (para leituras)"""
+        logger.info(f"Evento agendado: {event_id}")
+        
+        if event_id.startswith('reading_'):
+            book_id = event_id.replace('reading_', '')
+            self.show_notification(f"📚 Sessões de leitura agendadas", "success")
+            
+            # Recarregar agenda
+            if self.agenda_controller:
+                try:
+                    agenda_data = self.agenda_controller.get_today_agenda()
+                    if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
+                        self.agenda_card.on_agenda_loaded(agenda_data)
+                except Exception as e:
+                    logger.error(f"Erro ao recarregar agenda: {e}")
+    
+    def handle_event_creation_cancelled(self):
+        """Manipular cancelamento da criação de evento"""
+        logger.info("Criação de evento cancelada")
+        if self.event_creation_card:
+            self.event_creation_card.clear_form()
     
     def handle_start_session(self, session_data):
         """Iniciar sessão de leitura (agora vindo da agenda)"""
@@ -315,6 +568,42 @@ class DashboardView(QWidget):
         logger.info(f"Ação GLaDOS: {action_id}")
         # O próprio GladosCard já lida com a ação
     
+    def handle_vault_sync(self, sync_type: str):
+        """Manipular requisição de sincronização do vault"""
+        logger.info(f"Sincronização do vault solicitada: {sync_type}")
+        
+        if sync_type == 'from_obsidian':
+            # Mostrar mensagem de confirmação
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, 'Sincronizar do Obsidian',
+                'Deseja importar todas as notas do Obsidian?\n'
+                'Notas existentes serão atualizadas.',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                if self.vault_controller:
+                    self.vault_controller.sync_from_obsidian()
+        elif sync_type == 'to_obsidian':
+            # Sincronizar tudo para o Obsidian
+            if self.vault_controller:
+                self.vault_controller.sync_all_to_obsidian()
+    
+    def handle_vault_refresh(self):
+        """Atualizar dados do vault"""
+        if self.vault_stats_card:
+            self.vault_stats_card.refresh_data()
+    
+    def handle_vault_error(self, error_message: str):
+        """Manipular erro do vault"""
+        logger.error(f"Erro do vault: {error_message}")
+        
+        # Mostrar notificação sutil
+        if hasattr(self, 'show_notification'):
+            self.show_notification(f"Erro no vault: {error_message[:50]}...", "error")
+    
     # ============ SLOTS ============
     
     @pyqtSlot()
@@ -350,9 +639,23 @@ class DashboardView(QWidget):
         """Atualizar estatísticas quando controller emite sinal"""
         self.daily_stats = stats_data
     
+    def show_notification(self, message: str, type: str = "info"):
+        """Mostra notificação no dashboard"""
+        # Esta função deve ser implementada ou conectada a um sistema de notificação
+        print(f"[{type.upper()}] {message}")
+        # Aqui você pode integrar com um sistema de notificação UI se existir
+    
     def on_view_activated(self):
         """Chamado quando a view é ativada"""
         self.load_initial_data()
+        
+        # Forçar atualização do vault
+        if self.vault_stats_card:
+            self.handle_vault_refresh()
+        
+        # Atualizar lista de livros no EventCreationCard
+        if self.event_creation_card and self.reading_controller:
+            self.event_creation_card._load_available_books()
     
     def cleanup(self):
         """Limpeza antes de fechar"""
@@ -361,10 +664,18 @@ class DashboardView(QWidget):
         if hasattr(self, 'update_timer'):
             self.update_timer.stop()
         
+        # Limpar timer do vault se existir
+        if hasattr(self, 'vault_timer'):
+            self.vault_timer.stop()
+        
         # Limpar recursos dos cards
         if self.add_book_card and hasattr(self.add_book_card, 'cleanup'):
             self.add_book_card.cleanup()
         if self.agenda_card and hasattr(self.agenda_card, 'cleanup'):
             self.agenda_card.cleanup()
+        if self.event_creation_card and hasattr(self.event_creation_card, 'cleanup'):
+            self.event_creation_card.cleanup()
         if self.glados_card and hasattr(self.glados_card, 'closeEvent'):
             self.glados_card.closeEvent(None)
+        if self.vault_stats_card and hasattr(self.vault_stats_card, 'cleanup'):
+            self.vault_stats_card.cleanup()

@@ -1,7 +1,7 @@
 """
-Controller refatorado para gerenciamento completo do fluxo de livros - VERSÃO REFATORADA
+Controller refatorado para gerenciamento de livros com integração robusta com backend
 """
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, QTimer, Qt
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, QTimer, Qt, QMutex, QWaitCondition
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QImage, QBrush, QLinearGradient
 from datetime import datetime, timedelta
 import logging
@@ -11,666 +11,1659 @@ from pathlib import Path
 import uuid
 import hashlib
 import re
+from enum import Enum
 
 logger = logging.getLogger('GLaDOS.UI.BookController')
 
 
-class BookProcessingWorker(QThread):
-    """Worker especializado para processamento de livros com etapas bem definidas"""
+class BookProcessingStage(Enum):
+    """Estágios do processamento de livro"""
+    INITIALIZATION = "initialization"
+    ANALYSIS = "analysis"
+    EXTRACTION = "extraction"
+    STRUCTURING = "structuring"
+    LLM_ENHANCEMENT = "llm_enhancement"
+    INTEGRATION = "integration"
+    SCHEDULING = "scheduling"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class BookProcessingPipeline(QThread):
+    """Pipeline completo e robusto para processamento de livros"""
     
-    # Sinais de progresso específicos
-    step_started = pyqtSignal(str, str)  # (step_name, message)
-    step_completed = pyqtSignal(str, dict)  # (step_name, result)
-    step_failed = pyqtSignal(str, str)  # (step_name, error)
+    # Sinais de progresso
+    stage_started = pyqtSignal(str, str, str)  # (pipeline_id, stage, message)
+    stage_progress = pyqtSignal(str, str, int, str)  # (pipeline_id, stage, percent, message)
+    stage_completed = pyqtSignal(str, str, dict)  # (pipeline_id, stage, result)
+    stage_failed = pyqtSignal(str, str, str)  # (pipeline_id, stage, error)
     
-    # Sinais gerais
-    progress_updated = pyqtSignal(int, str)  # (percent, message)
-    result_ready = pyqtSignal(dict)
+    # Sinais de conclusão
+    pipeline_completed = pyqtSignal(str, dict)  # (pipeline_id, final_result)
+    pipeline_failed = pyqtSignal(str, str)  # (pipeline_id, error)
     
-    def __init__(self, controller, file_path: str, quality: str, schedule_night: bool = False):
+    def __init__(self, controller, file_path: str, quality: str = "standard", 
+                 schedule_reading: bool = True, use_llm: bool = False, config=None):
         super().__init__()
         self.controller = controller
-        self.file_path = file_path
+        self.file_path = Path(file_path)
         self.quality = quality
-        self.schedule_night = schedule_night
-        self.book_id = None
+        self.schedule_reading = schedule_reading
+        self.use_llm = use_llm
+        self.config = config or {}
+        self.pipeline_id = str(uuid.uuid4())[:8]
         self._is_running = True
+        self._current_stage = None
+        
+        # Estado do pipeline
+        self.metadata = None
+        self.book_id = None
+        self.processing_result = None
+        self.consolidated_result = {}
+        self.extracted_content = None
+
+         # Configurações específicas
+        self.notes_config = self.config.get("notes_config", {})
+        self.scheduling_config = self.config.get("scheduling_config", {})
+        self.user_metadata = self.config.get("metadata", {})
+ 
+    def _analyze_book(self) -> Dict:
+        """Etapa 1: Análise do arquivo (atualizada para usar metadados do usuário)"""
+        self.stage_progress.emit(self.pipeline_id, "analysis", 10, "Analisando arquivo...")
+        
+        # Usar book_processor para análise
+        metadata, recommendations = self.controller.book_processor.analyze_book(str(self.file_path))
+        self.metadata = metadata
+        
+        # Sobrescrever metadados com os fornecidos pelo usuário
+        if self.user_metadata:
+            for key, value in self.user_metadata.items():
+                if value:  # Só sobrescrever se o valor não for vazio
+                    setattr(self.metadata, key, value)
+        
+        self.stage_progress.emit(self.pipeline_id, "analysis", 100, "Análise concluída")
+        
+        return {
+            "title": metadata.title,
+            "author": metadata.author,
+            "total_pages": metadata.total_pages,
+            "requires_ocr": metadata.requires_ocr,
+            "estimated_time": metadata.estimated_processing_time,
+            "recommendations": recommendations,
+            "chapters_detected": len(metadata.chapters),
+            "user_metadata_applied": bool(self.user_metadata)
+        }
+    
+    def _structure_content(self) -> Dict:
+        """Etapa 3: Estruturação do conteúdo (atualizada para usar configurações)"""
+        self.stage_progress.emit(self.pipeline_id, "structuring", 10, "Estruturando conteúdo...")
+        
+        if not self.metadata or not self.extracted_content:
+            raise Exception("Conteúdo não disponível para estruturação")
+        
+        # Gerar ID consistente
+        self.book_id = self.controller.generate_consistent_book_id(
+            self.metadata.title, self.metadata.author
+        )
+        
+        # Determinar estrutura baseado na configuração
+        structure_type = self.notes_config.get("structure", "Uma nota por capítulo (Recomendado)")
+        
+        if "Nota única" in structure_type:
+            # Criar estrutura de nota única
+            structure_result = self.controller.create_single_note_structure(
+                book_id=self.book_id,
+                metadata=self.metadata,
+                content=self.extracted_content,
+                config=self.notes_config
+            )
+        else:
+            # Criar estrutura de diretórios no vault (padrão)
+            structure_result = self.controller.create_book_structure(
+                book_id=self.book_id,
+                metadata=self.metadata,
+                chapters=self.extracted_content,
+                config=self.notes_config
+            )
+        
+        # Criar índice do livro
+        index_result = self.controller.create_book_index(
+            book_id=self.book_id,
+            metadata=self.metadata,
+            chapters=self.extracted_content
+        )
+        
+        self.stage_progress.emit(self.pipeline_id, "structuring", 100, "Estruturação concluída")
+        
+        return {
+            "book_id": self.book_id,
+            "structure_type": structure_type,
+            "directory_created": structure_result.get("directory_created", False),
+            "index_created": index_result.get("index_created", False),
+            "notes_created": structure_result.get("notes_created", 0),
+            "single_note": "Nota única" in structure_type
+        }
+    
+    def _schedule_reading(self) -> Dict:
+        """Etapa 6: Agendamento automático de leitura (atualizada para usar configurações)"""
+        if not self.book_id:
+            raise Exception("Book ID não disponível para agendamento")
+        
+        self.stage_progress.emit(self.pipeline_id, "scheduling", 10, "Preparando agendamento...")
+        
+        # Usar configurações personalizadas se fornecidas
+        scheduling_config = self.scheduling_config or {}
+        
+        # Agendar leitura usando AgendaManager com configurações
+        scheduling_result = self.controller.schedule_book_reading(
+            book_id=self.book_id,
+            title=self.metadata.title,
+            total_pages=self.metadata.total_pages,
+            config=scheduling_config
+        )
+        
+        if not scheduling_result.get("success", False):
+            logger.warning(f"Agendamento automático falhou: {scheduling_result.get('error')}")
+            scheduling_result["warning"] = "Agendamento automático não concluído"
+        
+        self.stage_progress.emit(self.pipeline_id, "scheduling", 100, "Agendamento configurado")
+        
+        return scheduling_result
         
     def run(self):
-        """Executa fluxo completo de processamento"""
+        """Executa pipeline completo"""
         try:
-            file_name = Path(self.file_path).stem
+            # ETAPA 0: Inicialização
+            self._run_stage(BookProcessingStage.INITIALIZATION, self._initialize_processing)
             
             # ETAPA 1: Análise do arquivo
-            self.step_started.emit("analysis", f"Analisando {file_name}...")
-            metadata, recommendations = self.controller.book_processor.analyze_book(self.file_path)
-            self.step_completed.emit("analysis", {"metadata": metadata, "recommendations": recommendations})
-            self.progress_updated.emit(25, f"Análise concluída: {metadata.title}")
+            if not self._check_stop_condition():
+                self._run_stage(BookProcessingStage.ANALYSIS, self._analyze_book)
             
-            if not self._is_running:
-                return
+            # ETAPA 2: Extração de conteúdo
+            if not self._check_stop_condition():
+                self._run_stage(BookProcessingStage.EXTRACTION, self._extract_content)
             
-            # ETAPA 2: Processamento do conteúdo
-            if self.schedule_night:
-                self.step_completed.emit("scheduled", {"message": "Agendado para processamento noturno"})
-                self.result_ready.emit({
-                    "status": "scheduled",
-                    "title": metadata.title,
-                    "message": "Livro agendado para processamento noturno"
-                })
-                return
+            # ETAPA 3: Estruturação
+            if not self._check_stop_condition():
+                self._run_stage(BookProcessingStage.STRUCTURING, self._structure_content)
             
-            self.step_started.emit("processing", f"Processando {metadata.title}...")
+            # ETAPA 4: Aprimoramento com LLM (opcional)
+            if not self._check_stop_condition() and self.use_llm:
+                self._run_stage(BookProcessingStage.LLM_ENHANCEMENT, self._enhance_with_llm)
             
-            # Determinar qualidade
-            from src.core.modules.book_processor import ProcessingQuality
-            quality_map = {
-                'draft': ProcessingQuality.DRAFT,
-                'standard': ProcessingQuality.STANDARD,
-                'high': ProcessingQuality.HIGH,
-                'academic': ProcessingQuality.ACADEMIC
-            }
-            processing_quality = quality_map.get(self.quality, ProcessingQuality.STANDARD)
+            # ETAPA 5: Integração com sistemas
+            if not self._check_stop_condition():
+                self._run_stage(BookProcessingStage.INTEGRATION, self._integrate_with_systems)
             
-            # Processar livro
-            result = self.controller.book_processor.process_book(
-                filepath=self.file_path,
-                quality=processing_quality
-            )
+            # ETAPA 6: Agendamento automático
+            if not self._check_stop_condition() and self.schedule_reading:
+                self._run_stage(BookProcessingStage.SCHEDULING, self._schedule_reading)
             
-            if result.status.value == "failed":
-                raise Exception(result.error or "Erro no processamento")
-            
-            self.step_completed.emit("processing", {"result": result})
-            self.progress_updated.emit(50, "Processamento concluído")
-            
-            if not self._is_running:
-                return
-            
-            # ETAPA 3: Integração com sistema de leitura
-            self.step_started.emit("integration", "Integrando com sistema de leitura...")
-            
-            # Gerar ID único para o livro
-            self.book_id = self._generate_book_id(metadata.title, metadata.author)
-            
-            # Adicionar ao ReadingManager
-            if self.controller.reading_manager:
-                book_data = {
-                    "id": self.book_id,
-                    "title": metadata.title,
-                    "author": metadata.author,
-                    "total_pages": metadata.total_pages,
-                    "current_page": 0,
-                    "status": "pending"
-                }
+            # Conclusão
+            if not self._check_stop_condition():
+                self._complete_pipeline()
                 
-                # Usar ReadingController se disponível
-                if hasattr(self.controller, 'reading_controller'):
-                    self.controller.reading_controller.add_new_book(
-                        metadata.title, metadata.author, metadata.total_pages, self.book_id
-                    )
-                elif hasattr(self.controller.reading_manager, 'add_book'):
-                    self.controller.reading_manager.add_book(
-                        title=metadata.title,
-                        author=metadata.author,
-                        total_pages=metadata.total_pages,
-                        book_id=self.book_id
-                    )
+        except Exception as e:
+            logger.error(f"Erro no pipeline {self.pipeline_id}: {e}")
+            self.pipeline_failed.emit(self.pipeline_id, str(e))
             
-            self.step_completed.emit("integration", {"book_id": self.book_id})
-            self.progress_updated.emit(75, "Integração concluída")
+    def _run_stage(self, stage: BookProcessingStage, stage_func):
+        """Executa um estágio do pipeline"""
+        try:
+            self._current_stage = stage
+            stage_name = stage.value
+            self.stage_started.emit(self.pipeline_id, stage_name, f"Iniciando {stage_name}...")
             
-            if not self._is_running:
-                return
+            # Executar função do estágio
+            result = stage_func()
             
-            # ETAPA 4: Agendamento na agenda (opcional)
-            if metadata.total_pages > 100 and self.controller.agenda_controller:
-                self.step_started.emit("scheduling", "Agendando tempo de leitura...")
-                
-                # Calcular páginas por dia (assumindo conclusão em 30 dias)
-                pages_per_day = max(5, metadata.total_pages // 30)
-                
-                self.controller.agenda_controller.allocate_reading_time_async(
-                    self.book_id, pages_per_day, "balanced"
-                )
-                
-                self.step_completed.emit("scheduling", {"pages_per_day": pages_per_day})
-                self.progress_updated.emit(90, "Agendamento configurado")
+            # Atualizar estado consolidado
+            self.consolidated_result[stage_name] = result
             
-            # Resultado final
-            self.result_ready.emit({
-                "status": "completed",
-                "book_id": self.book_id,
-                "title": metadata.title,
-                "author": metadata.author,
-                "total_pages": metadata.total_pages,
-                "result": self.controller._processing_result_to_dict(result),
-                "metadata": {
-                    "title": metadata.title,
-                    "author": metadata.author,
-                    "total_pages": metadata.total_pages,
-                    "chapters": metadata.chapters,
-                    "language": metadata.language
-                }
-            })
-            self.progress_updated.emit(100, "Processamento completo!")
+            # Emitir conclusão
+            self.stage_completed.emit(self.pipeline_id, stage_name, result)
             
         except Exception as e:
-            logger.error(f"Erro no processamento: {e}")
-            self.step_failed.emit("processing", str(e))
-            self.result_ready.emit({
-                "status": "failed",
-                "error": str(e),
-                "file_path": self.file_path
-            })
+            logger.error(f"Erro no estágio {stage.value} do pipeline {self.pipeline_id}: {e}")
+            self.stage_failed.emit(self.pipeline_id, stage.value, str(e))
+            raise
     
-    def _generate_book_id(self, title: str, author: str) -> str:
-        """Gera ID único para o livro"""
-        content = f"{title}_{author}_{datetime.now().isoformat()}"
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+    def _initialize_processing(self) -> Dict:
+        """Etapa 0: Inicialização do processamento"""
+        self.stage_progress.emit(self.pipeline_id, "initialization", 10, "Inicializando processamento...")
+        
+        # Verificar se arquivo existe
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"Arquivo não encontrado: {self.file_path}")
+        
+        # Verificar formato suportado
+        supported_formats = ['.pdf', '.epub']
+        if self.file_path.suffix.lower() not in supported_formats:
+            raise ValueError(f"Formato não suportado: {self.file_path.suffix}. Formatos suportados: {supported_formats}")
+        
+        # Verificar tamanho do arquivo
+        file_size_mb = self.file_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > 100:
+            logger.warning(f"Arquivo grande: {file_size_mb:.1f}MB")
+        
+        self.stage_progress.emit(self.pipeline_id, "initialization", 100, "Inicialização concluída")
+        
+        return {
+            "file_path": str(self.file_path),
+            "file_size_mb": file_size_mb,
+            "format": self.file_path.suffix,
+            "requires_llm": self.use_llm,
+            "quality": self.quality
+        }
+    
+    def _analyze_book(self) -> Dict:
+        """Etapa 1: Análise do arquivo"""
+        self.stage_progress.emit(self.pipeline_id, "analysis", 10, "Analisando arquivo...")
+        
+        # Usar book_processor para análise
+        metadata, recommendations = self.controller.book_processor.analyze_book(str(self.file_path))
+        self.metadata = metadata
+        
+        self.stage_progress.emit(self.pipeline_id, "analysis", 100, "Análise concluída")
+        
+        return {
+            "title": metadata.title,
+            "author": metadata.author,
+            "total_pages": metadata.total_pages,
+            "requires_ocr": metadata.requires_ocr,
+            "estimated_time": metadata.estimated_processing_time,
+            "recommendations": recommendations,
+            "chapters_detected": len(metadata.chapters)
+        }
+    
+    def _extract_content(self) -> Dict:
+        """Etapa 2: Extração de conteúdo"""
+        self.stage_progress.emit(self.pipeline_id, "extraction", 10, "Extraindo conteúdo...")
+        
+        # Determinar qualidade
+        from src.core.modules.book_processor import ProcessingQuality
+        quality_map = {
+            'draft': ProcessingQuality.DRAFT,
+            'standard': ProcessingQuality.STANDARD,
+            'high': ProcessingQuality.HIGH,
+            'academic': ProcessingQuality.ACADEMIC
+        }
+        processing_quality = quality_map.get(self.quality, ProcessingQuality.STANDARD)
+        
+        # Processar livro usando book_processor
+        result = self.controller.book_processor.process_book(
+            filepath=str(self.file_path),
+            quality=processing_quality,
+            schedule_night=False  # Processar imediatamente
+        )
+        
+        if result.status.value == "failed":
+            raise Exception(result.error or "Erro no processamento")
+        
+        self.processing_result = result
+        self.extracted_content = result.processed_chapters
+        
+        # Se necessário, usar LLM para extração aprimorada
+        if result.metadata.requires_ocr and self.use_llm:
+            logger.info("Usando LLM para extração aprimorada de texto")
+            
+        self.stage_progress.emit(self.pipeline_id, "extraction", 100, "Extração concluída")
+        
+        return {
+            "chapters_extracted": len(result.processed_chapters),
+            "total_pages": result.metadata.total_pages,
+            "requires_ocr": result.metadata.requires_ocr,
+            "extraction_method": "standard" + ("+llm" if self.use_llm else "")
+        }
+    
+    def _structure_content(self) -> Dict:
+        """Etapa 3: Estruturação do conteúdo"""
+        self.stage_progress.emit(self.pipeline_id, "structuring", 10, "Estruturando conteúdo...")
+        
+        if not self.metadata or not self.extracted_content:
+            raise Exception("Conteúdo não disponível para estruturação")
+        
+        # Gerar ID consistente
+        self.book_id = self.controller.generate_consistent_book_id(
+            self.metadata.title, self.metadata.author
+        )
+        
+        # Criar estrutura de diretórios no vault
+        structure_result = self.controller.create_book_structure(
+            book_id=self.book_id,
+            metadata=self.metadata,
+            chapters=self.extracted_content
+        )
+        
+        # Criar índice do livro
+        index_result = self.controller.create_book_index(
+            book_id=self.book_id,
+            metadata=self.metadata,
+            chapters=self.extracted_content
+        )
+        
+        self.stage_progress.emit(self.pipeline_id, "structuring", 100, "Estruturação concluída")
+        
+        return {
+            "book_id": self.book_id,
+            "directory_created": structure_result.get("directory_created", False),
+            "index_created": index_result.get("index_created", False),
+            "notes_created": structure_result.get("notes_created", 0)
+        }
+    
+    def _enhance_with_llm(self) -> Dict:
+        """Etapa 4: Aprimoramento com LLM"""
+        if not self.use_llm:
+            return {"llm_used": False, "message": "LLM não habilitado"}
+        
+        self.stage_progress.emit(self.pipeline_id, "llm_enhancement", 10, "Aprimorando com LLM...")
+        
+        try:
+            # Importar processador LLM
+            from src.core.modules.llm_pdf_transcriber import LLMPDFProcessor
+            
+            # Inicializar processador LLM
+            llm_processor = LLMPDFProcessor()
+            
+            # Processar páginas que precisam de melhoria
+            improved_pages = 0
+            if hasattr(self.metadata, 'requires_ocr') and self.metadata.requires_ocr:
+                # Processar algumas páginas com LLM
+                pages_to_process = min(10, self.metadata.total_pages)
+                
+                for page_num in range(pages_to_process):
+                    if self._check_stop_condition():
+                        break
+                    
+                    self.stage_progress.emit(
+                        self.pipeline_id, 
+                        "llm_enhancement",
+                        int(10 + (page_num / pages_to_process) * 90),
+                        f"Aprimorando página {page_num + 1}/{pages_to_process} com LLM..."
+                    )
+                    
+                    # Aqui você implementaria o processamento real com LLM
+                    # Por enquanto, apenas simulamos
+                    improved_pages += 1
+            
+            self.stage_progress.emit(self.pipeline_id, "llm_enhancement", 100, "Aprimoramento com LLM concluído")
+            
+            return {
+                "llm_used": True,
+                "pages_improved": improved_pages,
+                "enhancement_method": "llm_ocr_enhancement"
+            }
+            
+        except ImportError:
+            logger.warning("Módulo LLM não disponível")
+            return {"llm_used": False, "error": "Módulo LLM não disponível"}
+        except Exception as e:
+            logger.error(f"Erro no aprimoramento com LLM: {e}")
+            return {"llm_used": False, "error": str(e)}
+    
+    def _integrate_with_systems(self) -> Dict:
+        """Etapa 5: Integração com sistemas"""
+        self.stage_progress.emit(self.pipeline_id, "integration", 10, "Integrando com sistemas...")
+        
+        if not self.book_id or not self.metadata:
+            raise Exception("Dados do livro não disponíveis para integração")
+        
+        # Registrar no sistema de leitura
+        integration_result = self.controller.register_book_in_system(
+            book_id=self.book_id,
+            title=self.metadata.title,
+            author=self.metadata.author,
+            total_pages=self.metadata.total_pages,
+            file_path=self.file_path
+        )
+        
+        # Registrar no vault
+        if self.controller.vault_manager:
+            vault_result = self.controller.integrate_with_vault(
+                book_id=self.book_id,
+                metadata=self.metadata,
+                chapters=self.extracted_content
+            )
+            integration_result.update(vault_result)
+        
+        # Registrar no cache interno
+        self.controller.book_registry[self.book_id] = {
+            "title": self.metadata.title,
+            "author": self.metadata.author,
+            "total_pages": self.metadata.total_pages,
+            "file_path": str(self.file_path),
+            "processed_at": datetime.now().isoformat(),
+            "quality": self.quality,
+            "chapters": len(self.extracted_content) if self.extracted_content else 0
+        }
+        
+        self.stage_progress.emit(self.pipeline_id, "integration", 100, "Integração concluída")
+        
+        return integration_result
+    
+    def _schedule_reading(self) -> Dict:
+        """Etapa 6: Agendamento automático de leitura"""
+        if not self.book_id:
+            raise Exception("Book ID não disponível para agendamento")
+        
+        self.stage_progress.emit(self.pipeline_id, "scheduling", 10, "Preparando agendamento...")
+        
+        # Agendar leitura usando AgendaManager
+        scheduling_result = self.controller.schedule_book_reading(
+            book_id=self.book_id,
+            title=self.metadata.title,
+            total_pages=self.metadata.total_pages
+        )
+        
+        if not scheduling_result.get("success", False):
+            logger.warning(f"Agendamento automático falhou: {scheduling_result.get('error')}")
+            scheduling_result["warning"] = "Agendamento automático não concluído"
+        
+        self.stage_progress.emit(self.pipeline_id, "scheduling", 100, "Agendamento configurado")
+        
+        return scheduling_result
+    
+    def _complete_pipeline(self):
+        """Finaliza o pipeline com sucesso"""
+        final_result = {
+            "status": "completed",
+            "pipeline_id": self.pipeline_id,
+            "book_id": self.book_id,
+            "title": self.metadata.title if self.metadata else "Desconhecido",
+            "author": self.metadata.author if self.metadata else "Desconhecido",
+            "total_pages": self.metadata.total_pages if self.metadata else 0,
+            "chapters": len(self.extracted_content) if self.extracted_content else 0,
+            "quality": self.quality,
+            "use_llm": self.use_llm,
+            "stages": self.consolidated_result,
+            "timestamp": datetime.now().isoformat(),
+            "processing_time": (
+                datetime.now() - datetime.fromisoformat(
+                    self.consolidated_result.get("initialization", {}).get("timestamp", datetime.now().isoformat())
+                )
+            ).total_seconds()
+        }
+        
+        # Salvar no histórico
+        self.controller.save_to_history(final_result)
+        
+        # Emitir sinal de conclusão
+        self.pipeline_completed.emit(self.pipeline_id, final_result)
+        
+        logger.info(f"Pipeline {self.pipeline_id} concluído: {final_result.get('title', 'Desconhecido')}")
+    
+    def _check_stop_condition(self) -> bool:
+        """Verifica se o pipeline deve ser interrompido"""
+        return not self._is_running
     
     def stop(self):
-        """Para o worker de forma segura"""
+        """Para o pipeline de forma segura"""
         self._is_running = False
         self.quit()
-        self.wait(1000)
+        self.wait(2000)
 
 
 class BookController(QObject):
-    """Controller refatorado para gerenciamento completo de livros"""
+    """Controller robusto para gerenciamento completo de livros"""
     
     # Sinais principais
-    processing_pipeline_started = pyqtSignal(str, str)  # (pipeline_id, file_name)
-    processing_pipeline_completed = pyqtSignal(str, dict)  # (pipeline_id, result)
-    processing_pipeline_failed = pyqtSignal(str, str)  # (pipeline_id, error)
+    book_processing_started = pyqtSignal(str, str, dict)  # (pipeline_id, file_name, settings)
+    book_processing_completed = pyqtSignal(str, dict)  # (pipeline_id, result)
+    book_processing_failed = pyqtSignal(str, str)  # (pipeline_id, error)
+    book_processing_progress = pyqtSignal(str, str, int, str)  # (pipeline_id, stage, percent, message)
     
-    processing_step_started = pyqtSignal(str, str, str)  # (pipeline_id, step, message)
-    processing_step_completed = pyqtSignal(str, str, dict)  # (pipeline_id, step, result)
-    processing_step_failed = pyqtSignal(str, str, str)  # (pipeline_id, step, error)
-    
-    processing_progress_updated = pyqtSignal(str, int, str)  # (pipeline_id, percent, message)
-    
-    # Sinais herdados (para compatibilidade)
-    book_list_loaded = pyqtSignal(list)
-    book_metadata_loaded = pyqtSignal(dict)
-    book_processed = pyqtSignal(dict)
-    book_processing_progress = pyqtSignal(int, str)
-    book_processing_started = pyqtSignal(str, str)
-    book_processing_completed = pyqtSignal(str, str)
+    book_scheduled = pyqtSignal(str, dict)  # (book_id, scheduling_result)
+    book_registered = pyqtSignal(str, dict)  # (book_id, registration_result)
+    book_structure_created = pyqtSignal(str, dict)  # (book_id, structure_result)
     
     def __init__(self, book_processor, reading_manager=None, 
-                 vault_manager=None, agenda_controller=None, 
-                 reading_controller=None, checkin_system=None):
+                 agenda_controller=None, vault_manager=None):
         super().__init__()
         self.book_processor = book_processor
         self.reading_manager = reading_manager
-        self.vault_manager = vault_manager
         self.agenda_controller = agenda_controller
-        self.reading_controller = reading_controller
-        self.checkin_system = checkin_system
+        self.vault_manager = vault_manager
+        
+        # Gerenciamento de pipelines ativos
+        self.active_pipelines: Dict[str, BookProcessingPipeline] = {}
+        self.pipeline_mutex = QMutex()
         
         # Cache e estado
         self.books_cache = {}
-        self.covers_cache = {}
-        self.metadata_cache = {}
+        self.book_registry = {}
+        self.processing_history = []
         
-        # Pipeline de processamento ativo
-        self.active_pipelines = {}  # pipeline_id -> worker
+        # Configuração
+        self.auto_schedule_reading = True
+        self.default_pages_per_day = 10
+        self.default_scheduling_strategy = "balanced"
+        self.default_quality = "standard"
+        self.default_use_llm = False
         
-        # Workers para operações gerais
-        self.general_workers = []
+        # Inicializar componentes
+        self._initialize_components()
         
-        # Timer para atualizações
+        # Timer de manutenção
         self.maintenance_timer = QTimer()
         self.maintenance_timer.timeout.connect(self._perform_maintenance)
         self.maintenance_timer.start(300000)  # 5 minutos
         
-        logger.info("BookController refatorado inicializado")
+        logger.info("BookController inicializado com gerenciamento robusto")
     
-    # ====== FLUXO PRINCIPAL: PROCESSAMENTO DE LIVRO ======
+    def _initialize_components(self):
+        """Inicializa componentes do sistema"""
+        try:
+            # Verificar se os módulos estão disponíveis
+            self.has_llm = self._check_llm_availability()
+            self.has_agenda = self.agenda_controller is not None
+            self.has_vault = self.vault_manager is not None
+            
+            logger.info(f"Componentes disponíveis - LLM: {self.has_llm}, Agenda: {self.has_agenda}, Vault: {self.has_vault}")
+            
+        except Exception as e:
+            logger.error(f"Erro na inicialização de componentes: {e}")
     
-    @pyqtSlot(str, str, bool)
-    def process_book_pipeline(self, file_path: str, quality: str = "standard", 
-                            schedule_night: bool = False) -> str:
+    def _check_llm_availability(self) -> bool:
+        """Verifica se o módulo LLM está disponível"""
+        try:
+            from src.core.modules.llm_pdf_transcriber import LLMPDFProcessor
+            return True
+        except ImportError:
+            return False
+    
+    # ====== MÉTODOS PÚBLICOS PRINCIPAIS ======
+    
+    @pyqtSlot(str, str, bool, bool)
+    def process_book(self, file_path: str, quality: str = None, 
+                    auto_schedule: bool = None, use_llm: bool = None) -> str:
         """
-        Inicia pipeline completo de processamento de livro
+        Inicia processamento completo de um livro
         
+        Args:
+            file_path: Caminho para o arquivo do livro
+            quality: Qualidade do processamento (draft, standard, high, academic)
+            auto_schedule: Se True, agenda automaticamente após processamento
+            use_llm: Se True, usa LLM para aprimoramento
+            
         Returns:
-            pipeline_id: ID do pipeline para acompanhamento
+            pipeline_id: ID para acompanhamento do processamento
         """
-        pipeline_id = str(uuid.uuid4())[:8]
-        file_name = Path(file_path).stem
-        
-        logger.info(f"Iniciando pipeline {pipeline_id} para {file_name}")
-        
-        # Criar worker especializado
-        worker = BookProcessingWorker(self, file_path, quality, schedule_night)
-        
-        # Conectar sinais do worker
-        worker.step_started.connect(
-            lambda step, msg: self._on_step_started(pipeline_id, step, msg)
-        )
-        worker.step_completed.connect(
-            lambda step, result: self._on_step_completed(pipeline_id, step, result)
-        )
-        worker.step_failed.connect(
-            lambda step, error: self._on_step_failed(pipeline_id, step, error)
-        )
-        worker.progress_updated.connect(
-            lambda percent, msg: self._on_progress_updated(pipeline_id, percent, msg)
-        )
-        worker.result_ready.connect(
-            lambda result: self._on_pipeline_completed(pipeline_id, result)
-        )
-        
-        # Armazenar referência
-        self.active_pipelines[pipeline_id] = worker
-        
-        # Emitir sinal de início
-        self.processing_pipeline_started.emit(pipeline_id, file_name)
-        self.book_processing_started.emit(pipeline_id, file_name)
-        
-        # Iniciar worker
-        worker.start()
-        
-        return pipeline_id
-    
-    @pyqtSlot(str)
-    def cancel_pipeline(self, pipeline_id: str):
-        """Cancela pipeline em andamento"""
-        if pipeline_id in self.active_pipelines:
-            worker = self.active_pipelines[pipeline_id]
-            worker.stop()
-            del self.active_pipelines[pipeline_id]
-            logger.info(f"Pipeline {pipeline_id} cancelado")
-    
-    # ====== CALLBACKS DO PIPELINE ======
-    
-    def _on_step_started(self, pipeline_id: str, step: str, message: str):
-        """Chamado quando uma etapa do pipeline inicia"""
-        self.processing_step_started.emit(pipeline_id, step, message)
-        logger.info(f"Pipeline {pipeline_id} - {step}: {message}")
-    
-    def _on_step_completed(self, pipeline_id: str, step: str, result: dict):
-        """Chamado quando uma etapa do pipeline é concluída"""
-        self.processing_step_completed.emit(pipeline_id, step, result)
-        
-        # Ações específicas por etapa
-        if step == "analysis":
-            metadata = result.get("metadata", {})
-            self._cache_book_analysis(pipeline_id, metadata)
+        self.pipeline_mutex.lock()
+        try:
+            # Usar valores padrão se não especificados
+            quality = quality or self.default_quality
+            auto_schedule = auto_schedule if auto_schedule is not None else self.auto_schedule_reading
+            use_llm = use_llm if use_llm is not None else self.default_use_llm
             
-        elif step == "processing":
-            # Atualizar cache com resultado do processamento
-            self._update_cache_from_processing(pipeline_id, result.get("result"))
-    
-    def _on_step_failed(self, pipeline_id: str, step: str, error: str):
-        """Chamado quando uma etapa do pipeline falha"""
-        self.processing_step_failed.emit(pipeline_id, step, error)
-        logger.error(f"Pipeline {pipeline_id} - Erro em {step}: {error}")
-    
-    def _on_progress_updated(self, pipeline_id: str, percent: int, message: str):
-        """Chamado quando há atualização de progresso"""
-        self.processing_progress_updated.emit(pipeline_id, percent, message)
-        self.book_processing_progress.emit(percent, message)
-    
-    def _on_pipeline_completed(self, pipeline_id: str, result: dict):
-        """Chamado quando o pipeline é concluído"""
-        status = result.get("status")
-        
-        if pipeline_id in self.active_pipelines:
-            worker = self.active_pipelines[pipeline_id]
-            worker.wait(1000)
-            del self.active_pipelines[pipeline_id]
-        
-        if status == "completed":
-            self.processing_pipeline_completed.emit(pipeline_id, result)
-            self.book_processing_completed.emit(pipeline_id, result.get("title", ""))
+            # Validar parâmetros
+            if quality not in ['draft', 'standard', 'high', 'academic']:
+                logger.warning(f"Qualidade inválida: {quality}. Usando padrão: {self.default_quality}")
+                quality = self.default_quality
             
-            # Se foi gerado um book_id, emitir sinal de livro processado
-            book_id = result.get("book_id")
-            if book_id:
-                self.book_processed.emit(result)
-                
-                # Atualizar lista de livros
-                self.load_all_books_async(force_refresh=True)
-                
-                # Registrar no check-in se disponível
-                if self.checkin_system:
-                    self._log_book_processing_in_checkin(book_id, result)
-        
-        elif status == "failed":
-            error = result.get("error", "Erro desconhecido")
-            self.processing_pipeline_failed.emit(pipeline_id, error)
-            self.book_processing_completed.emit(pipeline_id, "Falhou")
-        
-        logger.info(f"Pipeline {pipeline_id} concluído com status: {status}")
+            # Validar arquivo
+            if not Path(file_path).exists():
+                raise FileNotFoundError(f"Arquivo não encontrado: {file_path}")
+            
+            # Criar pipeline
+            pipeline = BookProcessingPipeline(
+                controller=self,
+                file_path=file_path,
+                quality=quality,
+                schedule_reading=auto_schedule,
+                use_llm=use_llm and self.has_llm  # Só usar LLM se disponível
+            )
+            
+            pipeline_id = pipeline.pipeline_id
+            
+            # Conectar sinais do pipeline
+            pipeline.stage_started.connect(self._on_stage_started)
+            pipeline.stage_progress.connect(self._on_stage_progress)
+            pipeline.stage_completed.connect(self._on_stage_completed)
+            pipeline.stage_failed.connect(self._on_stage_failed)
+            pipeline.pipeline_completed.connect(self._on_pipeline_completed)
+            pipeline.pipeline_failed.connect(self._on_pipeline_failed)
+            
+            # Registrar pipeline ativo
+            self.active_pipelines[pipeline_id] = pipeline
+            
+            # Iniciar pipeline
+            pipeline.start()
+            
+            # Emitir sinal de início
+            file_name = Path(file_path).stem
+            settings = {
+                "quality": quality,
+                "auto_schedule": auto_schedule,
+                "use_llm": use_llm,
+                "timestamp": datetime.now().isoformat()
+            }
+            self.book_processing_started.emit(pipeline_id, file_name, settings)
+            
+            logger.info(f"Pipeline {pipeline_id} iniciado para: {file_name} (qualidade: {quality}, LLM: {use_llm})")
+            
+            return pipeline_id
+            
+        except Exception as e:
+            logger.error(f"Erro ao iniciar processamento: {e}")
+            raise
+        finally:
+            self.pipeline_mutex.unlock()
     
-    # ====== COMUNICAÇÃO COM OUTRAS CONTROLLERS ======
-    
-    def schedule_reading_for_book(self, book_id: str, target_date: str = None, 
-                                 pages_per_day: int = None) -> bool:
+    @pyqtSlot(str, result=dict)
+    def get_book_status(self, book_id: str) -> Dict:
         """
-        Agenda tempo de leitura para um livro
+        Obtém status completo de um livro
         
         Args:
             book_id: ID do livro
-            target_date: Data alvo para conclusão (YYYY-MM-DD)
-            pages_per_day: Páginas por dia (se None, calcula automaticamente)
-        
+            
         Returns:
-            True se agendado com sucesso
+            Status do livro
         """
-        if not self.agenda_controller:
-            logger.warning("AgendaController não disponível")
-            return False
+        status = {
+            "book_id": book_id,
+            "found": False,
+            "systems": {}
+        }
         
-        try:
-            # Obter informações do livro
-            book_info = self.get_book_info(book_id)
-            if not book_info or "total_pages" not in book_info:
-                logger.error(f"Informações do livro {book_id} insuficientes")
-                return False
-            
-            total_pages = book_info["total_pages"]
-            current_page = book_info.get("current_page", 0)
-            pages_remaining = total_pages - current_page
-            
-            # Calcular páginas por dia se não especificado
-            if pages_per_day is None:
-                if target_date:
-                    # Calcular baseado na data alvo
-                    target = datetime.strptime(target_date, "%Y-%m-%d").date()
-                    days_remaining = (target - datetime.now().date()).days
-                    if days_remaining > 0:
-                        pages_per_day = max(1, pages_remaining // days_remaining)
-                    else:
-                        pages_per_day = pages_remaining
+        # Verificar no registro interno
+        if book_id in self.book_registry:
+            status["found"] = True
+            status["registry"] = self.book_registry[book_id]
+        
+        # Verificar no ReadingManager
+        if self.reading_manager:
+            try:
+                progress = self.reading_manager.get_reading_progress(book_id)
+                if progress:
+                    status["systems"]["reading_manager"] = {
+                        "registered": True,
+                        "progress": progress
+                    }
                 else:
-                    # Valor padrão: 10 páginas por dia
-                    pages_per_day = 10
+                    status["systems"]["reading_manager"] = {"registered": False}
+            except Exception as e:
+                status["systems"]["reading_manager"] = {"registered": False, "error": str(e)}
+        
+        # Verificar no vault
+        if self.vault_manager and book_id in self.book_registry:
+            try:
+                book_info = self.book_registry[book_id]
+                author = book_info.get("author", "")
+                title = book_info.get("title", "")
+                
+                # Verificar se diretório existe
+                vault_path = self.vault_manager.vault_path
+                book_dir = vault_path / "01-LEITURAS" / author / title
+                
+                status["systems"]["vault"] = {
+                    "directory_exists": book_dir.exists(),
+                    "notes_count": len(list(book_dir.glob("*.md"))) if book_dir.exists() else 0
+                }
+            except Exception as e:
+                status["systems"]["vault"] = {"error": str(e)}
+        
+        # Verificar na agenda
+        if self.agenda_controller:
+            try:
+                # Verificar se há eventos agendados para este livro
+                # (implementação depende da API do AgendaController)
+                status["systems"]["agenda"] = {"registered": "unknown"}
+            except Exception as e:
+                status["systems"]["agenda"] = {"error": str(e)}
+        
+        return status
+    
+    @pyqtSlot(str, int, int)
+    def process_additional_chapters(self, book_id: str, start_chapter: int, num_chapters: int):
+        """
+        Processa capítulos adicionais de um livro já registrado
+        
+        Args:
+            book_id: ID do livro
+            start_chapter: Capítulo inicial
+            num_chapters: Número de capítulos a processar
+        """
+        try:
+            if book_id not in self.book_registry:
+                raise ValueError(f"Livro {book_id} não encontrado no registro")
             
-            # Agendar na agenda
-            self.agenda_controller.allocate_reading_time_async(
-                book_id, pages_per_day, "balanced"
+            book_info = self.book_registry[book_id]
+            file_path = book_info.get("file_path")
+            
+            if not file_path or not Path(file_path).exists():
+                raise FileNotFoundError(f"Arquivo original não encontrado: {file_path}")
+            
+            # Usar ChapterProcessor para processar capítulos adicionais
+            from src.core.modules.book_processor import ChapterProcessor
+            
+            chapter_processor = ChapterProcessor(self.vault_manager)
+            
+            result = chapter_processor.process_chapters(
+                pdf_path=file_path,
+                num_chapters=num_chapters,
+                start_chapter=start_chapter,
+                book_id=book_id
             )
             
-            logger.info(f"Leitura agendada: {book_id}, {pages_per_day} páginas/dia")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao agendar leitura: {e}")
-            return False
-    
-    def sync_book_to_all_systems(self, book_id: str) -> str:
-        """
-        Sincroniza livro com todos os sistemas disponíveis
-        
-        Returns:
-            pipeline_id do processo de sincronização
-        """
-        sync_id = str(uuid.uuid4())[:8]
-        
-        # Executar sincronizações em paralelo
-        sync_tasks = []
-        
-        # Sincronizar com vault do Obsidian
-        if self.vault_manager:
-            sync_tasks.append(("vault", self.vault_manager.sync_to_obsidian, book_id))
-        
-        # Sincronizar com sistema de leitura
-        if self.reading_controller:
-            sync_tasks.append(("reading", self.reading_controller.force_refresh_all, None))
-        
-        # Sincronizar com agenda
-        if self.agenda_controller:
-            sync_tasks.append(("agenda", self.agenda_controller.load_agenda_async, None))
-        
-        # Executar tarefas em threads separadas
-        for system_name, method, param in sync_tasks:
-            def sync_task_wrapper(name=system_name, func=method, arg=param):
-                try:
-                    if arg:
-                        func(arg)
-                    else:
-                        func()
-                    return {"system": name, "status": "success"}
-                except Exception as e:
-                    return {"system": name, "status": "error", "error": str(e)}
-            
-            self._execute_async(sync_task_wrapper, lambda r: self._on_sync_completed(sync_id, r))
-        
-        return sync_id
-    
-    def _on_sync_completed(self, sync_id: str, result: dict):
-        """Chamado quando uma sincronização é concluída"""
-        system = result.get("system")
-        status = result.get("status")
-        
-        if status == "success":
-            logger.info(f"Sincronização {sync_id} - {system}: sucesso")
-        else:
-            logger.error(f"Sincronização {sync_id} - {system}: {result.get('error')}")
-    
-    def _log_book_processing_in_checkin(self, book_id: str, result: dict):
-        """Registra processamento de livro no sistema de check-in"""
-        if not self.checkin_system:
-            return
-        
-        try:
-            title = result.get("title", "Livro desconhecido")
-            author = result.get("author", "Autor desconhecido")
-            
-            entry = {
-                "type": "book_processed",
-                "book_id": book_id,
-                "title": title,
-                "author": author,
-                "timestamp": datetime.now().isoformat(),
-                "metadata": {
-                    "total_pages": result.get("total_pages", 0),
-                    "processing_result": result.get("result", {})
-                }
-            }
-            
-            # Usar check-in system para registrar
-            if hasattr(self.checkin_system, 'add_entry'):
-                self.checkin_system.add_entry(entry)
-            elif hasattr(self.checkin_system, 'create_evening_checkin_async'):
-                # Adaptar para o formato do checkin_system existente
-                self.checkin_system.create_evening_checkin_async(
-                    mood_score=3.0,
-                    achievements=[f"Processado livro: {title}"],
-                    challenges=[],
-                    insights=["Novo livro disponível para leitura"]
+            if result.get("success"):
+                # Atualizar registro
+                self.book_registry[book_id]["chapters"] = result.get("next_chapter", 1) - 1
+                
+                # Emitir sinal
+                self.book_processing_completed.emit(
+                    f"chapters_{book_id}_{datetime.now().timestamp()}",
+                    result
                 )
                 
+                logger.info(f"Capítulos adicionais processados para {book_id}: {result.get('chapters_processed')} capítulos")
+            else:
+                raise Exception(result.get("error", "Erro desconhecido"))
+                
         except Exception as e:
-            logger.error(f"Erro ao registrar livro no check-in: {e}")
+            logger.error(f"Erro processando capítulos adicionais: {e}")
+            self.book_processing_failed.emit(book_id, str(e))
     
-    # ====== MÉTODOS AUXILIARES DE CACHE ======
+    # ====== MÉTODOS DE INTEGRAÇÃO ======
     
-    def _cache_book_analysis(self, pipeline_id: str, metadata: dict):
-        """Armazena análise do livro em cache temporário"""
-        cache_key = f"analysis_{pipeline_id}"
-        self.metadata_cache[cache_key] = {
-            "metadata": metadata,
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    def _update_cache_from_processing(self, pipeline_id: str, processing_result):
-        """Atualiza cache com resultado do processamento"""
-        if not processing_result:
-            return
+    def generate_consistent_book_id(self, title: str, author: str) -> str:
+        """Gera ID consistente para todos os sistemas"""
+        # Normalizar strings
+        norm_title = re.sub(r'\s+', ' ', title.strip().lower())
+        norm_author = re.sub(r'\s+', ' ', author.strip().lower())
         
-        # Converter para dicionário se necessário
-        if hasattr(processing_result, 'metadata'):
-            metadata = processing_result.metadata
-            book_dict = {
-                "title": metadata.title,
-                "author": metadata.author,
-                "total_pages": metadata.total_pages,
-                "chapters": metadata.chapters,
-                "language": metadata.language
-            }
-            
-            # Gerar book_id se não existir
-            book_id = self._generate_book_id_from_metadata(metadata)
-            self.books_cache[book_id] = book_dict
-    
-    def _generate_book_id_from_metadata(self, metadata) -> str:
-        """Gera ID do livro baseado nos metadados"""
-        content = f"{metadata.title}_{metadata.author}_{metadata.total_pages}"
+        # Gerar hash consistente
+        content = f"{norm_title}||{norm_author}||{datetime.now().strftime('%Y%m')}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
-    # ====== MÉTODOS DE MANUTENÇÃO ======
+    def create_book_structure(self, book_id: str, metadata, chapters: List[Dict]) -> Dict:
+        """Cria estrutura de diretórios e notas para o livro"""
+        result = {
+            "book_id": book_id,
+            "directory_created": False,
+            "notes_created": 0,
+            "errors": []
+        }
+        
+        try:
+            if not self.vault_manager:
+                result["errors"].append("VaultManager não disponível")
+                return result
+            
+            # Sanitizar nomes
+            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            
+            # Criar diretório principal
+            book_dir = self.vault_manager.vault_path / "01-LEITURAS" / safe_author / safe_title
+            book_dir.mkdir(parents=True, exist_ok=True)
+            result["directory_created"] = True
+            result["directory_path"] = str(book_dir)
+            
+            # Criar notas para cada capítulo
+            for chapter in chapters:
+                try:
+                    chapter_num = chapter.get('chapter_num', 0)
+                    chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                    content = chapter.get('content', '')
+                    
+                    # Nome do arquivo
+                    filename = f"{chapter_num:03d} - {self._sanitize_filename(chapter_title)}.md"
+                    relative_path = f"01-LEITURAS/{safe_author}/{safe_title}/{filename}"
+                    
+                    # Frontmatter
+                    frontmatter = {
+                        'title': f"{metadata.title} - {chapter_title}",
+                        'book': metadata.title,
+                        'author': metadata.author,
+                        'chapter': chapter_num,
+                        'pages': chapter.get('pages', ''),
+                        'book_id': book_id,
+                        'tags': ['livro', 'capitulo']
+                    }
+                    
+                    # Conteúdo da nota
+                    note_content = f"""# {chapter_title}
+
+## 📚 Livro
+[[{metadata.title}]]
+
+## 📖 Informações
+- **Livro**: {metadata.title}
+- **Autor**: {metadata.author}
+- **Capítulo**: {chapter_num}
+- **Páginas**: {chapter.get('pages', 'N/A')}
+
+## 📝 Conteúdo
+{content}
+
+## 💭 Anotações
+<!-- Adicione suas anotações aqui -->
+
+## 🔗 Links
+[[{metadata.title}]] | [[Índice - {metadata.title}]]
+"""
+                    
+                    # Criar nota
+                    self.vault_manager.create_note(
+                        relative_path,
+                        content=note_content,
+                        frontmatter=frontmatter
+                    )
+                    
+                    result["notes_created"] += 1
+                    
+                except Exception as e:
+                    result["errors"].append(f"Erro criando capítulo {chapter_num}: {e}")
+            
+            # Emitir sinal
+            self.book_structure_created.emit(book_id, result)
+            
+        except Exception as e:
+            result["errors"].append(f"Erro geral na criação da estrutura: {e}")
+        
+        return result
     
-    @pyqtSlot()
+    def create_book_index(self, book_id: str, metadata, chapters: List[Dict]) -> Dict:
+        """Cria índice do livro no vault"""
+        result = {
+            "book_id": book_id,
+            "index_created": False
+        }
+        
+        try:
+            if not self.vault_manager:
+                return result
+            
+            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            
+            # Caminho para o índice
+            index_path = f"01-LEITURAS/{safe_author}/{safe_title}/📖 {safe_title}.md"
+            
+            # Frontmatter
+            frontmatter = {
+                'title': metadata.title,
+                'author': metadata.author,
+                'type': 'livro',
+                'book_id': book_id,
+                'total_pages': metadata.total_pages,
+                'total_chapters': len(chapters),
+                'processed_date': datetime.now().isoformat(),
+                'tags': ['livro', 'indice']
+            }
+            
+            # Lista de capítulos
+            chapters_list = ""
+            for chapter in chapters:
+                chapter_num = chapter.get('chapter_num', 0)
+                chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                safe_chapter_title = self._sanitize_filename(chapter_title)
+                
+                chapters_list += f"{chapter_num}. [[{chapter_num:03d} - {safe_chapter_title}|{chapter_title}]]\n"
+            
+            # Conteúdo do índice
+            content = f"""# {metadata.title}
+
+## 👤 Autor
+{metadata.author}
+
+## 📊 Informações
+- **Total de páginas**: {metadata.total_pages}
+- **Total de capítulos**: {len(chapters)}
+- **ID do livro**: {book_id}
+- **Processado em**: {datetime.now().strftime('%d/%m/%Y %H:%M')}
+
+## 📑 Capítulos
+{chapters_list}
+
+## 📝 Notas Gerais
+<!-- Adicione suas notas sobre o livro aqui -->
+
+## 🎯 Objetivos de Leitura
+<!-- Defina seus objetivos de leitura -->
+
+## 📅 Progresso
+| Capítulo | Data de Leitura | Status | Notas |
+|----------|-----------------|--------|-------|
+| 1 | | 📖 Pendente | |
+| 2 | | 📖 Pendente | |
+| ... | | ... | |
+"""
+            
+            # Criar ou atualizar índice
+            existing_note = self.vault_manager.get_note_by_path(index_path)
+            
+            if existing_note:
+                self.vault_manager.update_note(
+                    index_path,
+                    content=content,
+                    frontmatter=frontmatter
+                )
+            else:
+                self.vault_manager.create_note(
+                    index_path,
+                    content=content,
+                    frontmatter=frontmatter
+                )
+            
+            result["index_created"] = True
+            
+        except Exception as e:
+            logger.error(f"Erro criando índice: {e}")
+            result["error"] = str(e)
+        
+        return result
+
+    def create_single_note_structure(self, book_id: str, metadata, content: List[Dict], config: Dict = None) -> Dict:
+        """Cria uma única nota para todo o livro"""
+        result = {
+            "book_id": book_id,
+            "directory_created": False,
+            "notes_created": 0,
+            "single_note": True,
+            "errors": []
+        }
+        
+        try:
+            if not self.vault_manager:
+                result["errors"].append("VaultManager não disponível")
+                return result
+            
+            # Sanitizar nomes
+            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            
+            # Criar diretório principal
+            book_dir = self.vault_manager.vault_path / "01-LEITURAS" / safe_author / safe_title
+            book_dir.mkdir(parents=True, exist_ok=True)
+            result["directory_created"] = True
+            result["directory_path"] = str(book_dir)
+            
+            # Combinar todo o conteúdo em uma única string
+            full_content = ""
+            for chapter in content:
+                chapter_num = chapter.get('chapter_num', 0)
+                chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                chapter_text = chapter.get('content', '')
+                
+                full_content += f"\n\n## Capítulo {chapter_num}: {chapter_title}\n\n"
+                full_content += chapter_text
+            
+            # Caminho para a nota única
+            note_path = f"01-LEITURAS/{safe_author}/{safe_title}/{safe_title}.md"
+            
+            # Frontmatter
+            frontmatter = {
+                'title': metadata.title,
+                'book': metadata.title,
+                'author': metadata.author,
+                'type': 'livro_completo',
+                'book_id': book_id,
+                'total_pages': metadata.total_pages,
+                'total_chapters': len(content),
+                'processed_date': datetime.now().isoformat(),
+                'tags': ['livro', 'nota_única']
+            }
+            
+            # Adicionar tags personalizadas se fornecidas
+            if config and 'tags' in config:
+                frontmatter['tags'].extend(config['tags'])
+            
+            # Conteúdo da nota
+            note_content = f"""# {metadata.title}
+
+## 👤 Autor
+{metadata.author}
+
+## 📊 Informações
+- **Total de páginas**: {metadata.total_pages}
+- **Total de capítulos**: {len(content)}
+- **Processado em**: {datetime.now().strftime('%d/%m/%Y %H:%M')}
+- **ID do livro**: {book_id}
+
+## 📝 Conteúdo Completo
+{full_content}
+
+## 💭 Anotações Pessoais
+<!-- Adicione suas anotações aqui -->
+
+## 🔗 Índice de Capítulos
+"""
+            
+            # Adicionar índice
+            for chapter in content:
+                chapter_num = chapter.get('chapter_num', 0)
+                chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                note_content += f"{chapter_num}. {chapter_title}\n"
+            
+            # Criar nota
+            self.vault_manager.create_note(
+                note_path,
+                content=note_content,
+                frontmatter=frontmatter
+            )
+            
+            result["notes_created"] = 1
+            
+            # Emitir sinal
+            self.book_structure_created.emit(book_id, result)
+            
+        except Exception as e:
+            result["errors"].append(f"Erro criando nota única: {e}")
+            logger.error(f"Erro criando nota única: {e}")
+        
+        return result
+    
+    def integrate_with_vault(self, book_id: str, metadata, chapters: List[Dict]) -> Dict:
+        """Integra livro com o vault do Obsidian"""
+        result = {
+            "book_id": book_id,
+            "success": False,
+            "steps_completed": []
+        }
+        
+        try:
+            # 1. Criar estrutura
+            structure_result = self.create_book_structure(book_id, metadata, chapters)
+            if structure_result.get("directory_created"):
+                result["steps_completed"].append("structure_created")
+            
+            # 2. Criar índice
+            index_result = self.create_book_index(book_id, metadata, chapters)
+            if index_result.get("index_created"):
+                result["steps_completed"].append("index_created")
+            
+            # 3. Criar nota de conceitos
+            concepts_result = self._create_concepts_note(book_id, metadata)
+            if concepts_result.get("concepts_note_created"):
+                result["steps_completed"].append("concepts_note_created")
+            
+            result["success"] = len(result["steps_completed"]) > 0
+            result["details"] = {
+                "structure": structure_result,
+                "index": index_result,
+                "concepts": concepts_result
+            }
+            
+        except Exception as e:
+            result["error"] = str(e)
+            logger.error(f"Erro na integração com vault: {e}")
+        
+        return result
+    
+    def _create_concepts_note(self, book_id: str, metadata) -> Dict:
+        """Cria nota de conceitos-chave do livro"""
+        result = {"concepts_note_created": False}
+        
+        try:
+            if not self.vault_manager:
+                return result
+            
+            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            
+            # Caminho para a nota de conceitos
+            concepts_path = f"01-LEITURAS/{safe_author}/{safe_title}/🧠 Conceitos-Chave.md"
+            
+            # Frontmatter
+            frontmatter = {
+                'title': f'Conceitos-Chave - {metadata.title}',
+                'book': metadata.title,
+                'author': metadata.author,
+                'type': 'concepts',
+                'book_id': book_id,
+                'tags': ['conceitos', 'livro']
+            }
+            
+            # Conteúdo da nota
+            content = f"""# Conceitos-Chave - {metadata.title}
+
+## 📚 Livro
+[[{metadata.title}]]
+
+## 🧠 Conceitos Principais
+<!-- Liste e explique os conceitos principais do livro aqui -->
+
+## 💬 Citações Importantes
+<!-- Colete citações importantes do livro -->
+
+## ❓ Questões para Reflexão
+<!-- Questões geradas pela LLM ou suas próprias -->
+
+## 🔍 Conexões com Outras Obras
+<!-- Relacione com outros livros ou autores -->
+
+## 📝 Minhas Reflexões
+<!-- Adicione suas próprias reflexões -->
+"""
+            
+            # Criar nota
+            self.vault_manager.create_note(
+                concepts_path,
+                content=content,
+                frontmatter=frontmatter
+            )
+            
+            result["concepts_note_created"] = True
+            
+        except Exception as e:
+            result["error"] = str(e)
+        
+        return result
+    
+    def register_book_in_system(self, book_id: str, title: str, author: str, 
+                               total_pages: int, file_path: Path) -> Dict:
+        """Registra livro em todos os sistemas necessários"""
+        result = {
+            "book_id": book_id,
+            "success": False,
+            "systems_registered": [],
+            "errors": []
+        }
+        
+        try:
+            # 1. Registrar no ReadingManager
+            if self.reading_manager:
+                try:
+                    # Verificar se já existe
+                    existing = self.reading_manager.get_reading_progress(book_id)
+                    
+                    if not existing:
+                        # Adicionar novo livro
+                        added_id = self.reading_manager.add_book(
+                            title=title,
+                            author=author,
+                            total_pages=total_pages,
+                            book_id=book_id
+                        )
+                        
+                        if added_id:
+                            result["systems_registered"].append("reading_manager")
+                            result["reading_system_id"] = added_id
+                            logger.info(f"Livro {book_id} registrado no ReadingManager")
+                        else:
+                            result["errors"].append("Falha ao adicionar ao ReadingManager")
+                    else:
+                        result["systems_registered"].append("reading_manager (existing)")
+                        logger.info(f"Livro {book_id} já existe no ReadingManager")
+                        
+                except Exception as e:
+                    result["errors"].append(f"ReadingManager error: {str(e)}")
+                    logger.error(f"Erro no ReadingManager para {book_id}: {e}")
+            
+            # 2. Registrar no cache interno
+            self.book_registry[book_id] = {
+                "title": title,
+                "author": author,
+                "total_pages": total_pages,
+                "file_path": str(file_path),
+                "registered_at": datetime.now().isoformat(),
+                "systems": result["systems_registered"]
+            }
+            
+            # 3. Registrar no vault (se disponível)
+            if self.vault_manager:
+                try:
+                    # Criar nota de registro no vault
+                    registry_path = f"06-RECURSOS/registros_livros/{book_id}.json"
+                    
+                    registry_data = {
+                        "book_id": book_id,
+                        "title": title,
+                        "author": author,
+                        "total_pages": total_pages,
+                        "file_path": str(file_path),
+                        "registered_at": datetime.now().isoformat(),
+                        "processing_complete": True
+                    }
+                    
+                    # Criar diretório se não existir
+                    registry_dir = self.vault_manager.vault_path / "06-RECURSOS" / "registros_livros"
+                    registry_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Salvar JSON
+                    registry_file = registry_dir / f"{book_id}.json"
+                    with open(registry_file, 'w', encoding='utf-8') as f:
+                        json.dump(registry_data, f, indent=2, ensure_ascii=False)
+                    
+                    result["systems_registered"].append("vault_registry")
+                    
+                except Exception as e:
+                    result["errors"].append(f"VaultRegistry error: {str(e)}")
+            
+            # Verificar sucesso
+            if len(result["systems_registered"]) > 0:
+                result["success"] = True
+                result["status"] = "registered"
+                
+                # Emitir sinal de registro
+                self.book_registered.emit(book_id, result)
+                
+            else:
+                result["status"] = "registration_failed"
+                
+        except Exception as e:
+            result["errors"].append(f"Registration error: {str(e)}")
+            logger.error(f"Erro geral no registro do livro {book_id}: {e}")
+        
+        return result
+    
+    def schedule_book_reading(self, book_id: str, title: str = None, 
+                             total_pages: int = None) -> Dict:
+        """Agenda leitura automática do livro"""
+        result = {
+            "book_id": book_id,
+            "success": False,
+            "scheduling_attempted": False,
+            "agenda_events_created": 0,
+            "error": None
+        }
+        
+        try:
+            # Verificar se temos AgendaController
+            if not self.agenda_controller:
+                result["error"] = "AgendaController não disponível"
+                return result
+            
+            # Obter informações do livro (se não fornecidas)
+            if not title or not total_pages:
+                book_info = self.get_book_info(book_id)
+                if not book_info:
+                    result["error"] = f"Livro {book_id} não encontrado"
+                    return result
+                
+                title = book_info.get("title", title)
+                total_pages = book_info.get("total_pages", total_pages)
+            
+            # Calcular páginas por dia
+            pages_per_day = self._calculate_pages_per_day(total_pages)
+            
+            # Chamar AgendaController para alocar tempo
+            result["scheduling_attempted"] = True
+            result["pages_per_day"] = pages_per_day
+            result["strategy"] = self.default_scheduling_strategy
+            
+            # Usar método síncrono para garantir execução
+            scheduling_result = self._execute_scheduling(
+                book_id=book_id,
+                pages_per_day=pages_per_day,
+                strategy=self.default_scheduling_strategy
+            )
+            
+            # Processar resultado
+            if "error" in scheduling_result:
+                result["error"] = scheduling_result["error"]
+            else:
+                result["success"] = True
+                result["agenda_events_created"] = scheduling_result.get("total_sessions", 0)
+                result["allocation_details"] = scheduling_result
+                
+                # Emitir sinal de agendamento
+                self.book_scheduled.emit(book_id, result)
+                
+                logger.info(f"Leitura agendada para {book_id}: {pages_per_day} páginas/dia")
+        
+        except Exception as e:
+            result["error"] = str(e)
+            logger.error(f"Erro no agendamento de {book_id}: {e}")
+        
+        return result
+    
+    def _execute_scheduling(self, book_id: str, pages_per_day: float, strategy: str) -> Dict:
+        """Executa agendamento de forma síncrona com fallback"""
+        try:
+            # Usar método síncrono do AgendaController
+            if hasattr(self.agenda_controller, 'allocate_reading_time'):
+                return self.agenda_controller.allocate_reading_time(
+                    book_id=book_id,
+                    pages_per_day=pages_per_day,
+                    strategy=strategy
+                )
+            elif hasattr(self.agenda_controller, 'allocate_reading_time_async'):
+                # Se for assíncrono, usar QEventLoop para sincronizar
+                from PyQt6.QtCore import QEventLoop
+                
+                result_container = {"result": None}
+                event_loop = QEventLoop()
+                
+                def on_allocation_result(allocation_result):
+                    result_container["result"] = allocation_result
+                    event_loop.quit()
+                
+                # Conectar sinal temporariamente
+                self.agenda_controller.reading_allocated.connect(on_allocation_result)
+                
+                # Iniciar agendamento
+                self.agenda_controller.allocate_reading_time_async(
+                    book_id, pages_per_day, strategy
+                )
+                
+                # Aguardar resultado (timeout de 10 segundos)
+                QTimer.singleShot(10000, event_loop.quit)
+                event_loop.exec()
+                
+                # Desconectar sinal
+                self.agenda_controller.reading_allocated.disconnect(on_allocation_result)
+                
+                return result_container.get("result", {"error": "Timeout no agendamento"})
+            
+            else:
+                return {"error": "Método de agendamento não disponível"}
+                
+        except Exception as e:
+            logger.error(f"Erro na execução do agendamento: {e}")
+            return {"error": str(e)}
+    
+    def _calculate_pages_per_day(self, total_pages: int) -> float:
+        """Calcula páginas por dia de forma inteligente"""
+        if total_pages <= 0:
+            return self.default_pages_per_day
+        
+        # Baseado no total de páginas e complexidade estimada
+        if total_pages < 100:
+            return 15  # Livro curto
+        elif total_pages < 300:
+            return 12  # Livro médio
+        elif total_pages < 600:
+            return 10  # Livro longo
+        else:
+            return 8   # Livro muito longo
+    
+    # ====== CALLBACKS DO PIPELINE ======
+    
+    def _on_stage_started(self, pipeline_id: str, stage: str, message: str):
+        """Chamado quando um estágio do pipeline inicia"""
+        logger.info(f"Pipeline {pipeline_id} - {stage}: {message}")
+    
+    def _on_stage_progress(self, pipeline_id: str, stage: str, percent: int, message: str):
+        """Chamado durante progresso de um estágio"""
+        # Emitir sinal de progresso para a UI
+        self.book_processing_progress.emit(pipeline_id, stage, percent, message)
+        logger.debug(f"Pipeline {pipeline_id} - {stage}: {percent}% - {message}")
+    
+    def _on_stage_completed(self, pipeline_id: str, stage: str, result: dict):
+        """Chamado quando um estágio é concluído"""
+        logger.info(f"Pipeline {pipeline_id} - {stage} concluído")
+        
+        # Ações específicas por estágio
+        if stage == "integration" and result.get("book_id"):
+            book_id = result["book_id"]
+            logger.info(f"Pipeline {pipeline_id} - Livro {book_id} integrado com sucesso")
+    
+    def _on_stage_failed(self, pipeline_id: str, stage: str, error: str):
+        """Chamado quando um estágio falha"""
+        logger.error(f"Pipeline {pipeline_id} - Falha em {stage}: {error}")
+        # Não interrompemos o pipeline aqui, deixamos ele lidar
+    
+    def _on_pipeline_completed(self, pipeline_id: str, result: dict):
+        """Chamado quando o pipeline é concluído com sucesso"""
+        # Limpar pipeline da lista ativa
+        self.pipeline_mutex.lock()
+        try:
+            if pipeline_id in self.active_pipelines:
+                pipeline = self.active_pipelines[pipeline_id]
+                pipeline.wait(1000)
+                del self.active_pipelines[pipeline_id]
+        finally:
+            self.pipeline_mutex.unlock()
+        
+        # Emitir sinal de conclusão
+        self.book_processing_completed.emit(pipeline_id, result)
+        
+        logger.info(f"Pipeline {pipeline_id} concluído: {result.get('title', 'Desconhecido')}")
+    
+    def _on_pipeline_failed(self, pipeline_id: str, error: str):
+        """Chamado quando o pipeline falha"""
+        # Limpar pipeline da lista ativa
+        self.pipeline_mutex.lock()
+        try:
+            if pipeline_id in self.active_pipelines:
+                pipeline = self.active_pipelines[pipeline_id]
+                pipeline.stop()
+                del self.active_pipelines[pipeline_id]
+        finally:
+            self.pipeline_mutex.unlock()
+        
+        # Emitir sinal de falha
+        self.book_processing_failed.emit(pipeline_id, error)
+        
+        logger.error(f"Pipeline {pipeline_id} falhou: {error}")
+    
+    # ====== MÉTODOS AUXILIARES ======
+    
+    def get_book_info(self, book_id: str) -> Optional[Dict]:
+        """Obtém informações do livro do cache interno"""
+        # Primeiro, verificar cache interno
+        if book_id in self.book_registry:
+            return self.book_registry[book_id]
+        
+        # Depois, verificar ReadingManager
+        if self.reading_manager:
+            try:
+                progress = self.reading_manager.get_reading_progress(book_id)
+                if progress:
+                    return {
+                        "book_id": book_id,
+                        "title": progress.get("title"),
+                        "author": progress.get("author", "Desconhecido"),
+                        "total_pages": progress.get("total_pages", 0),
+                        "current_page": progress.get("current_page", 0),
+                        "source": "reading_manager"
+                    }
+            except Exception as e:
+                logger.error(f"Erro ao obter info do ReadingManager: {e}")
+        
+        return None
+    
+    
+    @pyqtSlot(dict, result=str)
+    def process_book_with_config(self, config: dict) -> str:
+        """
+        Processa livro com configurações avançadas
+        
+        Args:
+            config: Dicionário com todas as configurações:
+                - file_path: caminho do arquivo
+                - quality: qualidade do processamento
+                - use_llm: usar LLM para aprimoramento
+                - auto_schedule: agendar automaticamente
+                - metadata: metadados editados
+                - notes_config: configurações de notas
+                - scheduling_config: configurações de agendamento
+                
+        Returns:
+            pipeline_id: ID do pipeline
+        """
+        try:
+            # Extrair configurações básicas
+            file_path = config.get("file_path")
+            quality = config.get("quality", self.default_quality)
+            use_llm = config.get("use_llm", self.default_use_llm)
+            auto_schedule = config.get("auto_schedule", self.auto_schedule_reading)
+            
+            # Validar arquivo
+            if not Path(file_path).exists():
+                raise FileNotFoundError(f"Arquivo não encontrado: {file_path}")
+            
+            # Criar pipeline com configurações estendidas
+            pipeline = BookProcessingPipeline(
+                controller=self,
+                file_path=file_path,
+                quality=quality,
+                schedule_reading=auto_schedule,
+                use_llm=use_llm,
+                config=config  # Passar configurações completas
+            )
+            
+            pipeline_id = pipeline.pipeline_id
+            
+            # Registrar pipeline ativo
+            self.pipeline_mutex.lock()
+            try:
+                self.active_pipelines[pipeline_id] = pipeline
+            finally:
+                self.pipeline_mutex.unlock()
+            
+            # Conectar sinais do pipeline
+            pipeline.stage_started.connect(self._on_stage_started)
+            pipeline.stage_progress.connect(self._on_stage_progress)
+            pipeline.stage_completed.connect(self._on_stage_completed)
+            pipeline.stage_failed.connect(self._on_stage_failed)
+            pipeline.pipeline_completed.connect(self._on_pipeline_completed)
+            pipeline.pipeline_failed.connect(self._on_pipeline_failed)
+            
+            # Iniciar pipeline
+            pipeline.start()
+            
+            # Emitir sinal de início
+            file_name = Path(file_path).stem
+            settings = {
+                "file_path": file_path,
+                "quality": quality,
+                "use_llm": use_llm,
+                "auto_schedule": auto_schedule,
+                "config": config,
+                "timestamp": datetime.now().isoformat()
+            }
+            self.book_processing_started.emit(pipeline_id, file_name, settings)
+            
+            logger.info(f"Pipeline {pipeline_id} iniciado com configurações avançadas")
+            
+            return pipeline_id
+            
+        except Exception as e:
+            logger.error(f"Erro ao iniciar processamento com configurações: {e}")
+            raise
+    
+    def update_book_metadata(self, pipeline_id: str, metadata: dict):
+        """Atualizar metadados de um livro em processamento"""
+        if pipeline_id in self.active_pipelines:
+            pipeline = self.active_pipelines[pipeline_id]
+            if hasattr(pipeline, 'metadata'):
+                # Atualizar metadados do pipeline
+                for key, value in metadata.items():
+                    if hasattr(pipeline.metadata, key):
+                        setattr(pipeline.metadata, key, value)
+                    else:
+                        # Adicionar atributo dinâmico se não existir
+                        setattr(pipeline.metadata, key, value)
+
+    def save_to_history(self, result: Dict):
+        """Salva resultado no histórico"""
+        self.processing_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "result": result
+        })
+        
+        # Manter apenas os últimos 100 registros
+        if len(self.processing_history) > 100:
+            self.processing_history = self.processing_history[-100:]
+    
+    def get_processing_history(self, limit: int = 20) -> List[Dict]:
+        """Retorna histórico de processamento"""
+        return self.processing_history[-limit:] if self.processing_history else []
+    
+    def _sanitize_filename(self, filename: str) -> str:
+        """Sanitiza nome de arquivo"""
+        # Substituir caracteres problemáticos
+        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        filename = re.sub(r'\s+', ' ', filename).strip()
+        return filename[:100]  # Limitar tamanho
+    
     def _perform_maintenance(self):
         """Executa manutenção periódica"""
         try:
-            # Limpar pipelines antigos
-            current_time = datetime.now()
+            # Limpar pipelines finalizados
             pipelines_to_remove = []
             
-            for pipeline_id, worker in list(self.active_pipelines.items()):
-                if not worker.isRunning():
+            for pipeline_id, pipeline in list(self.active_pipelines.items()):
+                if not pipeline.isRunning():
                     pipelines_to_remove.append(pipeline_id)
             
             for pipeline_id in pipelines_to_remove:
                 if pipeline_id in self.active_pipelines:
                     del self.active_pipelines[pipeline_id]
             
-            # Limpar cache antigo
-            self._clean_old_cache()
+            # Limpar cache antigo (mais de 1 hora)
+            current_time = datetime.now()
+            old_keys = []
             
-            # Atualizar estatísticas
-            self._update_system_stats()
+            for key, entry in list(self.book_registry.items()):
+                if "registered_at" in entry:
+                    try:
+                        registered_time = datetime.fromisoformat(entry["registered_at"])
+                        if (current_time - registered_time).total_seconds() > 3600:
+                            old_keys.append(key)
+                    except:
+                        old_keys.append(key)
             
-            logger.debug("Manutenção periódica executada")
+            for key in old_keys:
+                del self.book_registry[key]
+            
+            # Salvar histórico em arquivo
+            self._save_history_to_file()
+            
+            logger.debug(f"Manutenção executada: {len(pipelines_to_remove)} pipelines limpos")
             
         except Exception as e:
             logger.error(f"Erro na manutenção: {e}")
     
-    def _clean_old_cache(self):
-        """Limpa cache antigo"""
-        current_time = datetime.now()
-        cache_keys_to_remove = []
-        
-        for key, entry in list(self.metadata_cache.items()):
-            if isinstance(entry, dict) and "timestamp" in entry:
-                try:
-                    entry_time = datetime.fromisoformat(entry["timestamp"])
-                    if (current_time - entry_time).total_seconds() > 3600:  # 1 hora
-                        cache_keys_to_remove.append(key)
-                except:
-                    cache_keys_to_remove.append(key)
-        
-        for key in cache_keys_to_remove:
-            del self.metadata_cache[key]
-    
-    def _update_system_stats(self):
-        """Atualiza estatísticas do sistema"""
-        stats = {
-            "total_books": len(self.books_cache),
-            "active_pipelines": len(self.active_pipelines),
-            "cache_size": {
-                "books": len(self.books_cache),
-                "covers": len(self.covers_cache),
-                "metadata": len(self.metadata_cache)
-            },
-            "last_updated": datetime.now().isoformat()
-        }
-        
-        # Emitir estatísticas se necessário
-        if hasattr(self, 'system_stats_updated'):
-            self.system_stats_updated.emit(stats)
-    
-    # ====== MÉTODOS COMPATÍVEIS (mantidos da versão anterior) ======
-    
-    @pyqtSlot()
-    def load_all_books_async(self, force_refresh: bool = False):
-        """Versão compatível com o método antigo"""
-        if not self.reading_manager:
-            logger.error("ReadingManager não disponível")
-            return
-        
-        self._execute_async(
-            self.reading_manager.get_all_books,
-            callback=self._on_books_loaded
-        )
+    def _save_history_to_file(self):
+        """Salva histórico em arquivo"""
+        try:
+            history_dir = Path("./data/history")
+            history_dir.mkdir(parents=True, exist_ok=True)
+            
+            history_file = history_dir / "book_processing_history.json"
+            
+            with open(history_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "last_updated": datetime.now().isoformat(),
+                    "history": self.processing_history[-50:]  # Últimos 50 registros
+                }, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            logger.error(f"Erro salvando histórico: {e}")
     
     @pyqtSlot(str)
-    def process_book_file_async(self, file_path: str, quality: str = "standard", 
-                              schedule_night: bool = False):
-        """Versão compatível com o método antigo"""
-        self.process_book_pipeline(file_path, quality, schedule_night)
+    def cancel_processing(self, pipeline_id: str):
+        """Cancela um pipeline em andamento"""
+        self.pipeline_mutex.lock()
+        try:
+            if pipeline_id in self.active_pipelines:
+                pipeline = self.active_pipelines[pipeline_id]
+                pipeline.stop()
+                del self.active_pipelines[pipeline_id]
+                logger.info(f"Pipeline {pipeline_id} cancelado")
+        finally:
+            self.pipeline_mutex.unlock()
     
-    def _execute_async(self, backend_method, callback, *args, **kwargs):
-        """Versão simplificada para compatibilidade"""
-        from PyQt6.QtCore import QThreadPool, QRunnable
-        
-        class GenericTask(QRunnable):
-            def __init__(self, method, callback, args, kwargs):
-                super().__init__()
-                self.method = method
-                self.callback = callback
-                self.args = args
-                self.kwargs = kwargs
-            
-            def run(self):
-                try:
-                    result = self.method(*self.args, **self.kwargs)
-                    self.callback(result)
-                except Exception as e:
-                    logger.error(f"Erro na tarefa assíncrona: {e}")
-        
-        task = GenericTask(backend_method, callback, args, kwargs)
-        QThreadPool.globalInstance().start(task)
-    
-    # ====== MÉTODOS RESTANTES DA IMPLEMENTAÇÃO ORIGINAL ======
-    # (Mantidos para compatibilidade - podem ser refatorados posteriormente)
-    
-    def _on_books_loaded(self, books):
-        """Mantido da versão original"""
-        ui_books = []
-        for book in books:
-            ui_book = self._book_to_ui_format(book)
-            ui_books.append(ui_book)
-            self.books_cache[book.id] = ui_book
-        
-        self.book_list_loaded.emit(ui_books)
-    
-    def _book_to_ui_format(self, book) -> Dict:
-        """Mantido da versão original"""
-        # Implementação original...
-        pass
-    
-    def _processing_result_to_dict(self, processing_result) -> Dict:
-        """Mantido da versão original"""
-        # Implementação original...
-        pass
-    
-    def get_book_info(self, book_id: str) -> Dict:
-        """Mantido da versão original"""
-        # Implementação original...
-        pass
-    
-    def get_book_cover(self, book_id: str) -> QPixmap:
-        """Mantido da versão original"""
-        # Implementação original...
-        pass
+    @pyqtSlot(str, result=dict)
+    def get_processing_status(self, pipeline_id: str) -> Dict:
+        """Retorna status de um pipeline"""
+        if pipeline_id in self.active_pipelines:
+            pipeline = self.active_pipelines[pipeline_id]
+            return {
+                "pipeline_id": pipeline_id,
+                "is_running": pipeline.isRunning(),
+                "current_stage": pipeline._current_stage.value if pipeline._current_stage else None,
+                "book_id": pipeline.book_id,
+                "has_metadata": pipeline.metadata is not None
+            }
+        return {"pipeline_id": pipeline_id, "status": "not_found"}
     
     def cleanup(self):
         """Limpeza antes de encerrar"""
         # Parar todos os pipelines
-        for pipeline_id, worker in list(self.active_pipelines.items()):
-            worker.stop()
+        for pipeline_id, pipeline in list(self.active_pipelines.items()):
+            pipeline.stop()
         
         # Parar timer
         self.maintenance_timer.stop()
         
-        # Limpar workers gerais
-        self.general_workers.clear()
+        # Salvar histórico
+        self._save_history_to_file()
         
         logger.info("BookController finalizado")

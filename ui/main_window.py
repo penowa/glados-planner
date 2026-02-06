@@ -18,7 +18,6 @@ from core.monitoring.performance_monitor import PerformanceMonitor
 from core.recovery.state_recovery import StateRecoveryManager
 
 # UI Components
-from ui.widgets.navigation import NavigationBar
 from ui.utils.theme_manager import ThemeManager
 from ui.utils.shortcut_manager import ShortcutManager
 from ui.utils.responsive import ResponsiveManager
@@ -30,10 +29,6 @@ from ui.views.library import LibraryView
 from ui.views.agenda import AgendaView
 from ui.views.focus import FocusView
 from ui.views.concepts import ConceptsView
-#from ui.views.analytics import AnalyticsView
-#from ui.views.goals import GoalsView
-#from ui.views.glados import GladosView
-#from ui.views.settings import SettingsView
 
 # Controllers
 from ui.controllers.book_controller import BookController
@@ -41,9 +36,12 @@ from ui.controllers.agenda_controller import AgendaController
 from ui.controllers.focus_controller import FocusController
 from ui.controllers.glados_controller import GladosController
 from ui.controllers.reading_controller import ReadingController
+from ui.controllers.vault_controller import VaultController
+from ui.controllers.dashboard_controller import DashboardController
 
 import logging
 from typing import Dict, Any, List
+import os
 
 logger = logging.getLogger('GLaDOS.UI.MainWindow')
 
@@ -114,6 +112,9 @@ class MainWindow(QMainWindow):
     def init_controllers(self):
         """Inicializa controllers que integram backend e frontend"""
         try:
+            # Dashboard Controller
+            self.controllers['dashboard'] = DashboardController(self.backend_modules)
+            
             # Book Controller
             self.controllers['book'] = BookController(
                 self.backend_modules['book_processor'],
@@ -132,12 +133,17 @@ class MainWindow(QMainWindow):
             self.controllers['glados'] = GladosController(
                 self.backend_modules['llm_module']
             )
-            
+
             # Reading Controller
             self.controllers['reading'] = ReadingController(
                 self.backend_modules['reading_manager']
             )
-            
+        
+            # Vault Controller
+            self.controllers['vault'] = VaultController(
+                self.backend_modules.get('vault_manager')
+            )
+                    
             logger.info("Controllers initialized successfully")
             
         except Exception as e:
@@ -151,65 +157,21 @@ class MainWindow(QMainWindow):
         central_widget.setObjectName("main_central_widget")
         self.setCentralWidget(central_widget)
         
-        # Layout principal
-        main_layout = QHBoxLayout(central_widget)
+        # Layout principal - REMOVIDA BARRA LATERAL
+        main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # 1. Barra de navegação lateral
-        self.setup_navigation_bar()
-        main_layout.addWidget(self.nav_bar, 0)  # Não expande
-        
-        # 2. Separador vertical
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.VLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        separator.setObjectName("main_separator")
-        main_layout.addWidget(separator)
-        
-        # 3. Área de conteúdo principal
-        self.setup_content_area()
-        main_layout.addWidget(self.content_area, 1)  # Expande
-        
-        # 4. Status bar com informações do sistema
-        self.setup_status_bar()
-        
-        # 5. Toolbar customizada
-        self.setup_toolbar()
-        
-        # Inicializar todas as views
-        self.init_views()
-        
-        # Carrega o tema atual
-        ThemeManager.instance().load_theme(self.current_theme)
-    
-    def setup_navigation_bar(self):
-        """Configura barra de navegação lateral"""
-        self.nav_bar = NavigationBar()
-        self.nav_bar.setObjectName("navigation_bar")
-        
-        # Conectar sinal de mudança de view
-        self.nav_bar.view_changed.connect(self.change_view)
-    
-    def setup_content_area(self):
-        """Configura área de conteúdo principal"""
-        self.content_area = QWidget()
-        self.content_area.setObjectName("content_area")
-        
-        content_layout = QVBoxLayout(self.content_area)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-        
         # 1. Barra de título personalizada
         self.setup_title_bar()
-        content_layout.addWidget(self.title_bar, 0)
+        main_layout.addWidget(self.title_bar, 0)
         
         # 2. Separador
         title_separator = QFrame()
         title_separator.setFrameShape(QFrame.Shape.HLine)
         title_separator.setFrameShadow(QFrame.Shadow.Sunken)
         title_separator.setObjectName("title_separator")
-        content_layout.addWidget(title_separator)
+        main_layout.addWidget(title_separator)
         
         # 3. Stack de views (área principal)
         self.view_stack = QStackedWidget()
@@ -219,10 +181,22 @@ class MainWindow(QMainWindow):
         if self.animations_enabled:
             self.view_stack_transition = SlideAnimation(self.view_stack)
         
-        content_layout.addWidget(self.view_stack, 1)
+        main_layout.addWidget(self.view_stack, 1)
+        
+        # 4. Status bar com informações do sistema
+        self.setup_status_bar()
+        
+        # 5. Toolbar customizada (opcional, pode ser removida se não for necessária)
+        # self.setup_toolbar()
+        
+        # Inicializar todas as views
+        self.init_views()
+        
+        # Carrega o tema atual
+        ThemeManager.instance().load_theme(self.current_theme)
     
     def setup_title_bar(self):
-        """Configura barra de título personalizada"""
+        """Configura barra de título personalizada - ATUALIZADA COM NOVOS BOTÕES"""
         self.title_bar = QWidget()
         self.title_bar.setObjectName("title_bar")
         self.title_bar.setFixedHeight(60)
@@ -231,21 +205,13 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(20, 0, 20, 0)
         layout.setSpacing(15)
         
-        # Botão de menu (mobile)
-        self.menu_button = QPushButton("☰")
-        self.menu_button.setObjectName("menu_button")
-        self.menu_button.setFixedSize(40, 40)
-        self.menu_button.clicked.connect(self.toggle_navigation)
-        self.menu_button.setVisible(False)  # Escondido no desktop
-        layout.addWidget(self.menu_button)
-        
-        # Título da view atual
-        self.title_label = QLabel("Dashboard")
-        self.title_label.setObjectName("title_label")
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # Logo/título da aplicação
+        self.app_logo = QLabel("GLaDOS")
+        self.app_logo.setObjectName("app_logo")
+        self.app_logo.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         font = QFont("Georgia", 16, QFont.Weight.Bold)
-        self.title_label.setFont(font)
-        layout.addWidget(self.title_label)
+        self.app_logo.setFont(font)
+        layout.addWidget(self.app_logo)
         
         # Spacer
         layout.addStretch(1)
@@ -260,12 +226,12 @@ class MainWindow(QMainWindow):
         
         # Controles da janela
         controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(10)
+        controls_layout.setSpacing(5)  # Menor espaçamento
         
         # Botão de busca
         self.search_button = QPushButton("🔍")
         self.search_button.setObjectName("search_button")
-        self.search_button.setFixedSize(40, 40)
+        self.search_button.setFixedSize(36, 36)
         self.search_button.setToolTip("Busca global (Ctrl+S)")
         self.search_button.clicked.connect(self.show_search_dialog)
         controls_layout.addWidget(self.search_button)
@@ -273,7 +239,7 @@ class MainWindow(QMainWindow):
         # Botão de tema
         self.theme_button = QPushButton(self.get_theme_icon())
         self.theme_button.setObjectName("theme_button")
-        self.theme_button.setFixedSize(40, 40)
+        self.theme_button.setFixedSize(36, 36)
         self.theme_button.setToolTip("Alternar tema (Ctrl+T)")
         self.theme_button.clicked.connect(self.toggle_theme)
         controls_layout.addWidget(self.theme_button)
@@ -281,10 +247,26 @@ class MainWindow(QMainWindow):
         # Botão de ações rápidas
         self.quick_actions_button = QPushButton("⚡")
         self.quick_actions_button.setObjectName("quick_actions_button")
-        self.quick_actions_button.setFixedSize(40, 40)
+        self.quick_actions_button.setFixedSize(36, 36)
         self.quick_actions_button.setToolTip("Ações rápidas (Ctrl+Q)")
         self.quick_actions_button.clicked.connect(self.show_quick_actions)
         controls_layout.addWidget(self.quick_actions_button)
+        
+        # Botão de configurações - NOVO
+        self.settings_button = QPushButton("⚙️")
+        self.settings_button.setObjectName("settings_button")
+        self.settings_button.setFixedSize(36, 36)
+        self.settings_button.setToolTip("Configurações")
+        self.settings_button.clicked.connect(self.show_settings)
+        controls_layout.addWidget(self.settings_button)
+        
+        # Botão para encerrar - NOVO
+        self.quit_button = QPushButton("✕")
+        self.quit_button.setObjectName("quit_button")
+        self.quit_button.setFixedSize(36, 36)
+        self.quit_button.setToolTip("Encerrar aplicação")
+        self.quit_button.clicked.connect(self.close_application)
+        controls_layout.addWidget(self.quit_button)
         
         layout.addLayout(controls_layout)
     
@@ -297,12 +279,12 @@ class MainWindow(QMainWindow):
         
         self.notification_button = QPushButton("🔔")
         self.notification_button.setObjectName("notification_button")
-        self.notification_button.setFixedSize(40, 40)
+        self.notification_button.setFixedSize(36, 36)
         self.notification_button.clicked.connect(self.show_notifications)
         
         self.notification_count = QLabel("0")
         self.notification_count.setObjectName("notification_count")
-        self.notification_count.setFixedSize(20, 20)
+        self.notification_count.setFixedSize(18, 18)
         self.notification_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         layout.addWidget(self.notification_button)
@@ -320,7 +302,7 @@ class MainWindow(QMainWindow):
         
         self.performance_button = QPushButton("📈")
         self.performance_button.setObjectName("performance_button")
-        self.performance_button.setFixedSize(40, 40)
+        self.performance_button.setFixedSize(36, 36)
         self.performance_button.clicked.connect(self.show_performance_monitor)
         self.performance_button.setToolTip("Monitor de performance")
         
@@ -348,35 +330,18 @@ class MainWindow(QMainWindow):
         self.status_timer.start(5000)  # 5 segundos
     
     def setup_toolbar(self):
-        """Configura toolbar customizada"""
-        self.toolbar = QToolBar("Ferramentas")
-        self.toolbar.setObjectName("main_toolbar")
-        self.toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
-        
-        # Ações principais
-        actions = [
-            ('add_book', '📖', "Adicionar Livro", self.show_add_book_dialog, "Ctrl+N"),
-            ('add_note', '📝', "Nova Nota", self.show_add_note_dialog, "Ctrl+Shift+N"),
-            ('start_focus', '⏱️', "Iniciar Foco", self.start_focus_session, "Ctrl+P"),
-            ('quick_stats', '📊', "Estatísticas Rápidas", self.show_quick_stats, "Ctrl+E"),
-        ]
-        
-        for action_id, icon, text, callback, shortcut in actions:
-            action = QAction(icon + " " + text, self)
-            action.triggered.connect(callback)
-            action.setShortcut(shortcut)
-            self.toolbar.addAction(action)
+        """Configura toolbar customizada - REMOVIDA"""
+        pass
     
     def init_views(self):
         """Inicializa todas as views do sistema"""
         # Criar views com referências aos controllers
         self.views['dashboard'] = DashboardView(self.controllers)
         self.views['dashboard'].navigate_to.connect(self.change_view)
-        self.views['library'] =  LibraryView(self.controllers['reading'])
-        self.views['agenda'] = AgendaView(self.controllers['agenda'])
-        self.views['focus'] = FocusView(self.controllers['focus'])
-        self.views['concepts'] = ConceptsView(self.controllers['book'])
+        #self.views['library'] =  LibraryView(self.controllers['reading'])
+        #self.views['agenda'] = AgendaView(self.controllers['agenda'])
+        #self.views['focus'] = FocusView(self.controllers['focus'])
+        #self.views['concepts'] = ConceptsView(self.controllers['book'])
         #self.views['analytics'] = AnalyticsView(self.controllers)
         #self.views['goals'] = GoalsView(self.controllers['reading'])
         #self.views['glados'] = GladosView(self.controllers['glados'])
@@ -392,7 +357,6 @@ class MainWindow(QMainWindow):
         
         # Definir view inicial
         self.view_stack.setCurrentWidget(self.views['dashboard'])
-        self.nav_bar.set_active_view('dashboard')
     
     def setup_connections(self):
         """Configura todas as conexões entre sistemas"""
@@ -457,7 +421,7 @@ class MainWindow(QMainWindow):
             'Ctrl+S': self.show_search_dialog,
             'Ctrl+F': self.show_focus_mode,
             'Ctrl+G': lambda: self.change_view('glados'),
-            'Ctrl+Q': self.close,
+            'Ctrl+Q': self.close_application,
             'F1': self.show_help,
             'F5': self.refresh_current_view,
             
@@ -467,6 +431,7 @@ class MainWindow(QMainWindow):
             'Ctrl+P': self.start_focus_session,
             'Ctrl+E': self.show_quick_stats,
             'Ctrl+R': self.run_system_check,
+            'Ctrl+Shift+S': self.show_settings,  # NOVO: Atalho para configurações
         }
         
         for shortcut, callback in shortcuts.items():
@@ -501,29 +466,26 @@ class MainWindow(QMainWindow):
         old_view = self.current_view
         self.current_view = view_name
         
-        # Atualizar título
+        # Atualizar título do app_logo
         titles = {
-            'dashboard': 'Dashboard',
-            'library': 'Biblioteca Filosófica',
-            'agenda': 'Agenda Inteligente',
+            'dashboard': 'GLaDOS',
+            'library': 'Biblioteca',
+            'agenda': 'Agenda',
             'focus': 'Modo Foco',
-            'concepts': 'Rede de Conceitos',
-            'analytics': 'Estúdio de Progresso',
-            'goals': 'Nave de Metas',
-            'glados': 'Assistente GLaDOS',
-            'settings': 'Laboratório de Configurações'
+            'concepts': 'Conceitos',
+            'analytics': 'Analytics',
+            'goals': 'Metas',
+            'glados': 'GLaDOS',
+            'settings': 'Configurações'
         }
         
-        self.title_label.setText(titles.get(view_name, view_name))
+        self.app_logo.setText(titles.get(view_name, view_name))
         
         # Animar transição se habilitado
         if self.animations_enabled and hasattr(self, 'view_stack_transition'):
             self.view_stack_transition.transition_to(view_name)
         else:
             self.view_stack.setCurrentWidget(self.views[view_name])
-        
-        # Atualizar navegação
-        self.nav_bar.set_active_view(view_name)
         
         # Emitir sinal
         self.view_changed.emit(view_name)
@@ -587,6 +549,35 @@ class MainWindow(QMainWindow):
             'philosophy_night': 'Night Owl'
         }
         return names.get(theme_key, theme_key)
+    
+    # ============ NOVOS MÉTODOS PARA OS BOTÕES ============
+    
+    def show_settings(self):
+        """Mostra tela de configurações"""
+        from ui.views.settings import SettingsView
+        # Criar view de configurações se não existir
+        if 'settings' not in self.views:
+            self.views['settings'] = SettingsView(self.config)
+            self.view_stack.addWidget(self.views['settings'])
+        
+        self.change_view('settings')
+    
+    def close_application(self):
+        """Fecha a aplicação com confirmação"""
+        reply = QMessageBox.question(
+            self,
+            'Confirmar saída',
+            'Deseja realmente encerrar a aplicação?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.cleanup()
+            self.close()
+            # Fechar completamente a aplicação
+            from PyQt6.QtWidgets import QApplication
+            QApplication.instance().quit()
     
     # ============ HANDLERS DO EVENTBUS ============
     
@@ -860,7 +851,7 @@ class MainWindow(QMainWindow):
             if 'vault_manager' in self.backend_modules:
                 vault = self.backend_modules['vault_manager']
                 if hasattr(vault, 'is_connected') and vault.is_connected():
-                    vault_status = f"🔗 Vault: {vault.get_note_count()} notas"
+                    vault_status = f"🔗 Vault: {vault.get_all_notes()} notas"
             self.status_indicators['vault'].setText(vault_status)
             
             # Status do LLM
@@ -1041,9 +1032,8 @@ class MainWindow(QMainWindow):
                 logger.error(f"Erro no backup automático: {e}")
     
     def toggle_navigation(self):
-        """Alterna visibilidade da navegação (mobile)"""
-        visible = self.nav_bar.isVisible()
-        self.nav_bar.setVisible(not visible)
+        """Método mantido para compatibilidade, mas agora não faz nada"""
+        pass  # Navigation foi removida
     
     def fade_out_animation(self):
         """Animação de fade out"""

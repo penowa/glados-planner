@@ -121,6 +121,7 @@ class ReadingManager:
             progress = self.readings.get(book_id)
             if progress:
                 return {
+                    "id": progress.book_id,
                     "book_id": progress.book_id,
                     "title": progress.title,
                     "progress": f"{progress.current_page}/{progress.total_pages}",
@@ -133,6 +134,7 @@ class ReadingManager:
             result = {}
             for book_id, progress in self.readings.items():
                 result[book_id] = {
+                    "id": progress.book_id,
                     "book_id": progress.book_id,
                     "title": progress.title,
                     "progress": f"{progress.current_page}/{progress.total_pages}",
@@ -478,3 +480,9 @@ class ReadingManager:
         else:
             months = total_days / 30
             return f"{months:.1f} meses"
+
+    def reading_controller(self):
+        """Compatibilidade para código legado"""
+        return self
+    
+   
