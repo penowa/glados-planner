@@ -13,17 +13,17 @@
 
 </div>
 
-## ✨ Features
+##  Features
 
-- 📖 **Gestão Inteligente de Leituras** - Cronograma, progresso, revisão espaçada
-- 🗓️ **Agenda** - Calendário acadêmico integrado
-- 🧠 **Assistente LLM Local** - Análise de textos com modelos privados
-- 📝 **Integração Obsidian** - Sincronia bidirecional com seu vault
-- ⏱️ **Pomodoro** - Foco com citações inspiradoras
-- 🌐 **Tradução & Glossário** - Termos técnicos em grego/alemão
-- 📊 **Estatísticas** - Analytics de produtividade e aprendizado
+-  **Gestão Inteligente de Leituras** - Cronograma, progresso, revisão espaçada
+-  **Agenda** - Calendário acadêmico integrado
+-  **Assistente LLM Local** - Análise de textos com modelos privados
+-  **Integração Obsidian** - Sincronia bidirecional com seu vault
+-  **Pomodoro** - Foco com citações inspiradoras
+-  **Tradução & Glossário** - Termos técnicos em grego/alemão
+-  **Estatísticas** - Analytics de produtividade e aprendizado
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Pré-requisitos
 - Arch Linux (otimizado para Hyprland/Wayland)
@@ -34,7 +34,7 @@
 
 ```bash
 # Clone o repositório
-git clone https://github.com/seu-usuario/philosophy-planner.git
+git clone https://github.com/penowa/glados-planner.git
 cd philosophy-planner
 
 # Configure o ambiente
