@@ -205,6 +205,14 @@ class AgendaController(QObject):
         self.cache_cleanup_timer = QTimer()
         self.cache_cleanup_timer.timeout.connect(self._cleanup_old_cache)
         self.cache_cleanup_timer.start(300000)  # 5 minutos
+
+    def _auto_refresh(self):
+        """Refresh periódico leve para manter cache/estado da agenda atualizados."""
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            self.load_agenda(today)
+        except Exception as e:
+            logger.debug(f"Agenda auto-refresh ignorado por erro não fatal: {e}")
     
     # ====== AGENDAMENTO DE LEITURA (MÉTODO PRINCIPAL) ======
     

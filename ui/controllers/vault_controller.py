@@ -162,15 +162,44 @@ class VaultController(QObject):
         
         # Verificar conexão inicial
         self.check_vault_connection()
-    
-    def check_vault_connection(self):
-        """Verifica a conexão com o vault"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-        
+
+    def _stop_worker_thread(self, timeout_ms: int = 3000):
+        """Encerra thread ativa de forma segura antes de iniciar uma nova."""
+        thread = self.worker_thread
+        if not thread:
+            return
+
+        if thread.isRunning():
+            thread.quit()
+            if not thread.wait(timeout_ms):
+                logger.warning("VaultController: thread não encerrou no tempo, forçando término")
+                thread.terminate()
+                thread.wait(1000)
+
+        self.worker_thread = None
+        self.worker = None
+
+    def _setup_worker(self):
+        """Cria worker/thread e conecta finalização automática."""
+        self._stop_worker_thread()
+
         self.worker_thread = QThread()
         self.worker = VaultWorker(self.vault_manager)
         self.worker.moveToThread(self.worker_thread)
+
+        # Encerrar thread ao fim da operação (sucesso/erro).
+        self.worker.error_occurred.connect(self.worker_thread.quit)
+        self.worker.vault_connected.connect(self.worker_thread.quit)
+        self.worker.vault_stats_ready.connect(self.worker_thread.quit)
+        self.worker.sync_completed.connect(self.worker_thread.quit)
+
+    def cleanup(self):
+        """Limpa recursos de thread do controller."""
+        self._stop_worker_thread()
+    
+    def check_vault_connection(self):
+        """Verifica a conexão com o vault"""
+        self._setup_worker()
         
         # Conectar sinais do worker
         self.worker.vault_connected.connect(self._handle_vault_connected)
@@ -198,12 +227,7 @@ class VaultController(QObject):
     @pyqtSlot()
     def get_vault_stats(self):
         """Obtém estatísticas do vault (assíncrono)"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-        
-        self.worker_thread = QThread()
-        self.worker = VaultWorker(self.vault_manager)
-        self.worker.moveToThread(self.worker_thread)
+        self._setup_worker()
         
         # Conectar sinais
         self.worker.vault_stats_ready.connect(self._handle_vault_stats)
@@ -231,13 +255,7 @@ class VaultController(QObject):
     def sync_from_obsidian(self):
         """Inicia sincronização do Obsidian para o banco local"""
         self.sync_started.emit('from_obsidian')
-        
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-        
-        self.worker_thread = QThread()
-        self.worker = VaultWorker(self.vault_manager)
-        self.worker.moveToThread(self.worker_thread)
+        self._setup_worker()
         
         # Conectar sinais
         self.worker.sync_completed.connect(self._handle_sync_completed)
@@ -252,13 +270,7 @@ class VaultController(QObject):
     def sync_book_to_obsidian(self, book_id: int):
         """Sincroniza um livro específico para o Obsidian"""
         self.sync_started.emit(f'book_{book_id}_to_obsidian')
-        
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-        
-        self.worker_thread = QThread()
-        self.worker = VaultWorker(self.vault_manager)
-        self.worker.moveToThread(self.worker_thread)
+        self._setup_worker()
         
         # Conectar sinais
         self.worker.sync_completed.connect(self._handle_sync_completed)
@@ -275,13 +287,7 @@ class VaultController(QObject):
     def sync_all_to_obsidian(self):
         """Sincroniza todos os dados para o Obsidian"""
         self.sync_started.emit('all_to_obsidian')
-        
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-        
-        self.worker_thread = QThread()
-        self.worker = VaultWorker(self.vault_manager)
-        self.worker.moveToThread(self.worker_thread)
+        self._setup_worker()
         
         # Conectar sinais
         self.worker.sync_completed.connect(self._handle_sync_completed)
@@ -464,6 +470,13 @@ class VaultController(QObject):
         self.cache['notes'] = None
         self.cache['stats'] = None
         self.get_vault_stats()
+
+    def __del__(self):
+        """Garantir cleanup em destruição do objeto."""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
 
 # Factory para injeção de dependências

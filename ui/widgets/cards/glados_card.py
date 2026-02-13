@@ -45,9 +45,6 @@ class GladosCard(PhilosophyCard):
         self.mode_combo = None
         self.intensity_slider = None
         self.sarcasm_button = None
-        self.context_label = None
-        self.context_action_combo = None
-        self.context_run_button = None
         self.action_buttons = {}
         
         # Configurar UI primeiro
@@ -86,9 +83,6 @@ class GladosCard(PhilosophyCard):
         
         # Campo de entrada
         self.setup_input_area(main_layout)
-
-        # Ações baseadas no contexto selecionado do vault
-        self.setup_context_actions(main_layout)
         
         # Adicionar ao layout do card
         self.content_layout.addLayout(main_layout)
@@ -114,7 +108,7 @@ class GladosCard(PhilosophyCard):
         info_layout = QVBoxLayout(info_widget)
         info_layout.setSpacing(2)
         
-        self.name_label = QLabel("GLaDOS Assistant v2.0")
+        self.name_label = QLabel("GLaDOS Assistant v3.0")
         self.name_label.setObjectName("glados_name")
         font = QFont()
         font.setBold(True)
@@ -233,14 +227,11 @@ class GladosCard(PhilosophyCard):
         controls_layout = QHBoxLayout(controls_widget)
         controls_layout.setSpacing(8)
         
-        # Botões de ação rápida
+        # Botões de ação contextual (substitui ações antigas)
         actions = [
-            ("💭", "Pensar", "think", "Refletir sobre o último tópico"),
-            ("📚", "Contexto", "context", "Obter contexto semântico"),
-            ("🎯", "Focar", "focus", "Focar no tópico atual"),
-            ("🔗", "Relacionar", "relate", "Encontrar relações"),
-            ("📝", "Resumir", "summarize", "Resumir conversa"),
-            ("🔄", "Reformular", "rephrase", "Reformular última resposta")
+            ("💬", "Chat Contextual", "context_chat", "Conversar usando as notas selecionadas"),
+            ("🧠", "Pesquisa Semântica", "semantic_search", "Explorar relações semânticas das notas"),
+            ("📝", "Texto por Template", "template_text", "Gerar texto baseado em templates do backend"),
         ]
         
         for icon, text, action_id, tooltip in actions:
@@ -249,6 +240,7 @@ class GladosCard(PhilosophyCard):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setToolTip(tooltip)
             button.clicked.connect(lambda checked, a=action_id: self.on_quick_action(a))
+            button.setEnabled(False)
             controls_layout.addWidget(button)
             self.action_buttons[action_id] = button
             
@@ -290,31 +282,6 @@ class GladosCard(PhilosophyCard):
         
         parent_layout.addWidget(input_widget)
 
-    def setup_context_actions(self, parent_layout):
-        """Configura controles para executar ações com contexto confirmado."""
-        context_widget = QWidget()
-        context_layout = QHBoxLayout(context_widget)
-        context_layout.setContentsMargins(0, 0, 0, 0)
-        context_layout.setSpacing(8)
-
-        self.context_label = QLabel("Contexto do Vault: nenhum")
-        self.context_label.setObjectName("glados_context_label")
-
-        self.context_action_combo = QComboBox()
-        self.context_action_combo.addItem("Chat contextualizado", "context_chat")
-        self.context_action_combo.addItem("Pesquisa semântica", "semantic_search")
-        self.context_action_combo.addItem("Gerar texto por template", "template_text")
-
-        self.context_run_button = QPushButton("Executar")
-        self.context_run_button.setObjectName("primary_button")
-        self.context_run_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.context_run_button.clicked.connect(self.execute_context_action)
-
-        context_layout.addWidget(self.context_label, 1)
-        context_layout.addWidget(self.context_action_combo)
-        context_layout.addWidget(self.context_run_button)
-        parent_layout.addWidget(context_widget)
-        
     def setup_animations(self):
         """Configurar animações do GLaDOS"""
         # Verificar se avatar_label existe (deve existir após setup_ui)
@@ -431,7 +398,7 @@ class GladosCard(PhilosophyCard):
     def on_quick_action(self, action_id):
         """Processar ação rápida"""
         self.ui_action_selected.emit(action_id)
-        self.add_message_to_chat(f"Ação: {action_id}", "system")
+        self.execute_context_action(action_id)
         
     @pyqtSlot(str)
     def on_mode_changed(self, mode):
@@ -586,7 +553,8 @@ class GladosCard(PhilosophyCard):
         
     def load_initial_state(self):
         """Carregar estado inicial"""
-        self.add_message_to_chat("GLaDOS inicializado. Como posso ajudar?", "assistant")
+        self.add_message_to_chat("GLaDOS inicializada. Como posso ajudar?", "assistant")
+        self.add_message_to_chat("Selecione notas no card do Vault para habilitar ações contextuais.", "system")
 
     @pyqtSlot(dict)
     def apply_vault_context(self, payload):
@@ -595,11 +563,13 @@ class GladosCard(PhilosophyCard):
         self.current_context_payload = payload
 
         if not notes:
-            self.context_label.setText("Contexto do Vault: nenhum")
+            self._set_context_actions_enabled(False)
+            self.stats_label.setText("Contexto: 0 notas")
             self.add_message_to_chat("Nenhuma nota foi selecionada para contexto.", "system")
             return
 
-        self.context_label.setText(f"Contexto do Vault: {len(notes)} nota(s)")
+        self._set_context_actions_enabled(True)
+        self.stats_label.setText(f"Contexto: {len(notes)} nota(s)")
         titles = [note.get("title", "Sem título") for note in notes[:6]]
         notes_preview = "\n".join([f"- {title}" for title in titles])
 
@@ -622,11 +592,9 @@ class GladosCard(PhilosophyCard):
                 "assistant",
             )
 
-    @pyqtSlot()
-    def execute_context_action(self):
+    @pyqtSlot(str)
+    def execute_context_action(self, action_id):
         """Executa ação escolhida para o contexto atual."""
-        action_id = self.context_action_combo.currentData()
-
         if not self.current_context_payload.get("notes"):
             self.add_message_to_chat("Selecione e confirme notas no card do vault primeiro.", "system")
             return
@@ -655,6 +623,11 @@ class GladosCard(PhilosophyCard):
                 "Chat contextualizado ativado. Faça sua pergunta e vou considerar o contexto selecionado.",
                 "system",
             )
+
+    def _set_context_actions_enabled(self, enabled: bool):
+        """Habilita ou desabilita botões de ação contextual."""
+        for button in self.action_buttons.values():
+            button.setEnabled(enabled)
         
     def animate_avatar(self):
         """Animar avatar do GLaDOS"""

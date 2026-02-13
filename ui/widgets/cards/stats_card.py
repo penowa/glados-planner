@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QGridLayout, QProgressBar, QToolTip,
                             QLineEdit, QTreeWidget, QTreeWidgetItem, QAbstractItemView)
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QRectF
 from PyQt6.QtGui import (QPainter, QColor, QLinearGradient, QFont, 
                         QPen, QBrush, QFontMetrics, QIcon)
 
@@ -34,6 +34,7 @@ class VaultStatsCard(PhilosophyCard):
         self.connection_status = False
         self.last_sync_time = None
         self.all_notes: List[Dict[str, Any]] = []
+        self.selected_note_paths = set()
         
         # Timer para atualização periódica
         self.refresh_timer = QTimer()
@@ -74,19 +75,6 @@ class VaultStatsCard(PhilosophyCard):
         # Estatísticas principais
         self.stats_grid = self.create_stats_grid()
         self.vault_content_layout.addWidget(self.stats_grid)
-        
-        # Gráficos
-        self.charts_container = QWidget()
-        self.charts_layout = QHBoxLayout(self.charts_container)
-        self.charts_layout.setSpacing(15)
-        
-        self.type_chart = TypeChartWidget()
-        self.tag_chart = TagChartWidget()
-        
-        self.charts_layout.addWidget(self.type_chart)
-        self.charts_layout.addWidget(self.tag_chart)
-        
-        self.vault_content_layout.addWidget(self.charts_container)
 
         # Estrutura visual do vault + seleção de contexto
         self.notes_section = self.create_notes_context_section()
@@ -128,9 +116,31 @@ class VaultStatsCard(PhilosophyCard):
         self.notes_tree.setColumnCount(3)
         self.notes_tree.setHeaderLabels(["Nota", "Pasta", "Tags"])
         self.notes_tree.setRootIsDecorated(True)
-        self.notes_tree.setAlternatingRowColors(True)
+        self.notes_tree.setAlternatingRowColors(False)
         self.notes_tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.notes_tree.itemChanged.connect(self._on_tree_item_changed)
+        self.notes_tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: #1A2E47;
+                border: 1px solid #2E4D74;
+                border-radius: 6px;
+                color: #D6E6FF;
+            }
+            QTreeWidget::item {
+                border: none;
+                padding: 3px 4px;
+            }
+            QTreeWidget::item:selected {
+                background-color: #3E6AA1;
+                color: #FFFFFF;
+            }
+            QHeaderView::section {
+                background-color: #223A5A;
+                color: #DCEBFF;
+                border: none;
+                padding: 4px;
+            }
+        """)
         layout.addWidget(self.notes_tree, 1)
 
         actions_row = QHBoxLayout()
@@ -138,7 +148,7 @@ class VaultStatsCard(PhilosophyCard):
         self.clear_selection_btn = QPushButton("Limpar seleção")
         self.clear_selection_btn.clicked.connect(self.clear_selected_notes)
 
-        self.confirm_context_btn = QPushButton("Confirmar contexto")
+        self.confirm_context_btn = QPushButton("Enviar contexto para a GLaDOS")
         self.confirm_context_btn.clicked.connect(self.confirm_selected_context)
 
         actions_row.addWidget(self.clear_selection_btn)
@@ -280,9 +290,12 @@ class VaultStatsCard(PhilosophyCard):
         """Carrega notas do vault para exibição visual."""
         try:
             self.all_notes = self.controller.get_all_notes()
+            available_paths = {note.get("path") for note in self.all_notes if note.get("path")}
+            self.selected_note_paths = {p for p in self.selected_note_paths if p in available_paths}
             self.refresh_notes_tree()
         except Exception:
             self.all_notes = []
+            self.selected_note_paths.clear()
             self.refresh_notes_tree()
 
     def refresh_notes_tree(self):
@@ -291,7 +304,7 @@ class VaultStatsCard(PhilosophyCard):
             return
 
         filter_text = self.notes_filter_input.text().strip().lower() if hasattr(self, "notes_filter_input") else ""
-        selected_paths = set(self.get_selected_note_paths())
+        selected_paths = set(self.selected_note_paths)
 
         folders: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for note in self.all_notes:
@@ -306,9 +319,12 @@ class VaultStatsCard(PhilosophyCard):
             notes = folders[folder_name]
             folder_item = QTreeWidgetItem([f"{folder_name} ({len(notes)})", "", ""])
             folder_item.setFlags(folder_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            folder_item.setBackground(0, QBrush(QColor("#1A304F")))
+            folder_item.setForeground(0, QBrush(QColor("#E4EEFF")))
             self.notes_tree.addTopLevelItem(folder_item)
 
-            for note in sorted(notes, key=lambda n: n.get("title", "").lower()):
+            sorted_notes = sorted(notes, key=lambda n: n.get("title", "").lower())
+            for idx, note in enumerate(sorted_notes):
                 note_item = QTreeWidgetItem([
                     f"{note.get('icon', '📝')} {note.get('title', 'Sem título')}",
                     folder_name,
@@ -317,6 +333,14 @@ class VaultStatsCard(PhilosophyCard):
                 note_item.setFlags(note_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 path = note.get("path", "")
                 note_item.setData(0, Qt.ItemDataRole.UserRole, note)
+                row_color = QColor("#223A5A") if idx % 2 == 0 else QColor("#29466C")
+                text_color = QBrush(QColor("#D8E8FF"))
+                note_item.setBackground(0, QBrush(row_color))
+                note_item.setBackground(1, QBrush(row_color))
+                note_item.setBackground(2, QBrush(row_color))
+                note_item.setForeground(0, text_color)
+                note_item.setForeground(1, text_color)
+                note_item.setForeground(2, text_color)
                 note_item.setCheckState(
                     0,
                     Qt.CheckState.Checked if path in selected_paths else Qt.CheckState.Unchecked
@@ -356,6 +380,13 @@ class VaultStatsCard(PhilosophyCard):
         """Atualiza contador quando checkboxes mudam."""
         if item.childCount() > 0:
             return
+        note = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        note_path = note.get("path")
+        if note_path:
+            if item.checkState(0) == Qt.CheckState.Checked:
+                self.selected_note_paths.add(note_path)
+            else:
+                self.selected_note_paths.discard(note_path)
         self._update_selected_count_label()
 
     def _iter_leaf_items(self):
@@ -367,33 +398,20 @@ class VaultStatsCard(PhilosophyCard):
 
     def get_selected_note_paths(self) -> List[str]:
         """Retorna caminhos das notas selecionadas."""
-        paths = []
-        if not hasattr(self, "notes_tree"):
-            return paths
-
-        for item in self._iter_leaf_items():
-            if item.checkState(0) == Qt.CheckState.Checked:
-                note = item.data(0, Qt.ItemDataRole.UserRole) or {}
-                note_path = note.get("path")
-                if note_path:
-                    paths.append(note_path)
-        return paths
+        return sorted(self.selected_note_paths)
 
     def get_selected_notes(self) -> List[Dict[str, Any]]:
         """Retorna metadados das notas selecionadas."""
         selected = []
-        if not hasattr(self, "notes_tree"):
-            return selected
-
-        for item in self._iter_leaf_items():
-            if item.checkState(0) == Qt.CheckState.Checked:
-                note = item.data(0, Qt.ItemDataRole.UserRole)
-                if note:
-                    selected.append(note)
+        for note in self.all_notes:
+            note_path = note.get("path")
+            if note_path and note_path in self.selected_note_paths:
+                selected.append(note)
         return selected
 
     def clear_selected_notes(self):
         """Limpa seleção de notas."""
+        self.selected_note_paths.clear()
         if not hasattr(self, "notes_tree"):
             return
         self.notes_tree.blockSignals(True)
@@ -476,13 +494,6 @@ class VaultStatsCard(PhilosophyCard):
         vault_size = stats.get('vault_size_mb', 0)
         self.vault_size_label[1].setText(f"{vault_size:.1f} MB")
         
-        # Atualizar gráficos
-        type_counts = stats.get('type_counts', {})
-        tag_counts = stats.get('tag_counts', {})
-        
-        self.type_chart.update_data(type_counts)
-        self.tag_chart.update_data(tag_counts)
-        
     def update_last_sync_label(self):
         """Atualizar label da última sincronização"""
         if self.last_sync_time:
@@ -564,64 +575,60 @@ class TypeChartWidget(QWidget):
     def paintEvent(self, event):
         """Desenhar gráfico de barras horizontais"""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        if not self.data:
-            self.draw_no_data_message(painter)
-            return
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
-        # Configurar área
-        margin = 10
-        chart_height = self.height() - 40
-        chart_width = self.width() - 120
-        
-        # Calcular máximo para escala
-        max_value = max(self.data.values()) if self.data.values() else 1
-        
-        # Cores para as barras
-        colors = [
-            QColor(85, 107, 47),   # Verde oliva
-            QColor(139, 115, 85),  # Sépia
-            QColor(128, 0, 0),     # Vermelho escuro
-            QColor(72, 61, 139),   # Azul escuro
-            QColor(139, 69, 19),   # Marrom sela
-        ]
-        
-        # Desenhar barras
-        bar_height = (chart_height - (len(self.data) - 1) * 15) / len(self.data)
-        y = margin
-        
-        for i, (label, value) in enumerate(self.data.items()):
-            # Barra
-            bar_width = (value / max_value) * chart_width
+            if not self.data:
+                self.draw_no_data_message(painter)
+                return
+                
+            # Configurar área
+            margin = 10
+            chart_height = self.height() - 40
+            chart_width = self.width() - 120
             
-            gradient = QLinearGradient(0, y, bar_width, y + bar_height)
-            gradient.setColorAt(0, colors[i % len(colors)])
-            gradient.setColorAt(1, colors[i % len(colors)].darker(120))
+            # Calcular máximo para escala
+            max_value = max(self.data.values()) if self.data.values() else 1
             
-            painter.setBrush(QBrush(gradient))
-            painter.setPen(QPen(QColor(60, 60, 60), 1))
-            painter.drawRoundedRect(margin, y, bar_width, bar_height, 3, 3)
+            # Cores para as barras
+            colors = [
+                QColor(85, 107, 47),   # Verde oliva
+                QColor(139, 115, 85),  # Sépia
+                QColor(128, 0, 0),     # Vermelho escuro
+                QColor(72, 61, 139),   # Azul escuro
+                QColor(139, 69, 19),   # Marrom sela
+            ]
             
-            # Rótulo e valor
-            painter.setPen(QColor(200, 200, 200))
+            # Desenhar barras
+            bar_height = (chart_height - (len(self.data) - 1) * 15) / len(self.data)
+            y = float(margin)
             
-            # Label
-            label_text = label if len(label) <= 12 else label[:10] + "..."
-            painter.drawText(margin + bar_width + 10, y + bar_height / 2 + 4, label_text)
-            
-            # Valor
-            value_text = str(value)
-            value_width = painter.fontMetrics().horizontalAdvance(value_text)
-            painter.drawText(margin + bar_width - value_width - 5, 
-                           y + bar_height / 2 + 4, value_text)
-            
-            y += bar_height + 15
-            
-        # Título
-        painter.setPen(QColor(150, 150, 150))
-        painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-        painter.drawText(margin, 15, "Tipos de Notas")
+            for i, (label, value) in enumerate(self.data.items()):
+                bar_width = (value / max_value) * chart_width
+                
+                gradient = QLinearGradient(0.0, y, bar_width, y + bar_height)
+                gradient.setColorAt(0, colors[i % len(colors)])
+                gradient.setColorAt(1, colors[i % len(colors)].darker(120))
+                
+                painter.setBrush(QBrush(gradient))
+                painter.setPen(QPen(QColor(60, 60, 60), 1))
+                painter.drawRoundedRect(QRectF(float(margin), y, float(bar_width), float(bar_height)), 3.0, 3.0)
+                
+                painter.setPen(QColor(200, 200, 200))
+                label_text = label if len(label) <= 12 else label[:10] + "..."
+                painter.drawText(int(margin + bar_width + 10), int(y + bar_height / 2 + 4), label_text)
+                
+                value_text = str(value)
+                value_width = painter.fontMetrics().horizontalAdvance(value_text)
+                painter.drawText(int(margin + bar_width - value_width - 5), int(y + bar_height / 2 + 4), value_text)
+                
+                y += bar_height + 15
+                
+            painter.setPen(QColor(150, 150, 150))
+            painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+            painter.drawText(margin, 15, "Tipos de Notas")
+        finally:
+            painter.end()
         
     def draw_no_data_message(self, painter):
         """Desenhar mensagem quando não há dados"""
@@ -654,58 +661,54 @@ class TagChartWidget(QWidget):
     def paintEvent(self, event):
         """Desenhar nuvem de tags"""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        if not self.data:
-            self.draw_no_data_message(painter)
-            return
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
-        # Calcular tamanho máximo e mínimo
-        max_value = max(self.data.values()) if self.data.values() else 1
-        min_value = min(self.data.values()) if self.data.values() else 1
-        
-        # Cores para tags
-        colors = [
-            QColor(107, 142, 35),   # Verde oliva claro
-            QColor(160, 82, 45),    # Sienna
-            QColor(153, 50, 204),   # Roxo médio
-            QColor(0, 139, 139),    # Ciano escuro
-            QColor(139, 0, 139),    # Magenta escuro
-        ]
-        
-        # Posicionar tags
-        center_x = self.width() // 2
-        center_y = self.height() // 2 - 10
-        radius = min(center_x, center_y) - 20
-        
-        import math
-        angle_step = 2 * math.pi / len(self.data)
-        
-        for i, (tag, value) in enumerate(self.data.items()):
-            # Tamanho da fonte baseado na frequência
-            font_size = 10 + int((value - min_value) / (max_value - min_value) * 8)
-            font = QFont("Arial", font_size, QFont.Weight.Bold)
-            painter.setFont(font)
+            if not self.data:
+                self.draw_no_data_message(painter)
+                return
+                
+            max_value = max(self.data.values()) if self.data.values() else 1
+            min_value = min(self.data.values()) if self.data.values() else 1
+            span = max(1, max_value - min_value)
             
-            # Cor baseada na posição
-            color = colors[i % len(colors)]
-            painter.setPen(QPen(color, 1))
+            colors = [
+                QColor(107, 142, 35),   # Verde oliva claro
+                QColor(160, 82, 45),    # Sienna
+                QColor(153, 50, 204),   # Roxo médio
+                QColor(0, 139, 139),    # Ciano escuro
+                QColor(139, 0, 139),    # Magenta escuro
+            ]
             
-            # Posição na nuvem (layout circular)
-            angle = i * angle_step + (math.pi / 8)  # Offset para melhor distribuição
-            x = center_x + radius * math.cos(angle) * 0.7
-            y = center_y + radius * math.sin(angle) * 0.7
+            center_x = self.width() // 2
+            center_y = self.height() // 2 - 10
+            radius = min(center_x, center_y) - 20
             
-            # Ajustar posição para centralizar texto
-            text_width = painter.fontMetrics().horizontalAdvance(tag)
-            text_height = painter.fontMetrics().height()
+            import math
+            angle_step = 2 * math.pi / len(self.data)
             
-            painter.drawText(int(x - text_width / 2), int(y + text_height / 3), tag)
-            
-        # Título
-        painter.setPen(QColor(150, 150, 150))
-        painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-        painter.drawText(10, 15, "Tags Mais Usadas")
+            for i, (tag, value) in enumerate(self.data.items()):
+                font_size = 10 + int((value - min_value) / span * 8)
+                font = QFont("Arial", font_size, QFont.Weight.Bold)
+                painter.setFont(font)
+                
+                color = colors[i % len(colors)]
+                painter.setPen(QPen(color, 1))
+                
+                angle = i * angle_step + (math.pi / 8)
+                x = center_x + radius * math.cos(angle) * 0.7
+                y = center_y + radius * math.sin(angle) * 0.7
+                
+                text_width = painter.fontMetrics().horizontalAdvance(tag)
+                text_height = painter.fontMetrics().height()
+                
+                painter.drawText(int(x - text_width / 2), int(y + text_height / 3), tag)
+                
+            painter.setPen(QColor(150, 150, 150))
+            painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+            painter.drawText(10, 15, "Tags Mais Usadas")
+        finally:
+            painter.end()
         
     def draw_no_data_message(self, painter):
         """Desenhar mensagem quando não há dados"""

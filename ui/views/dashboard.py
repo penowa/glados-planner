@@ -16,6 +16,7 @@ from ui.widgets.cards.glados_card import GladosCard
 from ui.widgets.cards.stats_card import VaultStatsCard
 from ui.widgets.cards.event_creation_card import EventCreationDialog
 from ui.widgets.dialogs.weekly_event_editor_dialog import WeeklyEventEditorDialog
+from ui.controllers.vault_controller import VaultController
 
 logger = logging.getLogger('GLaDOS.UI.Dashboard')
 
@@ -35,7 +36,7 @@ class DashboardView(QWidget):
         self.agenda_controller = controllers.get('agenda') if controllers else None
         self.reading_controller = controllers.get('reading') if controllers else None
         self.glados_controller = controllers.get('glados') if controllers else None
-        self.vault_controller = controllers.get('vault') if controllers else None
+        self.vault_controller = self._resolve_vault_controller()
         self.agenda_backend = self._resolve_agenda_backend()
         
         # Cards
@@ -70,6 +71,40 @@ class DashboardView(QWidget):
         if self.book_controller and hasattr(self.book_controller, "agenda_controller"):
             return self.book_controller.agenda_controller
 
+        return None
+
+    def _resolve_vault_controller(self):
+        """Resolve VaultController com fallback para evitar placeholder 'não configurado'."""
+        if self.controllers and self.controllers.get("vault"):
+            return self.controllers.get("vault")
+
+        # Fallback 1: reutilizar vault_manager do BookController
+        if self.book_controller and hasattr(self.book_controller, "vault_manager"):
+            vault_manager = getattr(self.book_controller, "vault_manager", None)
+            if vault_manager and hasattr(vault_manager, "vault_path"):
+                try:
+                    controller = VaultController(str(vault_manager.vault_path))
+                    if self.controllers is not None:
+                        self.controllers["vault"] = controller
+                    logger.info("VaultController resolvido via book_controller.vault_manager")
+                    return controller
+                except Exception as e:
+                    logger.warning(f"Falha ao criar VaultController via BookController: {e}")
+
+        # Fallback 2: usar path do settings
+        try:
+            from core.config.settings import settings as core_settings
+            vault_path = str(core_settings.paths.vault)
+            if vault_path:
+                controller = VaultController(vault_path)
+                if self.controllers is not None:
+                    self.controllers["vault"] = controller
+                logger.info("VaultController resolvido via core.config.settings")
+                return controller
+        except Exception as e:
+            logger.warning(f"Falha ao resolver VaultController via settings: {e}")
+
+        logger.warning("VaultController indisponível: dashboard usará placeholder")
         return None
     
     def setup_ui(self):

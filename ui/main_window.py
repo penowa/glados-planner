@@ -111,47 +111,34 @@ class MainWindow(QMainWindow):
     
     def init_controllers(self):
         """Inicializa controllers que integram backend e frontend"""
-        try:
-            # Dashboard Controller
-            self.controllers['dashboard'] = DashboardController(self.backend_modules)
-            
-            # Book Controller
-            self.controllers['book'] = BookController(
+        def _safe_init(name, factory):
+            try:
+                self.controllers[name] = factory()
+                logger.info(f"Controller '{name}' inicializado")
+            except Exception as e:
+                self.error_manager.handle_error(e)
+                logger.error(f"Falha ao inicializar controller '{name}': {e}")
+
+        # Priorizar vault cedo para habilitar stats card mesmo se outro módulo falhar.
+        _safe_init(
+            'vault',
+            lambda: VaultController(str(self.backend_modules['vault_manager'].vault_path))
+        )
+        _safe_init('dashboard', lambda: DashboardController(self.backend_modules))
+        _safe_init(
+            'book',
+            lambda: BookController(
                 pdf_processor=self.backend_modules['book_processor'],
                 book_processor=self.backend_modules['book_processor'],
                 reading_manager=self.backend_modules['reading_manager'],
                 agenda_controller=self.backend_modules.get('agenda_manager'),
                 vault_manager=self.backend_modules.get('vault_manager')
             )
-            
-            # Agenda Controller
-            self.controllers['agenda'] = AgendaController(
-                self.backend_modules['agenda_manager']
-            )
-            
-            # Focus Controller
-            self.controllers['focus'] = FocusController()
-            
-            # GLaDOS Controller
-            self.controllers['glados'] = GladosController(
-                self.backend_modules['llm_module']
-            )
-
-            # Reading Controller
-            self.controllers['reading'] = ReadingController(
-                self.backend_modules['reading_manager']
-            )
-        
-            # Vault Controller
-            self.controllers['vault'] = VaultController(
-                str(self.backend_modules['vault_manager'].vault_path)
-            )
-                    
-            logger.info("Controllers initialized successfully")
-            
-        except Exception as e:
-            self.error_manager.handle_error(e)
-            logger.error(f"Failed to initialize controllers: {e}")
+        )
+        _safe_init('agenda', lambda: AgendaController(self.backend_modules['agenda_manager']))
+        _safe_init('focus', lambda: FocusController())
+        _safe_init('glados', lambda: GladosController(self.backend_modules['llm_module']))
+        _safe_init('reading', lambda: ReadingController(self.backend_modules['reading_manager']))
     
     def setup_ui(self):
         """Configura interface principal com todos os componentes"""
