@@ -5,9 +5,12 @@ Integrado com VaultController para dados em tempo real.
 """
 
 import json
-from typing import Dict, Any
+from collections import defaultdict
+from pathlib import Path
+from typing import Dict, Any, List
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                            QPushButton, QGridLayout, QProgressBar, QToolTip)
+                            QPushButton, QGridLayout, QProgressBar, QToolTip,
+                            QLineEdit, QTreeWidget, QTreeWidgetItem, QAbstractItemView)
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint
 from PyQt6.QtGui import (QPainter, QColor, QLinearGradient, QFont, 
                         QPen, QBrush, QFontMetrics, QIcon)
@@ -22,6 +25,7 @@ class VaultStatsCard(PhilosophyCard):
     # Sinais
     sync_requested = pyqtSignal(str)  # 'from_obsidian', 'to_obsidian', 'all'
     refresh_requested = pyqtSignal()
+    context_confirmed = pyqtSignal(dict)  # contexto de notas selecionadas
     
     def __init__(self, vault_controller: VaultController, parent=None):
         super().__init__(parent)
@@ -29,6 +33,7 @@ class VaultStatsCard(PhilosophyCard):
         self.stats_data = {}
         self.connection_status = False
         self.last_sync_time = None
+        self.all_notes: List[Dict[str, Any]] = []
         
         # Timer para atualização periódica
         self.refresh_timer = QTimer()
@@ -51,29 +56,24 @@ class VaultStatsCard(PhilosophyCard):
             color: #8B7355;
         """)
         
-        # Adicionar botões de ação ao cabeçalho
-        header_layout = QHBoxLayout()
-        header_layout.addWidget(self.title_label)
-        
         # Botões de ação
         self.setup_action_buttons()
+        self.footer_layout.addStretch()
         for btn in [self.sync_from_btn, self.sync_to_btn, self.refresh_btn]:
-            header_layout.addWidget(btn)
+            self.footer_layout.addWidget(btn)
         
-        self.header_layout = header_layout
-        
-        # Área de conteúdo
-        self.content_widget = QWidget()
-        self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setSpacing(10)
+        # Área de conteúdo principal do card
+        self.vault_content_widget = QWidget()
+        self.vault_content_layout = QVBoxLayout(self.vault_content_widget)
+        self.vault_content_layout.setSpacing(10)
         
         # Status de conexão
         self.status_widget = self.create_status_widget()
-        self.content_layout.addWidget(self.status_widget)
+        self.vault_content_layout.addWidget(self.status_widget)
         
         # Estatísticas principais
         self.stats_grid = self.create_stats_grid()
-        self.content_layout.addWidget(self.stats_grid)
+        self.vault_content_layout.addWidget(self.stats_grid)
         
         # Gráficos
         self.charts_container = QWidget()
@@ -86,16 +86,67 @@ class VaultStatsCard(PhilosophyCard):
         self.charts_layout.addWidget(self.type_chart)
         self.charts_layout.addWidget(self.tag_chart)
         
-        self.content_layout.addWidget(self.charts_container)
+        self.vault_content_layout.addWidget(self.charts_container)
+
+        # Estrutura visual do vault + seleção de contexto
+        self.notes_section = self.create_notes_context_section()
+        self.vault_content_layout.addWidget(self.notes_section, 1)
         
         # Barra de progresso da sincronização
         self.sync_progress_bar = QProgressBar()
         self.sync_progress_bar.setVisible(False)
         self.sync_progress_bar.setTextVisible(True)
         self.sync_progress_bar.setFormat("Sincronizando... %p%")
-        self.content_layout.addWidget(self.sync_progress_bar)
-        
-        self.content_area_layout.addWidget(self.content_widget)
+        self.vault_content_layout.addWidget(self.sync_progress_bar)
+        self.content_layout.addWidget(self.vault_content_widget)
+
+    def create_notes_context_section(self) -> QWidget:
+        """Cria seção de estrutura do vault e seleção de notas para contexto."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        section_title = QLabel("🗂️ Estrutura do Vault")
+        section_title.setStyleSheet("color: #CCCCCC; font-weight: bold;")
+
+        self.selected_count_label = QLabel("0 notas selecionadas")
+        self.selected_count_label.setStyleSheet("color: #888888; font-size: 11px;")
+
+        header.addWidget(section_title)
+        header.addStretch()
+        header.addWidget(self.selected_count_label)
+        layout.addLayout(header)
+
+        self.notes_filter_input = QLineEdit()
+        self.notes_filter_input.setPlaceholderText("Filtrar notas por título, pasta ou tag...")
+        self.notes_filter_input.textChanged.connect(self.refresh_notes_tree)
+        layout.addWidget(self.notes_filter_input)
+
+        self.notes_tree = QTreeWidget()
+        self.notes_tree.setColumnCount(3)
+        self.notes_tree.setHeaderLabels(["Nota", "Pasta", "Tags"])
+        self.notes_tree.setRootIsDecorated(True)
+        self.notes_tree.setAlternatingRowColors(True)
+        self.notes_tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.notes_tree.itemChanged.connect(self._on_tree_item_changed)
+        layout.addWidget(self.notes_tree, 1)
+
+        actions_row = QHBoxLayout()
+
+        self.clear_selection_btn = QPushButton("Limpar seleção")
+        self.clear_selection_btn.clicked.connect(self.clear_selected_notes)
+
+        self.confirm_context_btn = QPushButton("Confirmar contexto")
+        self.confirm_context_btn.clicked.connect(self.confirm_selected_context)
+
+        actions_row.addWidget(self.clear_selection_btn)
+        actions_row.addStretch()
+        actions_row.addWidget(self.confirm_context_btn)
+        layout.addLayout(actions_row)
+
+        return widget
         
     def setup_action_buttons(self):
         """Configurar botões de ação"""
@@ -217,11 +268,161 @@ class VaultStatsCard(PhilosophyCard):
     def load_initial_data(self):
         """Carregar dados iniciais"""
         self.refresh_data()
+        self.load_notes_data()
         
     @pyqtSlot()
     def refresh_data(self):
         """Atualizar dados do vault"""
         self.controller.get_vault_stats()
+        self.load_notes_data()
+
+    def load_notes_data(self):
+        """Carrega notas do vault para exibição visual."""
+        try:
+            self.all_notes = self.controller.get_all_notes()
+            self.refresh_notes_tree()
+        except Exception:
+            self.all_notes = []
+            self.refresh_notes_tree()
+
+    def refresh_notes_tree(self):
+        """Atualiza árvore de notas com base no filtro atual."""
+        if not hasattr(self, "notes_tree"):
+            return
+
+        filter_text = self.notes_filter_input.text().strip().lower() if hasattr(self, "notes_filter_input") else ""
+        selected_paths = set(self.get_selected_note_paths())
+
+        folders: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for note in self.all_notes:
+            folder = self._extract_folder(note.get("path", ""))
+            if self._note_matches_filter(note, filter_text, folder):
+                folders[folder].append(note)
+
+        self.notes_tree.blockSignals(True)
+        self.notes_tree.clear()
+
+        for folder_name in sorted(folders.keys()):
+            notes = folders[folder_name]
+            folder_item = QTreeWidgetItem([f"{folder_name} ({len(notes)})", "", ""])
+            folder_item.setFlags(folder_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self.notes_tree.addTopLevelItem(folder_item)
+
+            for note in sorted(notes, key=lambda n: n.get("title", "").lower()):
+                note_item = QTreeWidgetItem([
+                    f"{note.get('icon', '📝')} {note.get('title', 'Sem título')}",
+                    folder_name,
+                    ", ".join(note.get("tags", [])[:3]),
+                ])
+                note_item.setFlags(note_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                path = note.get("path", "")
+                note_item.setData(0, Qt.ItemDataRole.UserRole, note)
+                note_item.setCheckState(
+                    0,
+                    Qt.CheckState.Checked if path in selected_paths else Qt.CheckState.Unchecked
+                )
+                folder_item.addChild(note_item)
+
+            folder_item.setExpanded(True)
+
+        self.notes_tree.blockSignals(False)
+        self._update_selected_count_label()
+
+    def _extract_folder(self, note_path: str) -> str:
+        """Extrai pasta de exibição a partir do caminho da nota."""
+        try:
+            p = Path(note_path)
+            if p.parent and str(p.parent) != ".":
+                return str(p.parent)
+        except Exception:
+            pass
+        return "Raiz"
+
+    def _note_matches_filter(self, note: Dict[str, Any], filter_text: str, folder: str) -> bool:
+        """Aplica filtro textual em título, pasta, tags e caminho."""
+        if not filter_text:
+            return True
+
+        tags_text = " ".join(note.get("tags", []))
+        haystack = " ".join([
+            note.get("title", ""),
+            note.get("path", ""),
+            folder,
+            tags_text,
+        ]).lower()
+        return filter_text in haystack
+
+    def _on_tree_item_changed(self, item: QTreeWidgetItem, _column: int):
+        """Atualiza contador quando checkboxes mudam."""
+        if item.childCount() > 0:
+            return
+        self._update_selected_count_label()
+
+    def _iter_leaf_items(self):
+        """Itera itens folha (notas) da árvore."""
+        for i in range(self.notes_tree.topLevelItemCount()):
+            folder_item = self.notes_tree.topLevelItem(i)
+            for j in range(folder_item.childCount()):
+                yield folder_item.child(j)
+
+    def get_selected_note_paths(self) -> List[str]:
+        """Retorna caminhos das notas selecionadas."""
+        paths = []
+        if not hasattr(self, "notes_tree"):
+            return paths
+
+        for item in self._iter_leaf_items():
+            if item.checkState(0) == Qt.CheckState.Checked:
+                note = item.data(0, Qt.ItemDataRole.UserRole) or {}
+                note_path = note.get("path")
+                if note_path:
+                    paths.append(note_path)
+        return paths
+
+    def get_selected_notes(self) -> List[Dict[str, Any]]:
+        """Retorna metadados das notas selecionadas."""
+        selected = []
+        if not hasattr(self, "notes_tree"):
+            return selected
+
+        for item in self._iter_leaf_items():
+            if item.checkState(0) == Qt.CheckState.Checked:
+                note = item.data(0, Qt.ItemDataRole.UserRole)
+                if note:
+                    selected.append(note)
+        return selected
+
+    def clear_selected_notes(self):
+        """Limpa seleção de notas."""
+        if not hasattr(self, "notes_tree"):
+            return
+        self.notes_tree.blockSignals(True)
+        for item in self._iter_leaf_items():
+            item.setCheckState(0, Qt.CheckState.Unchecked)
+        self.notes_tree.blockSignals(False)
+        self._update_selected_count_label()
+
+    def _update_selected_count_label(self):
+        """Atualiza label com quantidade de notas selecionadas."""
+        selected_count = len(self.get_selected_notes())
+        self.selected_count_label.setText(f"{selected_count} nota(s) selecionada(s)")
+
+    def confirm_selected_context(self):
+        """Confirma notas selecionadas e emite contexto para o card GLaDOS."""
+        selected_notes = self.get_selected_notes()
+        if not selected_notes:
+            self.context_confirmed.emit({
+                "notes": [],
+                "summary": "Nenhuma nota selecionada",
+            })
+            return
+
+        payload = {
+            "notes": selected_notes,
+            "summary": f"{len(selected_notes)} nota(s) selecionada(s) do vault",
+            "stats": self.stats_data,
+        }
+        self.context_confirmed.emit(payload)
         
     @pyqtSlot(dict)
     def on_vault_status_changed(self, status: Dict[str, Any]):

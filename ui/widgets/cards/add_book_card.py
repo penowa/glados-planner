@@ -629,16 +629,21 @@ class AddBookIconWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         painter.save()
-        # Botão visual em estilo "drop zone" (invertido conforme solicitado).
         rect = self.rect().adjusted(2, 2, -2, -2)
         base = self.color.lighter(190) if self.state in ("idle", "selecting") else self.color.lighter(175)
         painter.setBrush(QBrush(base))
         painter.setPen(QPen(self.color, 2, Qt.PenStyle.DashLine))
         painter.drawRoundedRect(rect, 10, 10)
 
+        #painter.setPen(QPen(self.color.darker(110), 3))
+        #cx = self.width() // 2
+        #cy = self.height() // 2 - 2
+        #painter.drawLine(cx, cy - 7, cx, cy + 7)
+        #painter.drawLine(cx - 7, cy, cx + 7, cy)
+
         painter.setPen(QPen(self.color.darker(130), 1))
         painter.setFont(QFont("Sans Serif", 8))
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Clique para selecionar")
+        painter.drawText(self.rect().adjusted(0, 18, 0, 0), Qt.AlignmentFlag.AlignHCenter, "Clique para selecionar")
         painter.restore()
             
     #def draw_plus_icon(self, painter):

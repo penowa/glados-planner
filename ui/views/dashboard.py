@@ -273,10 +273,12 @@ class DashboardView(QWidget):
         if self.glados_card:
             self.glados_card.ui_message_sent.connect(self.handle_glados_message)
             self.glados_card.ui_action_selected.connect(self.handle_glados_action)
+            self.glados_card.context_action_requested.connect(self.handle_glados_context_action)
         
         if self.vault_stats_card:
             self.vault_stats_card.sync_requested.connect(self.handle_vault_sync)
             self.vault_stats_card.refresh_requested.connect(self.handle_vault_refresh)
+            self.vault_stats_card.context_confirmed.connect(self.handle_vault_context_confirmed)
         
         # Conexões com controllers (se necessário)
         if self.book_controller:
@@ -589,6 +591,19 @@ class DashboardView(QWidget):
         """Manipular ação rápida do GLaDOS"""
         logger.info(f"Ação GLaDOS: {action_id}")
         # O próprio GladosCard já lida com a ação
+
+    def handle_glados_context_action(self, action_id: str, payload: dict):
+        """Manipula ações iniciadas a partir de contexto confirmado no GLaDOS."""
+        notes_count = len(payload.get("notes", []))
+        logger.info(f"Ação de contexto GLaDOS: {action_id} ({notes_count} notas)")
+
+    def handle_vault_context_confirmed(self, payload: dict):
+        """Recebe contexto do VaultStatsCard e envia para GladosCard."""
+        notes = payload.get("notes", [])
+        logger.info(f"Contexto confirmado no vault: {len(notes)} nota(s)")
+
+        if self.glados_card and hasattr(self.glados_card, "apply_vault_context"):
+            self.glados_card.apply_vault_context(payload)
     
     def handle_vault_sync(self, sync_type: str):
         """Manipular requisição de sincronização do vault"""

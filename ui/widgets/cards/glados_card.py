@@ -14,6 +14,7 @@ class GladosCard(PhilosophyCard):
     # Sinais internos (somente para UI)
     ui_message_sent = pyqtSignal(str)      # Mensagem enviada pelo usuário
     ui_action_selected = pyqtSignal(str)   # Ação selecionada nos botões
+    context_action_requested = pyqtSignal(str, dict)  # (ação, payload_contexto)
     
     def __init__(self, controller=None, parent=None):
         super().__init__(parent)
@@ -31,6 +32,7 @@ class GladosCard(PhilosophyCard):
         self.is_processing = False
         self.last_query = ""
         self.auto_search_enabled = True
+        self.current_context_payload = {}
         
         # Inicializar atributos de widget para evitar AttributeError
         self.avatar_label = None
@@ -43,6 +45,9 @@ class GladosCard(PhilosophyCard):
         self.mode_combo = None
         self.intensity_slider = None
         self.sarcasm_button = None
+        self.context_label = None
+        self.context_action_combo = None
+        self.context_run_button = None
         self.action_buttons = {}
         
         # Configurar UI primeiro
@@ -81,6 +86,9 @@ class GladosCard(PhilosophyCard):
         
         # Campo de entrada
         self.setup_input_area(main_layout)
+
+        # Ações baseadas no contexto selecionado do vault
+        self.setup_context_actions(main_layout)
         
         # Adicionar ao layout do card
         self.content_layout.addLayout(main_layout)
@@ -281,6 +289,31 @@ class GladosCard(PhilosophyCard):
         input_layout.addWidget(button_widget)
         
         parent_layout.addWidget(input_widget)
+
+    def setup_context_actions(self, parent_layout):
+        """Configura controles para executar ações com contexto confirmado."""
+        context_widget = QWidget()
+        context_layout = QHBoxLayout(context_widget)
+        context_layout.setContentsMargins(0, 0, 0, 0)
+        context_layout.setSpacing(8)
+
+        self.context_label = QLabel("Contexto do Vault: nenhum")
+        self.context_label.setObjectName("glados_context_label")
+
+        self.context_action_combo = QComboBox()
+        self.context_action_combo.addItem("Chat contextualizado", "context_chat")
+        self.context_action_combo.addItem("Pesquisa semântica", "semantic_search")
+        self.context_action_combo.addItem("Gerar texto por template", "template_text")
+
+        self.context_run_button = QPushButton("Executar")
+        self.context_run_button.setObjectName("primary_button")
+        self.context_run_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.context_run_button.clicked.connect(self.execute_context_action)
+
+        context_layout.addWidget(self.context_label, 1)
+        context_layout.addWidget(self.context_action_combo)
+        context_layout.addWidget(self.context_run_button)
+        parent_layout.addWidget(context_widget)
         
     def setup_animations(self):
         """Configurar animações do GLaDOS"""
@@ -358,6 +391,10 @@ class GladosCard(PhilosophyCard):
             try:
                 if hasattr(self.controller, 'response_ready'):
                     self.controller.response_ready.connect(self.handle_backend_response)
+                if hasattr(self.controller, 'vault_results_ready'):
+                    self.controller.vault_results_ready.connect(self.handle_vault_results)
+                if hasattr(self.controller, 'semantic_context_ready'):
+                    self.controller.semantic_context_ready.connect(self.handle_semantic_context)
                 if hasattr(self.controller, 'processing_started'):
                     self.controller.processing_started.connect(self.handle_processing_started)
                 if hasattr(self.controller, 'processing_completed'):
@@ -419,7 +456,14 @@ class GladosCard(PhilosophyCard):
     @pyqtSlot()
     def on_search_vault(self):
         """Buscar no vault"""
-        self.add_message_to_chat("Buscando no vault...", "system")
+        query = self.input_field.toPlainText().strip() or self.last_query
+        if not query:
+            self.add_message_to_chat("Digite algo para buscar no vault.", "system")
+            return
+
+        self.add_message_to_chat(f"Buscando no vault por '{query}'...", "system")
+        if self.controller and hasattr(self.controller, "search_vault"):
+            self.controller.search_vault(query, limit=5, use_semantic=True)
         
     @pyqtSlot()
     def on_save_state(self):
@@ -457,6 +501,28 @@ class GladosCard(PhilosophyCard):
         """Processar resposta do backend"""
         text = response.get("text", "Sem resposta")
         self.add_message_to_chat(text, "assistant")
+
+    @pyqtSlot(dict)
+    def handle_vault_results(self, results):
+        """Mostra resumo dos resultados de busca no vault."""
+        total = results.get("total", 0)
+        query = results.get("query", "")
+        method = results.get("method", "textual")
+        self.add_message_to_chat(
+            f"Busca concluída ({method}): {total} nota(s) para '{query}'.",
+            "system",
+        )
+
+    @pyqtSlot(dict)
+    def handle_semantic_context(self, context_data):
+        """Mostra status de contexto semântico."""
+        query = context_data.get("query", "")
+        analysis = context_data.get("analysis", {})
+        notes_analyzed = analysis.get("notes_analyzed", 0)
+        self.add_message_to_chat(
+            f"Contexto semântico pronto para '{query}' com {notes_analyzed} nota(s).",
+            "system",
+        )
         
     @pyqtSlot(str, str)
     def handle_processing_started(self, task_type, message):
@@ -521,6 +587,74 @@ class GladosCard(PhilosophyCard):
     def load_initial_state(self):
         """Carregar estado inicial"""
         self.add_message_to_chat("GLaDOS inicializado. Como posso ajudar?", "assistant")
+
+    @pyqtSlot(dict)
+    def apply_vault_context(self, payload):
+        """Recebe contexto selecionado no card do vault e comenta brevemente."""
+        notes = payload.get("notes", [])
+        self.current_context_payload = payload
+
+        if not notes:
+            self.context_label.setText("Contexto do Vault: nenhum")
+            self.add_message_to_chat("Nenhuma nota foi selecionada para contexto.", "system")
+            return
+
+        self.context_label.setText(f"Contexto do Vault: {len(notes)} nota(s)")
+        titles = [note.get("title", "Sem título") for note in notes[:6]]
+        notes_preview = "\n".join([f"- {title}" for title in titles])
+
+        self.add_message_to_chat(
+            f"Contexto recebido do vault ({len(notes)} nota(s)).",
+            "system"
+        )
+
+        prompt = (
+            "Faça um comentário breve (máximo 2 frases) sobre o contexto abaixo. "
+            "Seja útil e direto.\n\n"
+            f"{notes_preview}"
+        )
+
+        if self.controller and hasattr(self.controller, "ask_glados"):
+            self.controller.ask_glados(prompt, False, "Helio")
+        else:
+            self.add_message_to_chat(
+                "Contexto assimilado. Escolha a próxima ação para continuar.",
+                "assistant",
+            )
+
+    @pyqtSlot()
+    def execute_context_action(self):
+        """Executa ação escolhida para o contexto atual."""
+        action_id = self.context_action_combo.currentData()
+
+        if not self.current_context_payload.get("notes"):
+            self.add_message_to_chat("Selecione e confirme notas no card do vault primeiro.", "system")
+            return
+
+        self.context_action_requested.emit(action_id, self.current_context_payload)
+
+        notes = self.current_context_payload.get("notes", [])
+        query_base = ", ".join([n.get("title", "") for n in notes[:4]])
+
+        if action_id == "semantic_search":
+            self.add_message_to_chat("Iniciando pesquisa semântica com o contexto selecionado...", "system")
+            if self.controller and hasattr(self.controller, "get_semantic_context"):
+                self.controller.get_semantic_context(query_base, max_notes=min(5, max(1, len(notes))))
+
+        elif action_id == "template_text":
+            prompt = (
+                "Com base no contexto selecionado do vault, sugira uma estrutura curta "
+                "de texto alinhada a templates acadêmicos."
+            )
+            self.add_message_to_chat("Gerando proposta de texto com base em template...", "system")
+            if self.controller and hasattr(self.controller, "ask_glados"):
+                self.controller.ask_glados(f"{prompt}\n\nContexto: {query_base}", False, "Helio")
+
+        else:
+            self.add_message_to_chat(
+                "Chat contextualizado ativado. Faça sua pergunta e vou considerar o contexto selecionado.",
+                "system",
+            )
         
     def animate_avatar(self):
         """Animar avatar do GLaDOS"""
