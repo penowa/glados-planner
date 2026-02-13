@@ -63,8 +63,8 @@ class ObsidianVaultManager:
                 # Fallback para caminho padrão
                 vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
 
-        # Definir o caminho do vault como um objeto Path
-        self.vault_path = Path(vault_path)        
+        # Definir o caminho do vault normalizando "~" e caminho absoluto.
+        self.vault_path = Path(vault_path).expanduser().resolve()
         
         # Cache de notas
         self._notes_cache: Dict[Path, ObsidianNote] = {}

@@ -48,7 +48,7 @@ class ConfigManager:
                 'log_level': 'INFO'
             },
             'paths': {
-                'vault': '~/Documents/Obsidian/Philosophy_Vault',
+                'vault': '~/Documentos/Obsidian/Philosophy_Vault',
                 'data_dir': './data',
                 'models_dir': './data/models',
                 'exports_dir': './data/exports'
@@ -114,7 +114,7 @@ class ConfigManager:
     @property
     def vault_path(self) -> str:
         """Retorna o caminho do vault Obsidian"""
-        path = self.get('paths.vault', '~/Documents/Obsidian/Philosophy_Vault')
+        path = self.get('paths.vault', '~/Documentos/Obsidian/Philosophy_Vault')
         return os.path.expanduser(path)
     
     @vault_path.setter

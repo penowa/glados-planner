@@ -1,4 +1,122 @@
 {
-  "last_updated": "2026-02-06T03:58:51.002231",
-  "history": []
+  "last_updated": "2026-02-13T01:28:15.002284",
+  "history": [
+    {
+      "timestamp": "2026-02-13T01:23:32.696245",
+      "result": {
+        "status": "completed",
+        "pipeline_id": "c2db46b9",
+        "book_id": "5986daa4fa1d5ab8",
+        "title": "ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO",
+        "author": "FRIEDRICH WILHELM NIETZSCHE",
+        "total_pages": 230,
+        "chapters": 23,
+        "quality": "standard",
+        "use_llm": true,
+        "stages": {
+          "initialization": {
+            "file_path": "/home/penowa/Documentos/Livros/Friedrich Nietzsche - Além do Bem e do Mal.pdf",
+            "file_size_mb": 0.48589420318603516,
+            "format": ".pdf",
+            "requires_llm": true,
+            "quality": "standard"
+          },
+          "analysis": {
+            "title": "ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO",
+            "author": "FRIEDRICH WILHELM NIETZSCHE",
+            "total_pages": 230,
+            "requires_ocr": false,
+            "estimated_time": 130,
+            "recommendations": [],
+            "chapters_detected": 0
+          },
+          "extraction": {
+            "chapters_extracted": 23,
+            "total_pages": 230,
+            "requires_ocr": false,
+            "extraction_method": "standard+llm"
+          },
+          "structuring": {
+            "book_id": "5986daa4fa1d5ab8",
+            "directory_created": true,
+            "index_created": true,
+            "notes_created": 1
+          },
+          "llm_enhancement": {
+            "llm_used": true,
+            "pages_improved": 0,
+            "enhancement_method": "llm_ocr_enhancement"
+          },
+          "integration": {
+            "book_id": "5986daa4fa1d5ab8",
+            "success": true,
+            "systems_registered": [
+              "reading_manager",
+              "vault_registry"
+            ],
+            "errors": [],
+            "reading_system_id": "5986daa4fa1d5ab8",
+            "status": "registered",
+            "steps_completed": [
+              "structure_created",
+              "index_created"
+            ],
+            "details": {
+              "structure": {
+                "book_id": "5986daa4fa1d5ab8",
+                "directory_created": true,
+                "notes_created": 0,
+                "errors": [
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md",
+                  "Erro criando capítulo 0: Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/000 - Capítulo 0.md"
+                ],
+                "directory_path": "~/Documents/Obsidian/Philosophy_Vault/01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO"
+              },
+              "index": {
+                "book_id": "5986daa4fa1d5ab8",
+                "index_created": true
+              },
+              "concepts": {
+                "concepts_note_created": false,
+                "error": "Note already exists: 01-LEITURAS/FRIEDRICH WILHELM NIETZSCHE/ALÉM DO BEM E DO MAL OU PRELÚDIO DE UMA FILOSOFIA DO FUTURO/🧠 Conceitos-Chave.md"
+              }
+            }
+          },
+          "scheduling": {
+            "book_id": "5986daa4fa1d5ab8",
+            "success": false,
+            "scheduling_attempted": true,
+            "agenda_events_created": 0,
+            "error": "Livro não encontrado",
+            "pages_per_day": 12,
+            "strategy": "balanced",
+            "warning": "Agendamento automático não concluído"
+          }
+        },
+        "timestamp": "2026-02-13T01:23:32.696108",
+        "processing_time": -7e-06
+      }
+    }
+  ]
 }

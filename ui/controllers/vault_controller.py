@@ -10,9 +10,9 @@ from typing import Dict, List, Optional, Any
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread
 import logging
 
-from src.core.modules.obsidian.vault_manager import ObsidianVaultManager
-from src.core.models.book import Book
-from src.core.models.note import Note
+from core.modules.obsidian.vault_manager import ObsidianVaultManager
+from core.models.book import Book
+from core.models.note import Note
 
 logger = logging.getLogger(__name__)
 

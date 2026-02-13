@@ -239,11 +239,6 @@ class DashboardView(QWidget):
         # Conectar sinais dos cards
         if self.add_book_card:
             self.add_book_card.import_config_requested.connect(self.show_import_dialog)
-            self.add_book_card.processing_started.connect(self.on_book_processing_started)
-            self.add_book_card.processing_progress.connect(self.on_book_processing_progress)
-            self.add_book_card.processing_completed.connect(self.on_book_processing_completed)
-            self.add_book_card.processing_failed.connect(self.on_book_processing_failed)
-            self.add_book_card.processing_completed.connect(self.handle_book_processed)
         
         if self.agenda_card:
             self.agenda_card.navigate_to_detailed_view.connect(
@@ -275,6 +270,12 @@ class DashboardView(QWidget):
             self.vault_stats_card.refresh_requested.connect(self.handle_vault_refresh)
         
         # Conexões com controllers (se necessário)
+        if self.book_controller:
+            self.book_controller.book_processing_started.connect(self.on_book_processing_started)
+            self.book_controller.book_processing_progress.connect(self.on_book_processing_progress)
+            self.book_controller.book_processing_completed.connect(self.on_book_processing_completed)
+            self.book_controller.book_processing_failed.connect(self.on_book_processing_failed)
+
         if self.book_controller and hasattr(self.book_controller, 'current_book_updated'):
             self.book_controller.current_book_updated.connect(self.update_current_book)
         
@@ -352,12 +353,8 @@ class DashboardView(QWidget):
                 }
             }
             
-            # Iniciar processamento
-            pipeline_id = self.book_controller.process_book_with_config(settings)
-            
-            # Notificar o card sobre o início do processamento
-            if self.add_book_card:
-                self.add_book_card.start_processing(pipeline_id, settings)
+            # Iniciar processamento (o card será atualizado via sinal do controller)
+            self.book_controller.process_book_with_config(settings)
                 
         except Exception as e:
             logger.error(f"Erro ao iniciar processamento: {e}")
@@ -366,6 +363,8 @@ class DashboardView(QWidget):
     def on_book_processing_started(self, pipeline_id, file_name, settings):
         """Atualizar UI quando processamento inicia"""
         if self.add_book_card:
+            if "file_path" not in settings:
+                settings = {**settings, "file_path": file_name}
             self.add_book_card.on_processing_started(pipeline_id, settings)
     
     def on_book_processing_progress(self, pipeline_id, stage, percent, message):
@@ -454,7 +453,7 @@ class DashboardView(QWidget):
             except Exception as e:
                 logger.error(f"Erro ao processar livro: {e}")
     
-    def handle_book_processed(self, result):
+    def handle_book_processed(self, pipeline_id, result):
         """Manipular livro processado com sucesso"""
         if result.get('status') == 'completed':
             logger.info(f"Livro processado: {result.get('file_path')}")

@@ -117,8 +117,11 @@ class MainWindow(QMainWindow):
             
             # Book Controller
             self.controllers['book'] = BookController(
-                self.backend_modules['book_processor'],
-                self.backend_modules['reading_manager']
+                pdf_processor=self.backend_modules['book_processor'],
+                book_processor=self.backend_modules['book_processor'],
+                reading_manager=self.backend_modules['reading_manager'],
+                agenda_controller=self.backend_modules.get('agenda_manager'),
+                vault_manager=self.backend_modules.get('vault_manager')
             )
             
             # Agenda Controller
@@ -141,7 +144,7 @@ class MainWindow(QMainWindow):
         
             # Vault Controller
             self.controllers['vault'] = VaultController(
-                self.backend_modules.get('vault_manager')
+                str(self.backend_modules['vault_manager'].vault_path)
             )
                     
             logger.info("Controllers initialized successfully")

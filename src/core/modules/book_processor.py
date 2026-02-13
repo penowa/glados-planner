@@ -230,7 +230,13 @@ class BookProcessor:
             if result.status == ProcessingStatus.COMPLETED:
                 self._integrate_with_vault(result, output_path)
             
-            logger.info(f"Processamento concluído: {metadata.title}")
+            if result.status == ProcessingStatus.COMPLETED:
+                logger.info(f"Processamento concluído: {metadata.title}")
+            else:
+                logger.warning(
+                    f"Processamento finalizado com status {result.status.value}: {metadata.title} - "
+                    f"{result.error or 'sem detalhes'}"
+                )
             return result
             
         except Exception as e:
@@ -328,25 +334,58 @@ class BookProcessor:
                     output_dir: Path, quality: ProcessingQuality) -> ProcessingResult:
         """Processa um arquivo PDF."""
         try:
-            import fitz
-            from .pdf_processor import PDFProcessor
+            # Verificação explícita da dependência PyMuPDF para mensagens claras.
+            import fitz  # noqa: F401
+
+            # Compatibilidade: alguns ambientes expõem PDFProcessorOCR em vez de PDFProcessor.
+            try:
+                from .pdf_processor import PDFProcessor
+            except ImportError:
+                from .pdf_processor import PDFProcessorOCR as PDFProcessor
             
             processor = PDFProcessor(quality=quality)
             result = processor.process(filepath, output_dir, metadata)
+
+            if not result.get('success', True):
+                warning = "; ".join(result.get('warnings', [])) or "Falha no processamento OCR do PDF"
+                return ProcessingResult(
+                    status=ProcessingStatus.FAILED,
+                    metadata=metadata,
+                    output_dir=output_dir,
+                    processed_chapters=result.get('chapters', []),
+                    warnings=result.get('warnings', []),
+                    error=warning
+                )
+
+            chapters = result.get('chapters', [])
+            if not chapters:
+                return ProcessingResult(
+                    status=ProcessingStatus.FAILED,
+                    metadata=metadata,
+                    output_dir=output_dir,
+                    processed_chapters=[],
+                    warnings=result.get('warnings', []),
+                    error="Nenhum conteúdo foi extraído do PDF"
+                )
             
             return ProcessingResult(
                 status=ProcessingStatus.COMPLETED,
                 metadata=metadata,
                 output_dir=output_dir,
-                processed_chapters=result['chapters'],
+                processed_chapters=chapters,
                 warnings=result.get('warnings', [])
             )
             
-        except ImportError:
+        except ImportError as e:
+            error_msg = str(e)
+            if "fitz" in error_msg.lower() or "pymupdf" in error_msg.lower():
+                user_error = "PyMuPDF não instalado. Instale com: pip install pymupdf"
+            else:
+                user_error = f"Processador PDF indisponível: {error_msg}"
             return ProcessingResult(
                 status=ProcessingStatus.FAILED,
                 metadata=metadata,
-                error="PyMuPDF não instalado. Instale com: pip install pymupdf"
+                error=user_error
             )
         except Exception as e:
             return ProcessingResult(
@@ -389,6 +428,23 @@ class BookProcessor:
         """Integra o livro processado com o vault do Obsidian."""
         try:
             metadata = result.metadata
+
+            def create_or_update_note(path: str, content: str, frontmatter: Dict[str, Any]) -> None:
+                """Cria a nota; se já existir, atualiza conteúdo e frontmatter."""
+                try:
+                    self.vault_manager.create_note(
+                        path,
+                        content=content,
+                        frontmatter=frontmatter
+                    )
+                except ValueError as e:
+                    if "already exists" not in str(e).lower():
+                        raise
+                    self.vault_manager.update_note(
+                        path,
+                        content=content,
+                        frontmatter=frontmatter
+                    )
             
             # 1. Criar nota de metadados do livro
             book_note_path = f"01-LEITURAS/{metadata.author}/{metadata.title}/📖 {metadata.title}.md"
@@ -427,7 +483,7 @@ class BookProcessor:
 <!-- Adicione suas anotações sobre o livro aqui -->
 """
             
-            self.vault_manager.create_note(
+            create_or_update_note(
                 book_note_path,
                 content=content,
                 frontmatter=frontmatter
@@ -445,7 +501,7 @@ class BookProcessor:
                     'tags': ['chapter', 'book', f'book:{metadata.title}']
                 }
                 
-                self.vault_manager.create_note(
+                create_or_update_note(
                     chapter_note_path,
                     content=chapter['content'],
                     frontmatter=chapter_frontmatter
@@ -469,7 +525,7 @@ class BookProcessor:
 <!-- Questões geradas pela LLM ou suas próprias -->
 """
             
-            self.vault_manager.create_note(
+            create_or_update_note(
                 concepts_path,
                 content=concepts_content,
                 frontmatter={'title': f'Conceitos-Chave - {metadata.title}', 'type': 'concepts'}

@@ -465,6 +465,10 @@ class AddBookCard(PhilosophyCard):
             # Calcular tempo estimado para estágios restantes
             total_remaining = sum(list(stage_times.values())[current_index:])
             self.eta_label.setText(f"Tempo estimado: ~{total_remaining}s restantes")
+
+    def on_processing_started(self, pipeline_id, settings):
+        """Método para ser chamado quando o processamento inicia"""
+        self.start_processing(pipeline_id, settings)
     
     def on_processing_progress(self, pipeline_id, stage, percent, message):
         """Atualizar progresso quando receber sinal do controller"""
@@ -519,7 +523,7 @@ class AddBookCard(PhilosophyCard):
     
     def reset_to_idle(self):
         """Resetar o card para o estado inicial"""
-        self.self_state = "idle"
+        self.set_state("idle")
         self.current_pipeline_id = None
         if self.progress_bar:
             self.progress_bar.setValue(0)

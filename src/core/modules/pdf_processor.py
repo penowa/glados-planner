@@ -57,7 +57,13 @@ class PDFProcessorOCR:
                 'preprocess_image': True,
                 'language_model': 'por+eng'
             }
-        }.get(quality, ProcessingQuality.STANDARD)
+        }.get(quality, {
+            'ocr_enabled': True,
+            'image_dpi': 200,
+            'preserve_layout': True,
+            'max_pages': None,
+            'parallel_processing': True
+        })
     
     def process(self, filepath: str, output_dir: Path, 
                 metadata: Any) -> Dict[str, Any]:
@@ -111,12 +117,12 @@ class PDFProcessorOCR:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = []
             
-            for start_page in range(0, pages_to_process, pages_per_chapter):
+            for chapter_num, start_page in enumerate(range(0, pages_to_process, pages_per_chapter), start=1):
                 end_page = min(start_page + pages_per_chapter, pages_to_process)
                 future = executor.submit(
                     self._process_page_range,
                     doc, start_page, end_page, 
-                    len(chapters) + 1, output_dir
+                    chapter_num, output_dir
                 )
                 futures.append(future)
             

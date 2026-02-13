@@ -31,8 +31,8 @@ from core.modules.obsidian.vault_manager import ObsidianVaultManager
 from core.modules.book_processor import BookProcessor
 from core.modules.reading_manager import ReadingManager
 from core.modules.agenda_manager import AgendaManager
+from core.config.settings import settings as core_settings
 from core.llm.local_llm import llm
-from core.modules.obsidian.vault_manager import ObsidianVaultManager
 from utils.config_manager import ConfigManager
 
 # ============ IMPORTS DA UI ============
@@ -100,10 +100,22 @@ class PhilosophyPlannerApp:
             'performance_monitoring': True,
             'log_level': 'INFO'
         }
+
+    def _configure_qt_backend(self) -> None:
+        """
+        Ajusta backend gráfico do Qt para evitar falhas conhecidas em Wayland.
+        Pode ser sobrescrito definindo QT_QPA_PLATFORM manualmente no ambiente.
+        """
+        if os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("QT_QPA_PLATFORM"):
+            # Fallback estável para ambientes Wayland com problemas de SHM/pintura.
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            os.environ.setdefault("QT_OPENGL", "software")
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
     
     def run(self) -> int:
         """Executa a aplicação com todos os sistemas integrados"""
         try:
+            self._configure_qt_backend()
             self.app = QApplication(sys.argv)
             self.app.setApplicationName("GLaDOS's Planner")
             self.app.setOrganizationName("Penowa")
@@ -186,16 +198,21 @@ class PhilosophyPlannerApp:
     def init_backend_modules(self):
         """Inicializa módulos do backend"""
         self.splash.show_message("Carregando módulos do backend...")
-        
-        self.backend_modules['book_processor'] = BookProcessor()
-        self.backend_modules['reading_manager'] = ReadingManager()
-        self.backend_modules['agenda_manager'] = AgendaManager()
+
+        vault_path = str(Path(core_settings.paths.vault).expanduser())
+
+        # Garantir um único vault manager compartilhado por todos os módulos.
+        self.backend_modules['vault_manager'] = ObsidianVaultManager.instance(vault_path)
+        self.backend_modules['book_processor'] = BookProcessor(
+            vault_manager=self.backend_modules['vault_manager']
+        )
+        self.backend_modules['reading_manager'] = ReadingManager(vault_path=vault_path)
+        self.backend_modules['agenda_manager'] = AgendaManager(vault_path=vault_path)
         
         self.splash.show_message("Inicializando assistente GLaDOS...")
         self.backend_modules['llm_module'] = llm
-        
+
         self.splash.show_message("Conectando ao vault Obsidian...")
-        self.backend_modules['vault_manager'] = ObsidianVaultManager.instance()
         
         self.connect_modules_to_event_bus()
         

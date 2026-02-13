@@ -7,7 +7,7 @@ app:
   log_level: "INFO"
 
 paths:
-  vault: "~/Documents/Obsidian/Philosophy_Vault"  # Update this path
+  vault: "~/Documentos/Obsidian/Philosophy_Vault"
   data_dir: "./data"
   models_dir: "./data/models"
   exports_dir: "./data/exports"

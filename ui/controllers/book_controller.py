@@ -282,7 +282,7 @@ class BookProcessingPipeline(QThread):
         self.stage_progress.emit(self.pipeline_id, "extraction", 10, "Extraindo conteúdo...")
         
         # Determinar qualidade
-        from src.core.modules.book_processor import ProcessingQuality
+        from core.modules.book_processor import ProcessingQuality
         quality_map = {
             'draft': ProcessingQuality.DRAFT,
             'standard': ProcessingQuality.STANDARD,
@@ -361,7 +361,7 @@ class BookProcessingPipeline(QThread):
         
         try:
             # Importar processador LLM
-            from src.core.modules.llm_pdf_transcriber import LLMPDFProcessor
+            from core.modules.llm_pdf_transcriber import LLMPDFProcessor
             
             # Inicializar processador LLM
             llm_processor = LLMPDFProcessor()
@@ -517,9 +517,10 @@ class BookController(QObject):
     book_registered = pyqtSignal(str, dict)  # (book_id, registration_result)
     book_structure_created = pyqtSignal(str, dict)  # (book_id, structure_result)
     
-    def __init__(self, book_processor, reading_manager=None, 
+    def __init__(self, pdf_processor, book_processor, reading_manager=None, 
                  agenda_controller=None, vault_manager=None):
         super().__init__()
+        self.pdf_processor = pdf_processor
         self.book_processor = book_processor
         self.reading_manager = reading_manager
         self.agenda_controller = agenda_controller
@@ -567,7 +568,7 @@ class BookController(QObject):
     def _check_llm_availability(self) -> bool:
         """Verifica se o módulo LLM está disponível"""
         try:
-            from src.core.modules.llm_pdf_transcriber import LLMPDFProcessor
+            from core.modules.llm_pdf_transcriber import LLMPDFProcessor
             return True
         except ImportError:
             return False
@@ -736,7 +737,7 @@ class BookController(QObject):
                 raise FileNotFoundError(f"Arquivo original não encontrado: {file_path}")
             
             # Usar ChapterProcessor para processar capítulos adicionais
-            from src.core.modules.book_processor import ChapterProcessor
+            from core.modules.book_processor import ChapterProcessor
             
             chapter_processor = ChapterProcessor(self.vault_manager)
             
