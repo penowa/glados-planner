@@ -14,7 +14,8 @@ from ui.widgets.cards.add_book_card import AddBookCard
 from ui.widgets.cards.agenda_card import AgendaCard
 from ui.widgets.cards.glados_card import GladosCard
 from ui.widgets.cards.stats_card import VaultStatsCard
-from ui.widgets.cards.event_creation_card import EventCreationCard
+from ui.widgets.cards.event_creation_card import EventCreationDialog
+from ui.widgets.dialogs.weekly_event_editor_dialog import WeeklyEventEditorDialog
 
 logger = logging.getLogger('GLaDOS.UI.Dashboard')
 
@@ -35,13 +36,16 @@ class DashboardView(QWidget):
         self.reading_controller = controllers.get('reading') if controllers else None
         self.glados_controller = controllers.get('glados') if controllers else None
         self.vault_controller = controllers.get('vault') if controllers else None
+        self.agenda_backend = self._resolve_agenda_backend()
         
         # Cards
         self.add_book_card = None
         self.agenda_card = None
         self.glados_card = None
         self.vault_stats_card = None
-        self.event_creation_card = None  # Novo card
+        self.event_creation_card = None
+        self.event_creation_dialog = None
+        self.weekly_event_editor_dialog = None
         
         # Dados em tempo real
         self.current_reading = None
@@ -57,6 +61,16 @@ class DashboardView(QWidget):
     def handle_navigation(self, destination):
         """Método para tratamento de navegação interna"""
         pass
+
+    def _resolve_agenda_backend(self):
+        """Resolve backend de agenda (AgendaController ou AgendaManager)."""
+        if self.agenda_controller:
+            return self.agenda_controller
+
+        if self.book_controller and hasattr(self.book_controller, "agenda_controller"):
+            return self.book_controller.agenda_controller
+
+        return None
     
     def setup_ui(self):
         """Configura interface do dashboard com cards integrados"""
@@ -91,7 +105,7 @@ class DashboardView(QWidget):
         
         # 1. AgendaCard (40%)
         self.agenda_card = AgendaCard(
-            agenda_controller=self.agenda_controller
+            agenda_controller=self.agenda_backend
         )
         self.agenda_card.setObjectName("dashboard_card")
         self.agenda_card.setMinimumHeight(400)  # Altura ajustada
@@ -242,10 +256,11 @@ class DashboardView(QWidget):
         
         if self.agenda_card:
             self.agenda_card.navigate_to_detailed_view.connect(
-                lambda: self.navigate_to.emit('agenda')
+                self.open_week_event_editor_dialog
             )
             self.agenda_card.item_clicked.connect(self.handle_agenda_item_clicked)
             self.agenda_card.quick_action.connect(self.handle_agenda_quick_action)
+            self.agenda_card.add_event_requested.connect(self.open_event_creation_dialog)
             
             # Conectar sinais de sessão de leitura (agora na agenda)
             if hasattr(self.agenda_card, 'start_reading_session'):
@@ -254,12 +269,6 @@ class DashboardView(QWidget):
                 self.agenda_card.edit_reading_session.connect(self.handle_edit_session)
             if hasattr(self.agenda_card, 'skip_reading_session'):
                 self.agenda_card.skip_reading_session.connect(self.handle_skip_session)
-        
-        # Conectar sinais do EventCreationCard
-        if self.event_creation_card:
-            self.event_creation_card.event_created.connect(self.handle_event_created)
-            self.event_creation_card.event_scheduled.connect(self.handle_event_scheduled)
-            self.event_creation_card.cancel_requested.connect(self.handle_event_creation_cancelled)
         
         if self.glados_card:
             self.glados_card.ui_message_sent.connect(self.handle_glados_message)
@@ -279,8 +288,8 @@ class DashboardView(QWidget):
         if self.book_controller and hasattr(self.book_controller, 'current_book_updated'):
             self.book_controller.current_book_updated.connect(self.update_current_book)
         
-        if self.agenda_controller and hasattr(self.agenda_controller, 'agenda_updated'):
-            self.agenda_controller.agenda_updated.connect(self.update_agenda_data)
+        if self.agenda_backend and hasattr(self.agenda_backend, 'agenda_updated'):
+            self.agenda_backend.agenda_updated.connect(self.update_agenda_data)
         
         if self.reading_controller and hasattr(self.reading_controller, 'stats_updated'):
             self.reading_controller.stats_updated.connect(self.update_stats_data)
@@ -412,20 +421,17 @@ class DashboardView(QWidget):
     def load_initial_data(self):
         """Carrega dados iniciais dos controllers"""
         logger.info("Carregando dados iniciais do dashboard")
-        
-        # Carregar dados para AgendaCard (que agora inclui sessões de leitura)
-        if self.agenda_controller and hasattr(self.agenda_controller, 'get_day_events'):
+
+        if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
             try:
-                agenda_data = self.agenda_controller.get_day_events()
-                if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
-                    self.agenda_card.on_agenda_loaded(agenda_data)
+                self.agenda_card.refresh()
             except Exception as e:
-                logger.error(f"Erro ao carregar agenda: {e}")
+                logger.error(f"Erro ao carregar agenda semanal: {e}")
         
         # Carregar estatísticas para referência
         if self.reading_controller and hasattr(self.reading_controller, 'reading_controller.stats'):
             try:
-                self.daily_stats = self.reading_controller.reading_controller.stats()
+                stats = self.reading_controller.reading_controller.stats()
                 # Extrai o que precisamos para daily_stats
                 self.daily_stats = {
                     "total_books": stats.get("total_books", 0),
@@ -459,9 +465,6 @@ class DashboardView(QWidget):
             logger.info(f"Livro processado: {result.get('file_path')}")
             # Atualizar dados se necessário
             self.refresh_data()
-            # Limpar formulário do EventCreationCard se estiver visível
-            if self.event_creation_card:
-                self.event_creation_card.clear_form()
     
     def handle_agenda_item_clicked(self, item_data):
         """Manipular clique em item da agenda"""
@@ -472,9 +475,7 @@ class DashboardView(QWidget):
         """Manipular ação rápida da agenda"""
         logger.info(f"Ação rápida da agenda: {action_name}")
         if action_name == "add_event":
-            # Foca no EventCreationCard
-            if self.event_creation_card:
-                self.event_creation_card.title_input.setFocus()
+            self.open_event_creation_dialog()
         elif action_name == "add_reading_session":
             # Se a agenda tem uma ação para adicionar sessão de leitura
             self.navigate_to.emit('reading_scheduler')
@@ -482,48 +483,70 @@ class DashboardView(QWidget):
     def handle_event_created(self, event_data):
         """Manipular evento criado no EventCreationCard"""
         logger.info(f"Evento criado: {event_data.get('title')}")
-        
-        # Notificar agenda para atualizar
-        if self.agenda_controller:
-            try:
-                # Recarregar agenda
-                agenda_data = self.agenda_controller.get_today_agenda()
-                if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
-                    self.agenda_card.on_agenda_loaded(agenda_data)
-                
-                # Mostrar confirmação
-                self.show_notification("✅ Evento criado com sucesso", "success")
-                
-                # Limpar formulário após criação
-                if self.event_creation_card:
-                    self.event_creation_card.clear_form()
-                    
-            except Exception as e:
-                logger.error(f"Erro ao atualizar agenda: {e}")
-                self.show_notification(f"❌ Erro ao criar evento: {str(e)[:50]}", "error")
+
+        try:
+            if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
+                self.agenda_card.refresh()
+            self.show_notification("✅ Evento criado com sucesso", "success")
+        except Exception as e:
+            logger.error(f"Erro ao atualizar agenda: {e}")
+            self.show_notification(f"❌ Erro ao criar evento: {str(e)[:50]}", "error")
     
     def handle_event_scheduled(self, event_id):
         """Manipular evento agendado (para leituras)"""
         logger.info(f"Evento agendado: {event_id}")
         
         if event_id.startswith('reading_'):
-            book_id = event_id.replace('reading_', '')
             self.show_notification(f"📚 Sessões de leitura agendadas", "success")
-            
-            # Recarregar agenda
-            if self.agenda_controller:
+
+            if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
                 try:
-                    agenda_data = self.agenda_controller.get_today_agenda()
-                    if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
-                        self.agenda_card.on_agenda_loaded(agenda_data)
+                    self.agenda_card.refresh()
                 except Exception as e:
                     logger.error(f"Erro ao recarregar agenda: {e}")
     
     def handle_event_creation_cancelled(self):
         """Manipular cancelamento da criação de evento"""
         logger.info("Criação de evento cancelada")
-        if self.event_creation_card:
-            self.event_creation_card.clear_form()
+
+    def open_event_creation_dialog(self):
+        """Abre diálogo modal para criação de eventos."""
+        reading_manager = None
+        if self.reading_controller and hasattr(self.reading_controller, "reading_manager"):
+            reading_manager = self.reading_controller.reading_manager
+
+        dialog = EventCreationDialog(
+            agenda_controller=self.agenda_backend,
+            reading_manager=reading_manager,
+            parent=self,
+        )
+        self.event_creation_dialog = dialog
+
+        dialog.event_card.event_created.connect(self.handle_event_created)
+        dialog.event_card.event_scheduled.connect(self.handle_event_scheduled)
+        dialog.event_card.cancel_requested.connect(self.handle_event_creation_cancelled)
+
+        dialog.exec()
+
+    def open_week_event_editor_dialog(self):
+        """Abre diálogo com lista e edição de eventos da semana visível."""
+        week_start = None
+        if self.agenda_card and hasattr(self.agenda_card, "current_week_start"):
+            week_start = self.agenda_card.current_week_start
+
+        reading_manager = None
+        if self.reading_controller and hasattr(self.reading_controller, "reading_manager"):
+            reading_manager = self.reading_controller.reading_manager
+
+        dialog = WeeklyEventEditorDialog(
+            agenda_backend=self.agenda_backend,
+            reading_manager=reading_manager,
+            week_start=week_start,
+            parent=self,
+        )
+        self.weekly_event_editor_dialog = dialog
+        dialog.event_changed.connect(self.refresh_data)
+        dialog.exec()
     
     def handle_start_session(self, session_data):
         """Iniciar sessão de leitura (agora vindo da agenda)"""
@@ -626,12 +649,12 @@ class DashboardView(QWidget):
         if self.agenda_card and hasattr(self.agenda_card, 'set_current_book'):
             self.agenda_card.set_current_book(book_data)
     
-    @pyqtSlot(list)
-    def update_agenda_data(self, agenda_data):
+    @pyqtSlot(str, list)
+    def update_agenda_data(self, _date_str, agenda_data):
         """Atualizar agenda quando controller emite sinal"""
         self.today_agenda = agenda_data
-        if self.agenda_card and hasattr(self.agenda_card, 'on_agenda_loaded'):
-            self.agenda_card.on_agenda_loaded(agenda_data)
+        if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
+            self.agenda_card.refresh()
     
     @pyqtSlot(dict)
     def update_stats_data(self, stats_data):
@@ -652,10 +675,6 @@ class DashboardView(QWidget):
         if self.vault_stats_card:
             self.handle_vault_refresh()
         
-        # Atualizar lista de livros no EventCreationCard
-        if self.event_creation_card and self.reading_controller:
-            self.event_creation_card._load_available_books()
-    
     def cleanup(self):
         """Limpeza antes de fechar"""
         if hasattr(self, 'greeting_timer'):
@@ -674,6 +693,10 @@ class DashboardView(QWidget):
             self.agenda_card.cleanup()
         if self.event_creation_card and hasattr(self.event_creation_card, 'cleanup'):
             self.event_creation_card.cleanup()
+        if self.event_creation_dialog:
+            self.event_creation_dialog.close()
+        if self.weekly_event_editor_dialog:
+            self.weekly_event_editor_dialog.close()
         if self.glados_card and hasattr(self.glados_card, 'closeEvent'):
             self.glados_card.closeEvent(None)
         if self.vault_stats_card and hasattr(self.vault_stats_card, 'cleanup'):

@@ -6,8 +6,9 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QComboBox, QLineEdit, QTextEdit,
                              QDateTimeEdit, QCheckBox, QGroupBox, QSpinBox,
                              QScrollArea, QFrame, QGridLayout, QTimeEdit,
-                             QButtonGroup, QRadioButton, QStackedWidget, QListWidget)
-from PyQt6.QtCore import Qt, QDateTime, pyqtSignal, QDate
+                             QButtonGroup, QRadioButton, QStackedWidget, QListWidget,
+                             QDialog)
+from PyQt6.QtCore import Qt, QDateTime, pyqtSignal, QDate, QTime
 from PyQt6.QtGui import QFont, QIcon, QColor
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
@@ -64,6 +65,13 @@ class EventCreationCard(PhilosophyCard):
         ("sat", "Sábado", "Fim de semana"),
         ("sun", "Domingo", "Fim de semana")
     ]
+
+    # Horizonte padrão para geração de recorrência (quando não há end_date).
+    RECURRENCE_DEFAULT_DAYS = {
+        "daily": 30,
+        "weekdays": 30,
+        "weekly": 84,  # 12 semanas
+    }
     
     def __init__(self, agenda_controller=None, reading_manager=None, parent=None):
         super().__init__(parent)
@@ -600,8 +608,8 @@ class EventCreationCard(PhilosophyCard):
                 self._schedule_reading_events(event_data)
                 return
                 
-        # Para outros tipos de evento, cria diretamente
-        self._create_single_event(event_data)
+        # Para outros tipos de evento, cria respeitando recorrência.
+        self._create_events_from_recurrence(event_data)
         
     def _on_cancel_clicked(self):
         """Lida com clique no botão Cancelar"""
@@ -722,8 +730,7 @@ class EventCreationCard(PhilosophyCard):
     def _create_single_event(self, event_data: dict):
         """Cria um evento único"""
         if self.agenda_controller:
-            # Usa controller para criar evento
-            event_id = self.agenda_controller.add_event(event_data)
+            event_id = self._add_event_via_controller(event_data)
             if event_id:
                 self.status_label.setText("✅ Evento criado com sucesso!")
                 self.status_label.setStyleSheet("color: #10B981;")
@@ -737,6 +744,161 @@ class EventCreationCard(PhilosophyCard):
             self.event_created.emit(event_data)
             self.status_label.setText("✅ Evento preparado para criação")
             self.status_label.setStyleSheet("color: #10B981;")
+
+    def _create_events_from_recurrence(self, event_data: dict):
+        """Cria um ou vários eventos com base na recorrência do formulário."""
+        occurrences = self._build_occurrences(event_data)
+        if not occurrences:
+            self.status_label.setText("❌ Nenhuma ocorrência válida para criar")
+            self.status_label.setStyleSheet("color: #EF4444;")
+            return
+
+        created_ids = []
+        for occurrence in occurrences:
+            event_id = self._add_event_via_controller(occurrence)
+            if event_id:
+                created_ids.append(event_id)
+
+        if created_ids:
+            if len(created_ids) == 1:
+                self.status_label.setText("✅ Evento criado com sucesso!")
+            else:
+                self.status_label.setText(f"✅ {len(created_ids)} eventos criados com sucesso!")
+            self.status_label.setStyleSheet("color: #10B981;")
+            self.event_created.emit(occurrences[0])
+            self.event_scheduled.emit(created_ids[0])
+        else:
+            self.status_label.setText("❌ Erro ao criar eventos")
+            self.status_label.setStyleSheet("color: #EF4444;")
+
+    def _build_occurrences(self, event_data: dict):
+        """Expande recorrência em lista de eventos."""
+        recurrence = event_data.get("recurrence", {}) or {}
+        recurrence_type = recurrence.get("type", "none")
+
+        start_raw = event_data.get("start")
+        end_raw = event_data.get("end")
+        if not start_raw or not end_raw:
+            return []
+
+        try:
+            start_dt = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+        except Exception:
+            return []
+
+        if end_dt <= start_dt:
+            return []
+
+        duration = end_dt - start_dt
+
+        if recurrence_type == "none" or recurrence_type == "custom":
+            single = dict(event_data)
+            single["id"] = str(uuid.uuid4())
+            return [single]
+
+        end_date_str = recurrence.get("end_date")
+        until_date = None
+        if end_date_str:
+            try:
+                until_date = datetime.fromisoformat(str(end_date_str)).date()
+            except Exception:
+                until_date = None
+
+        if until_date is None:
+            horizon = self.RECURRENCE_DEFAULT_DAYS.get(recurrence_type, 30)
+            until_date = (start_dt + timedelta(days=horizon)).date()
+
+        weekday_map = {
+            "mon": 0, "tue": 1, "wed": 2, "thu": 3,
+            "fri": 4, "sat": 5, "sun": 6
+        }
+
+        occurrences = []
+        interval = max(1, int(recurrence.get("interval", 1)))
+        cursor = start_dt
+
+        while cursor.date() <= until_date:
+            include = False
+
+            if recurrence_type == "daily":
+                day_offset = (cursor.date() - start_dt.date()).days
+                include = (day_offset % interval == 0)
+
+            elif recurrence_type == "weekdays":
+                day_offset = (cursor.date() - start_dt.date()).days
+                include = (cursor.weekday() < 5) and (day_offset % interval == 0)
+
+            elif recurrence_type == "weekly":
+                selected_days = recurrence.get("days", []) or []
+                selected_weekdays = [weekday_map[d] for d in selected_days if d in weekday_map]
+                if not selected_weekdays:
+                    selected_weekdays = [start_dt.weekday()]
+
+                week_offset = ((cursor.date() - start_dt.date()).days // 7)
+                include = (week_offset % interval == 0) and (cursor.weekday() in selected_weekdays)
+
+            if include:
+                occ_start = cursor.replace(
+                    hour=start_dt.hour,
+                    minute=start_dt.minute,
+                    second=start_dt.second,
+                    microsecond=start_dt.microsecond,
+                )
+                occ_end = occ_start + duration
+                occurrence = dict(event_data)
+                occurrence["id"] = str(uuid.uuid4())
+                occurrence["start"] = occ_start.isoformat()
+                occurrence["end"] = occ_end.isoformat()
+                occurrences.append(occurrence)
+
+            cursor = cursor + timedelta(days=1)
+
+        return occurrences
+
+    def _add_event_via_controller(self, event_data: dict):
+        """Adiciona evento via controller ou AgendaManager."""
+        try:
+            if hasattr(self.agenda_controller, "add_event"):
+                try:
+                    event_id = self.agenda_controller.add_event(event_data)
+                    if event_id:
+                        return event_id
+                except TypeError:
+                    # Compatibilidade com AgendaManager.add_event(title, start, end, event_type, ...)
+                    metadata = {
+                        key: value
+                        for key, value in event_data.items()
+                        if key not in {"id", "title", "start", "end", "type"}
+                    }
+                    event_id = self.agenda_controller.add_event(
+                        title=event_data["title"],
+                        start=event_data["start"],
+                        end=event_data["end"],
+                        event_type=event_data.get("type", "casual"),
+                        **metadata,
+                    )
+                    if event_id:
+                        return event_id
+
+            manager = getattr(self.agenda_controller, "agenda_manager", None)
+            if manager and hasattr(manager, "add_event"):
+                metadata = {
+                    key: value
+                    for key, value in event_data.items()
+                    if key not in {"id", "title", "start", "end", "type"}
+                }
+                return manager.add_event(
+                    title=event_data["title"],
+                    start=event_data["start"],
+                    end=event_data["end"],
+                    event_type=event_data.get("type", "casual"),
+                    **metadata,
+                )
+        except Exception as exc:
+            print(f"Erro ao adicionar evento: {exc}")
+
+        return None
             
     def _schedule_reading_events(self, event_data: dict):
         """Agenda eventos de leitura automaticamente"""
@@ -828,3 +990,116 @@ class EventCreationCard(PhilosophyCard):
                 self.end_date_input.setDate(date)
         except:
             pass
+
+    def load_event_data(self, event_data: dict):
+        """Carrega dados de um evento existente no formulário."""
+        self.clear_form()
+
+        self.title_input.setText(event_data.get("title", ""))
+
+        description = event_data.get("description", "")
+        if not description:
+            description = event_data.get("metadata", {}).get("description", "")
+        self.desc_input.setPlainText(description)
+
+        self.discipline_input.setText(
+            event_data.get("discipline")
+            or event_data.get("metadata", {}).get("discipline", "")
+        )
+
+        difficulty = int(event_data.get("difficulty", 3) or 3)
+        self.difficulty_slider.setValue(max(1, min(5, difficulty)))
+
+        metadata = event_data.get("metadata", {})
+        self.flexible_check.setChecked(bool(metadata.get("is_flexible", True)))
+        self.blocking_check.setChecked(bool(metadata.get("is_blocking", False)))
+        self.all_day_check.setChecked(bool(metadata.get("all_day", False)))
+
+        tags = event_data.get("tags") or metadata.get("tags") or []
+        if tags:
+            self.tags_input.setText(",".join(tags))
+
+        notes = event_data.get("progress_notes") or metadata.get("progress_notes") or []
+        if isinstance(notes, list):
+            self.progress_notes.setPlainText("\n".join(str(n) for n in notes))
+        elif notes:
+            self.progress_notes.setPlainText(str(notes))
+
+        event_type = event_data.get("type", "casual")
+        type_index = self.type_combo.findData(event_type)
+        if type_index >= 0:
+            self.type_combo.setCurrentIndex(type_index)
+
+        priority_value = event_data.get("priority")
+        priority_map = {1: "low", 2: "medium", 3: "high", 4: "fixed", 5: "blocking"}
+        if isinstance(priority_value, int):
+            priority_value = priority_map.get(priority_value, "medium")
+        if not isinstance(priority_value, str):
+            priority_value = "medium"
+        pr_index = self.priority_combo.findData(priority_value)
+        if pr_index >= 0:
+            self.priority_combo.setCurrentIndex(pr_index)
+
+        start_dt = self._parse_iso_to_qdatetime(event_data.get("start"))
+        end_dt = self._parse_iso_to_qdatetime(event_data.get("end"))
+        if start_dt is not None:
+            self.start_date_input.setDateTime(start_dt)
+            self.start_time_input.setTime(start_dt.time())
+        if end_dt is not None:
+            self.end_date_input.setDateTime(end_dt)
+            self.end_time_input.setTime(end_dt.time())
+
+        recurrence = event_data.get("recurrence") or metadata.get("recurrence") or {"type": "none"}
+        recurrence_type = recurrence.get("type", "none")
+        rec_index = self.recurrence_combo.findData(recurrence_type)
+        if rec_index < 0:
+            rec_index = 0
+        self.recurrence_combo.setCurrentIndex(rec_index)
+
+        if recurrence_type == "daily":
+            self.daily_interval.setValue(int(recurrence.get("interval", 1)))
+        elif recurrence_type == "weekly":
+            self.weekly_interval.setValue(int(recurrence.get("interval", 1)))
+            selected_days = set(recurrence.get("days", []))
+            for day_value, btn in self.day_buttons.items():
+                btn.setChecked(day_value in selected_days)
+
+        book_id = event_data.get("book_id") or metadata.get("book_id")
+        self.current_book_id = book_id
+        if book_id and self.reading_manager:
+            self.set_default_book(book_id)
+
+        self._update_duration()
+        self.status_label.setText("Evento carregado para edição")
+        self.status_label.setStyleSheet("")
+
+    def _parse_iso_to_qdatetime(self, value):
+        """Converte string ISO para QDateTime."""
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return QDateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+        except Exception:
+            return None
+
+
+class EventCreationDialog(QDialog):
+    """Diálogo modal para criação de eventos."""
+
+    def __init__(self, agenda_controller=None, reading_manager=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Novo Evento")
+        self.resize(860, 780)
+
+        layout = QVBoxLayout(self)
+        self.event_card = EventCreationCard(
+            agenda_controller=agenda_controller,
+            reading_manager=reading_manager,
+            parent=self,
+        )
+        layout.addWidget(self.event_card)
+
+        self.event_card.event_created.connect(lambda *_: self.accept())
+        self.event_card.event_scheduled.connect(lambda *_: self.accept())
+        self.event_card.cancel_requested.connect(self.reject)

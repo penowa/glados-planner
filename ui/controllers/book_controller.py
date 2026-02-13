@@ -295,11 +295,14 @@ class BookProcessingPipeline(QThread):
         result = self.controller.book_processor.process_book(
             filepath=str(self.file_path),
             quality=processing_quality,
-            schedule_night=False  # Processar imediatamente
+            schedule_night=False,  # Processar imediatamente
+            force_immediate=True
         )
         
         if result.status.value == "failed":
             raise Exception(result.error or "Erro no processamento")
+        if result.status.value == "scheduled":
+            raise Exception("Processamento foi agendado, mas esta operação requer execução imediata")
         
         self.processing_result = result
         self.extracted_content = result.processed_chapters

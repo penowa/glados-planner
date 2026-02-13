@@ -2,7 +2,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QSizePolicy, QFrame, QFileDialog,
                             QProgressBar, QMenu, QToolButton)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QTime
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QTime, QEvent
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QLinearGradient, QFont, 
                         QBrush, QPen, QIcon, QPainterPath)
 import hashlib
@@ -88,6 +88,7 @@ class AddBookCard(PhilosophyCard):
         # Estados visuais
         self.update_visual_state()
         self.update_help_text()
+        self.apply_theme_styles()
 
     def setup_connections(self):
         """Configura conexões de sinais e slots"""
@@ -160,30 +161,25 @@ class AddBookCard(PhilosophyCard):
         # Widget principal
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setSpacing(10)
-        content_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Ícone central
+        content_layout.setSpacing(6)
+        content_layout.setContentsMargins(2, 0, 2, 4)
+
+        # Área de drop (drag and drop)
+        self.drop_area = DropAreaWidget()
+        self.drop_area.setVisible(False)
+        content_layout.addWidget(self.drop_area, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        # Ícone central (ação de clique)
         self.central_icon = AddBookIconWidget()
-        content_layout.addWidget(self.central_icon, 0, Qt.AlignmentFlag.AlignCenter)
+        content_layout.addWidget(self.central_icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._apply_idle_area_proportion()
         
         # Texto explicativo
         self.help_text = QLabel()
         self.help_text.setWordWrap(True)
         self.help_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.help_text.setStyleSheet("""
-            QLabel {
-                color: #666666;
-                font-size: 12px;
-                padding: 5px;
-            }
-        """)
+        self.help_text.setProperty("role", "help_text")
         content_layout.addWidget(self.help_text)
-        
-        # Área de drop (drag and drop)
-        self.drop_area = DropAreaWidget()
-        self.drop_area.setVisible(False)
-        content_layout.addWidget(self.drop_area)
         
         # Progress bar (para processamento)
         self.progress_bar = QProgressBar()
@@ -207,27 +203,14 @@ class AddBookCard(PhilosophyCard):
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("""
-            QLabel {
-                font-size: 11px;
-                color: #888888;
-                padding: 2px;
-                margin-top: 5px;
-            }
-        """)
+        self.status_label.setProperty("role", "status_text")
         content_layout.addWidget(self.status_label)
         
         # Tempo estimado
         self.eta_label = QLabel()
         self.eta_label.setWordWrap(True)
         self.eta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.eta_label.setStyleSheet("""
-            QLabel {
-                font-size: 10px;
-                color: #999999;
-                font-style: italic;
-            }
-        """)
+        self.eta_label.setProperty("role", "eta_text")
         self.eta_label.setVisible(False)
         content_layout.addWidget(self.eta_label)
         
@@ -238,6 +221,82 @@ class AddBookCard(PhilosophyCard):
         
         # Atualizar texto baseado no estado
         self.update_help_text()
+        self.apply_theme_styles()
+
+    def _apply_idle_area_proportion(self):
+        """Define proporção visual 80/20 entre drag area e botão."""
+        # Card fixo de 360px; reservamos bloco principal para interação.
+        interactive_block = 280
+        drag_height = int(interactive_block * 0.8)   # 224
+        button_height = int(interactive_block * 0.2) # 56
+
+        if self.drop_area:
+            self.drop_area.setFixedHeight(drag_height)
+            self.drop_area.setFixedWidth(248)
+
+        if self.central_icon:
+            self.central_icon.setFixedHeight(button_height)
+            self.central_icon.setFixedWidth(248)
+
+    def changeEvent(self, event):
+        """Reaplica estilos quando o tema/paleta muda."""
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.StyleChange):
+            self.apply_theme_styles()
+        super().changeEvent(event)
+
+    def apply_theme_styles(self):
+        """Aplicar estilos baseados na paleta ativa do tema."""
+        palette = self.palette()
+        accent = palette.color(palette.ColorRole.Highlight).name()
+        text_primary = palette.color(palette.ColorRole.WindowText).name()
+        text_secondary = palette.color(palette.ColorRole.Mid).name()
+        text_tertiary = palette.color(palette.ColorRole.Midlight).name()
+        panel = palette.color(palette.ColorRole.Base).name()
+        panel_alt = palette.color(palette.ColorRole.AlternateBase).name()
+
+        if hasattr(self, "title_label") and self.title_label:
+            self.title_label.setStyleSheet(
+                f"color: {accent}; font-weight: bold; font-size: 14px;"
+            )
+
+        if self.help_text:
+            self.help_text.setStyleSheet(
+                f"QLabel {{ color: {text_secondary}; font-size: 12px; padding: 5px; }}"
+            )
+
+        if self.status_label:
+            self.status_label.setStyleSheet(
+                f"QLabel {{ font-size: 11px; color: {text_secondary}; padding: 2px; margin-top: 5px; }}"
+            )
+
+        if self.eta_label:
+            self.eta_label.setStyleSheet(
+                f"QLabel {{ font-size: 10px; color: {text_tertiary}; font-style: italic; }}"
+            )
+
+        if self.progress_bar:
+            self.progress_bar.setStyleSheet(
+                "QProgressBar {"
+                f"border: 1px solid {text_tertiary};"
+                "border-radius: 4px;"
+                f"background-color: {panel};"
+                "height: 6px;"
+                "}"
+                "QProgressBar::chunk {"
+                f"background-color: {accent};"
+                "border-radius: 4px;"
+                "}"
+            )
+
+        if self.central_icon:
+            self.central_icon.set_color(accent)
+
+        if self.drop_area:
+            self.drop_area.apply_theme_colors(
+                accent=accent,
+                text=text_secondary,
+                bg=panel_alt
+            )
         
     def select_file(self):
         """Abrir diálogo para selecionar arquivo"""
@@ -543,7 +602,7 @@ class AddBookIconWidget(QWidget):
         self.color = QColor("#4A90E2")
         self._scale = 1.0
         self.state = "idle"
-        self.setFixedSize(100, 100)
+        self.setFixedSize(248, 56)
         
     @property
     def scale(self):
@@ -570,33 +629,24 @@ class AddBookIconWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         painter.save()
-        painter.translate(self.width()/2, self.height()/2)
-        painter.scale(self._scale, self._scale)
-        painter.translate(-self.width()/2, -self.height()/2)
-        
-        bg_color = self.color.lighter(180) if self.state == "idle" else self.color.lighter(150)
-        painter.setBrush(QBrush(bg_color))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(10, 10, 80, 80)
-        
-        if self.state == "idle":
-            self.draw_plus_icon(painter)
-        elif self.state == "processing":
-            self.draw_processing_icon(painter)
-        elif self.state == "success":
-            self.draw_success_icon(painter)
-        elif self.state == "error":
-            self.draw_error_icon(painter)
-        else:
-            self.draw_plus_icon(painter)
+        # Botão visual em estilo "drop zone" (invertido conforme solicitado).
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        base = self.color.lighter(190) if self.state in ("idle", "selecting") else self.color.lighter(175)
+        painter.setBrush(QBrush(base))
+        painter.setPen(QPen(self.color, 2, Qt.PenStyle.DashLine))
+        painter.drawRoundedRect(rect, 10, 10)
+
+        painter.setPen(QPen(self.color.darker(130), 1))
+        painter.setFont(QFont("Sans Serif", 8))
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Clique para selecionar")
         painter.restore()
             
-    def draw_plus_icon(self, painter):
-        painter.setBrush(QBrush(self.color))
-        painter.drawEllipse(30, 30, 40, 40)
-        painter.setPen(QPen(Qt.GlobalColor.white, 4))
-        painter.drawLine(50, 40, 50, 60)
-        painter.drawLine(40, 50, 60, 50)
+    #def draw_plus_icon(self, painter):
+        #painter.setBrush(QBrush(self.color))
+        #painter.drawEllipse(30, 30, 40, 40)
+        #painter.setPen(QPen(Qt.GlobalColor.white, 4))
+        #painter.drawLine(50, 40, 50, 60)
+        #painter.drawLine(40, 50, 60, 50)
         
     def draw_processing_icon(self, painter):
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -639,30 +689,52 @@ class DropAreaWidget(QFrame):
     file_dropped = pyqtSignal(str)
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(80)
+        self.setFixedHeight(224)
         self.setAcceptDrops(True)
+        self._accent_color = "#4A90E2"
+        self._text_color = "#666666"
+        self._bg_color = "rgba(255, 255, 255, 0.7)"
         self.reset_style()
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label = QLabel("📄")
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.icon_label = QLabel("＋")
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setStyleSheet("font-size: 24px;")
-        layout.addWidget(self.icon_label)
-        self.text_label = QLabel("Solte arquivos aqui")
+        self.icon_label.setFixedSize(56, 56)
+        self.icon_label.setStyleSheet(
+            "font-size: 30px; font-weight: bold; color: white; "
+            "background-color: #4A90E2; border-radius: 28px;"
+        )
+        layout.addStretch(1)
+        layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch(1)
+        self.text_label = QLabel("Arraste e solte aqui")
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.text_label.setStyleSheet("color: #666666; font-size: 11px;")
-        layout.addWidget(self.text_label)
+        self.text_label.setStyleSheet(f"color: {self._text_color}; font-size: 11px;")
+        self.text_label.setVisible(False)
+
+    def apply_theme_colors(self, accent: str, text: str, bg: str):
+        self._accent_color = accent
+        self._text_color = text
+        self._bg_color = bg
+        self.text_label.setStyleSheet(f"color: {self._text_color}; font-size: 11px;")
+        self.icon_label.setStyleSheet(
+            f"font-size: 30px; font-weight: bold; color: white; "
+            f"background-color: {self._accent_color}; border-radius: 28px;"
+        )
+        self.reset_style()
         
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
             self.setStyleSheet("""
                 DropAreaWidget {
-                    border: 2px dashed #4A90E2;
+                    border: 1px solid %s;
                     border-radius: 8px;
-                    background-color: rgba(74, 144, 226, 0.1);
+                    background-color: rgba(74, 144, 226, 0.08);
                 }
-            """)
+            """ % self._accent_color)
             
     def dragLeaveEvent(self, event):
         self.reset_style()
@@ -679,12 +751,12 @@ class DropAreaWidget(QFrame):
     def reset_style(self):
         self.setStyleSheet("""
             DropAreaWidget {
-                border: 2px dashed #CCCCCC;
+                border: 1px solid transparent;
                 border-radius: 8px;
-                background-color: rgba(255, 255, 255, 0.7);
+                background-color: transparent;
             }
             DropAreaWidget:hover {
-                border-color: #4A90E2;
-                background-color: rgba(74, 144, 226, 0.05);
+                border-color: rgba(0, 0, 0, 0.08);
+                background-color: rgba(0, 0, 0, 0.02);
             }
         """)

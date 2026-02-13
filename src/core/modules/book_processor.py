@@ -156,7 +156,8 @@ class BookProcessor:
         filepath: str,
         quality: ProcessingQuality = None,
         output_dir: Optional[str] = None,
-        schedule_night: bool = False
+        schedule_night: bool = False,
+        force_immediate: bool = False
     ) -> ProcessingResult:
         """
         Processa um livro completo.
@@ -166,6 +167,7 @@ class BookProcessor:
             quality: Qualidade do processamento
             output_dir: Diretório de saída (opcional)
             schedule_night: Agendar para processamento noturno
+            force_immediate: Se True, não agenda automaticamente por tempo estimado
             
         Returns:
             ProcessingResult com o resultado
@@ -181,7 +183,7 @@ class BookProcessor:
                 quality = self.config['default_quality']
             
             # Verificar se deve agendar para noite
-            if schedule_night or metadata.estimated_processing_time > 300:  # > 5 minutos
+            if schedule_night or (metadata.estimated_processing_time > 300 and not force_immediate):  # > 5 minutos
                 logger.info(f"Agendando processamento noturno para: {metadata.title}")
                 return ProcessingResult(
                     status=ProcessingStatus.SCHEDULED,
