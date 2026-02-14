@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QStackedWidget, QSizePolicy, QFrame, QLabel, 
     QPushButton, QToolBar, QStatusBar, QMessageBox,
-    QDialog, QProgressBar
+    QDialog, QProgressBar, QMenu
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QPen
@@ -38,6 +38,8 @@ from ui.controllers.glados_controller import GladosController
 from ui.controllers.reading_controller import ReadingController
 from ui.controllers.vault_controller import VaultController
 from ui.controllers.dashboard_controller import DashboardController
+from ui.controllers.daily_checkin_controller import DailyCheckinController
+from core.modules.daily_checkin import DailyCheckinSystem
 
 import logging
 from typing import Dict, Any, List
@@ -82,6 +84,7 @@ class MainWindow(QMainWindow):
         # Configurações de UI
         self.animations_enabled = True
         self.notifications_enabled = True
+        self._event_notification_count = 0
         
         # Inicializar
         self.setup_window()
@@ -136,6 +139,15 @@ class MainWindow(QMainWindow):
             )
         )
         _safe_init('agenda', lambda: AgendaController(self.backend_modules['agenda_manager']))
+        _safe_init(
+            'daily_checkin',
+            lambda: DailyCheckinController(
+                checkin_system=DailyCheckinSystem(
+                    str(self.backend_modules['vault_manager'].vault_path)
+                ),
+                agenda_controller=self.controllers.get('agenda')
+            )
+        )
         _safe_init('focus', lambda: FocusController())
         _safe_init('glados', lambda: GladosController(self.backend_modules['llm_module']))
         _safe_init('reading', lambda: ReadingController(self.backend_modules['reading_manager']))
@@ -218,14 +230,6 @@ class MainWindow(QMainWindow):
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(5)  # Menor espaçamento
         
-        # Botão de busca
-        self.search_button = QPushButton("🔍")
-        self.search_button.setObjectName("search_button")
-        self.search_button.setFixedSize(36, 36)
-        self.search_button.setToolTip("Busca global (Ctrl+S)")
-        self.search_button.clicked.connect(self.show_search_dialog)
-        controls_layout.addWidget(self.search_button)
-        
         # Botão de tema
         self.theme_button = QPushButton(self.get_theme_icon())
         self.theme_button.setObjectName("theme_button")
@@ -233,14 +237,6 @@ class MainWindow(QMainWindow):
         self.theme_button.setToolTip("Alternar tema (Ctrl+T)")
         self.theme_button.clicked.connect(self.toggle_theme)
         controls_layout.addWidget(self.theme_button)
-        
-        # Botão de ações rápidas
-        self.quick_actions_button = QPushButton("⚡")
-        self.quick_actions_button.setObjectName("quick_actions_button")
-        self.quick_actions_button.setFixedSize(36, 36)
-        self.quick_actions_button.setToolTip("Ações rápidas (Ctrl+Q)")
-        self.quick_actions_button.clicked.connect(self.show_quick_actions)
-        controls_layout.addWidget(self.quick_actions_button)
         
         # Botão de configurações - NOVO
         self.settings_button = QPushButton("⚙️")
@@ -378,6 +374,14 @@ class MainWindow(QMainWindow):
         
         # 3. Configurar atalhos de teclado
         self.setup_shortcuts()
+
+        daily_checkin_controller = self.controllers.get('daily_checkin')
+        if daily_checkin_controller:
+            daily_checkin_controller.morning_checkin_needed.connect(self._refresh_notification_counter)
+            daily_checkin_controller.evening_checkin_needed.connect(self._refresh_notification_counter)
+            daily_checkin_controller.checkin_completed.connect(self._on_checkin_completed)
+
+        self._refresh_notification_counter()
     
     def setup_systems(self):
         """Configura sistemas auxiliares"""
@@ -578,9 +582,8 @@ class MainWindow(QMainWindow):
             return
         
         # Atualizar contador
-        current_count = int(self.notification_count.text())
-        self.notification_count.setText(str(current_count + 1))
-        self.notification_count.setVisible(True)
+        self._event_notification_count += 1
+        self._refresh_notification_counter()
         
         # Mostrar notificação baseada no tipo
         if notif_type == 'error':
@@ -697,7 +700,46 @@ class MainWindow(QMainWindow):
         dialog.exec()
     
     def show_notifications(self):
-        """Mostra painel de notificações"""
+        """Mostra menu de notificações e check-ins diários"""
+        menu = QMenu(self)
+
+        daily_checkin_controller = self.controllers.get('daily_checkin')
+        morning_action = None
+        evening_action = None
+
+        if daily_checkin_controller:
+            morning_pending = daily_checkin_controller.is_morning_pending()
+            evening_pending = daily_checkin_controller.is_evening_pending()
+
+            morning_text = "☀️ Check-in matinal"
+            if not morning_pending:
+                morning_text += " (concluído)"
+            morning_action = menu.addAction(morning_text)
+            morning_action.setEnabled(morning_pending)
+
+            evening_text = "🌙 Check-in noturno"
+            if not evening_pending:
+                evening_text += " (concluído)"
+            evening_action = menu.addAction(evening_text)
+            evening_action.setEnabled(evening_pending)
+            menu.addSeparator()
+
+        system_notifications_action = menu.addAction("🔔 Ver notificações do sistema")
+
+        pos = self.notification_button.mapToGlobal(QPoint(0, self.notification_button.height()))
+        selected_action = menu.exec(pos)
+
+        if selected_action == morning_action and daily_checkin_controller:
+            daily_checkin_controller.show_morning_dialog(self)
+        elif selected_action == evening_action and daily_checkin_controller:
+            daily_checkin_controller.show_evening_dialog(self)
+        elif selected_action == system_notifications_action:
+            self._show_notification_panel()
+
+        self._refresh_notification_counter()
+
+    def _show_notification_panel(self):
+        """Mostra painel com notificações do sistema"""
         from ui.widgets.notifications import NotificationPanel
         
         panel = NotificationPanel()
@@ -709,8 +751,37 @@ class MainWindow(QMainWindow):
         panel.show()
         
         # Resetar contador
-        self.notification_count.setText("0")
-        self.notification_count.setVisible(False)
+        self._event_notification_count = 0
+        self._refresh_notification_counter()
+
+    def _get_pending_checkins_count(self) -> int:
+        """Conta check-ins pendentes do dia"""
+        daily_checkin_controller = self.controllers.get('daily_checkin')
+        if not daily_checkin_controller:
+            return 0
+
+        pending = 0
+        if daily_checkin_controller.is_morning_pending():
+            pending += 1
+        if daily_checkin_controller.is_evening_pending():
+            pending += 1
+        return pending
+
+    def _refresh_notification_counter(self):
+        """Atualiza contador do sino considerando sistema + check-ins"""
+        total = self._event_notification_count + self._get_pending_checkins_count()
+        self.notification_count.setText(str(total))
+        self.notification_count.setVisible(total > 0)
+
+    @pyqtSlot(str, dict)
+    def _on_checkin_completed(self, checkin_type: str, data: dict):
+        """Reage ao término de check-ins para atualizar UI"""
+        checkin_label = "matinal" if checkin_type == 'morning' else "noturno"
+        self.show_success_notification(
+            "Check-in concluído",
+            f"Check-in {checkin_label} registrado com sucesso."
+        )
+        self._refresh_notification_counter()
     
     def show_performance_monitor(self):
         """Mostra monitor de performance"""
@@ -725,8 +796,8 @@ class MainWindow(QMainWindow):
         
         menu = QuickActionsMenu(self.controllers)
         
-        # Posicionar abaixo do botão
-        pos = self.quick_actions_button.mapToGlobal(QPoint(0, self.quick_actions_button.height()))
+        # Posicionar abaixo do sino de notificações (fallback)
+        pos = self.notification_button.mapToGlobal(QPoint(0, self.notification_button.height()))
         menu.move(pos)
         menu.show()
     
@@ -863,6 +934,8 @@ class MainWindow(QMainWindow):
     
     def check_notifications(self):
         """Verifica notificações pendentes"""
+        self._refresh_notification_counter()
+
         # Buscar notificações do sistema
         pending = self.get_pending_notifications()
         
