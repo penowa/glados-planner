@@ -25,10 +25,7 @@ from ui.utils.animation import FadeAnimation, SlideAnimation
 
 # Views
 from ui.views.dashboard import DashboardView
-from ui.views.library import LibraryView
 from ui.views.agenda import AgendaView
-from ui.views.focus import FocusView
-from ui.views.concepts import ConceptsView
 
 # Controllers
 from ui.controllers.book_controller import BookController
