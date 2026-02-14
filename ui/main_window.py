@@ -547,14 +547,21 @@ class MainWindow(QMainWindow):
     # ============ NOVOS MÉTODOS PARA OS BOTÕES ============
     
     def show_settings(self):
-        """Mostra tela de configurações"""
-        from ui.views.settings import SettingsView
-        # Criar view de configurações se não existir
-        if 'settings' not in self.views:
-            self.views['settings'] = SettingsView(self.config)
-            self.view_stack.addWidget(self.views['settings'])
-        
-        self.change_view('settings')
+        """Mostra diálogo de configurações do sistema"""
+        from ui.widgets.dialogs.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(self)
+        dialog.settings_saved.connect(self._on_settings_saved)
+        dialog.exec()
+
+    @pyqtSlot(dict)
+    def _on_settings_saved(self, updated_settings: dict):
+        """Atualiza estado local após salvar configurações."""
+        self.config.update(updated_settings)
+        self.show_success_notification(
+            "Configurações salvas",
+            "As configurações foram atualizadas com sucesso."
+        )
     
     def close_application(self):
         """Fecha a aplicação com confirmação"""

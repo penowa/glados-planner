@@ -137,5 +137,27 @@ class Settings(BaseSettings):
         
         return cls(**data) if data else cls()
 
+    def save_yaml(self, yaml_path: str = "config/settings.yaml"):
+        """Salva configurações atuais no arquivo YAML."""
+        yaml_path_obj = Path(yaml_path)
+        yaml_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+        data = self.model_dump()
+        with open(yaml_path_obj, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(
+                data,
+                f,
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False
+            )
+
+
+def reload_settings(yaml_path: str = "config/settings.yaml") -> Settings:
+    """Recarrega a instância global de configurações a partir do YAML."""
+    global settings
+    settings = Settings.from_yaml(yaml_path)
+    return settings
+
 # Instância global
 settings = Settings.from_yaml()
