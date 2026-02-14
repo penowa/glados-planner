@@ -29,12 +29,10 @@ class LoadingSplash(QWidget):
         self.dots_count = 0
         self.max_dots = 3
         self.loading_texts = [
-            "Inicializando GLaDOS Philosophy Planner",
-            "Carregando módulos",
-            "Conectando com backend",
-            "Preparando interface",
-            "Carregando configurações",
-            "Pronto para iniciar"
+            "Inicializando o núcleo da GLaDOS",
+            "Validando configurações locais",
+            "Preparando interface e tema",
+            "Conectando módulos principais"
         ]
         self.current_text_index = 0
         
@@ -76,9 +74,14 @@ class LoadingSplash(QWidget):
         self.progress_widget = QWidget()
         self.progress_widget.setFixedHeight(20)
         layout.addWidget(self.progress_widget)
+
+        self.progress_label = QLabel("Boot em andamento")
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_label.setStyleSheet("color: #B6A68D; font-size: 10px;")
+        layout.addWidget(self.progress_label)
         
         # Versão e copyright
-        self.version_label = QLabel("Versão 1.0.0 · © 2024 GLaDOS Philosophy Planner")
+        self.version_label = QLabel("GLaDOS Planner · Vault lazy-load ativo")
         self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version_font = QFont("Arial", 9)
         self.version_label.setFont(version_font)
@@ -96,7 +99,7 @@ class LoadingSplash(QWidget):
     def setup_animations(self):
         """Configura animações da splash screen"""
         # Timer para animação dos pontos
-        self.animation_timer.start(300)  # Atualiza a cada 300ms
+        self.animation_timer.start(80)  # Atualiza com mais fluidez
         
         # Fade in ao mostrar
         self.setWindowOpacity(0)
@@ -112,7 +115,7 @@ class LoadingSplash(QWidget):
         self.dots_count = (self.dots_count + 1) % (self.max_dots + 1)
         
         # Atualizar texto periodicamente
-        if self.animation_step % 5 == 0:  # A cada 5 atualizações
+        if self.animation_step % 18 == 0:
             self.current_text_index = (self.current_text_index + 1) % len(self.loading_texts)
             self.update_loading_text()
         
@@ -123,6 +126,8 @@ class LoadingSplash(QWidget):
         base_text = self.loading_texts[self.current_text_index]
         dots = "." * self.dots_count
         self.loading_label.setText(f"{base_text}{dots}")
+        phase = (self.animation_step % 120) / 120
+        self.progress_label.setText(f"Boot em andamento {int(phase * 100)}%")
     
     def paintEvent(self, event):
         """Desenha indicador de progresso personalizado"""
@@ -144,7 +149,7 @@ class LoadingSplash(QWidget):
         painter.drawEllipse(QPoint(center_x, center_y), radius, radius)
         
         # Arco de progresso animado
-        angle = (self.animation_step * 15) % 360  # Rotação de 15 graros por frame
+        angle = (self.animation_step * 6) % 360
         pen = QPen(QColor(85, 107, 47), 4)  # Verde oliva
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
@@ -175,9 +180,11 @@ class LoadingSplash(QWidget):
     
     def show_message(self, message: str):
         """Atualiza mensagem de carregamento"""
-        self.loading_texts.append(message)
+        self.loading_texts.append(message.strip())
+        self.loading_texts = self.loading_texts[-8:]
         self.current_text_index = len(self.loading_texts) - 1
         self.update_loading_text()
+        self.progress_label.setText(message.strip())
         logger.debug(f"Splash message: {message}")
     
     def show(self):

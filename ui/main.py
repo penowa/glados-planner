@@ -27,7 +27,7 @@ from core.communication.event_bus import GlobalEventBus
 from core.errors.error_manager import ErrorManager
 from core.monitoring.performance_monitor import PerformanceMonitor
 from core.recovery.state_recovery import StateRecoveryManager
-from core.modules.obsidian.vault_manager import ObsidianVaultManager
+from core.modules.obsidian.lazy_vault_manager import LazyObsidianVaultManager
 from core.modules.book_processor import BookProcessor
 from core.modules.reading_manager import ReadingManager
 from core.modules.agenda_manager import AgendaManager
@@ -197,22 +197,25 @@ class PhilosophyPlannerApp:
     
     def init_backend_modules(self):
         """Inicializa módulos do backend"""
-        self.splash.show_message("Carregando módulos do backend...")
-
+        self.splash.show_message("Validando configurações do vault...")
         vault_path = str(Path(core_settings.paths.vault).expanduser())
+        vault_exists = Path(vault_path).is_dir()
+        self.logger.info("Vault path validado: %s (exists=%s)", vault_path, vault_exists)
 
-        # Garantir um único vault manager compartilhado por todos os módulos.
-        self.backend_modules['vault_manager'] = ObsidianVaultManager.instance(vault_path)
+        # Vault fica lazy: apenas valida path no boot; scan completo só sob demanda.
+        self.backend_modules['vault_manager'] = LazyObsidianVaultManager(vault_path)
+
+        self.splash.show_message("Inicializando módulos de leitura e agenda...")
         self.backend_modules['book_processor'] = BookProcessor(
             vault_manager=self.backend_modules['vault_manager']
         )
         self.backend_modules['reading_manager'] = ReadingManager(vault_path=vault_path)
         self.backend_modules['agenda_manager'] = AgendaManager(vault_path=vault_path)
         
-        self.splash.show_message("Inicializando assistente GLaDOS...")
+        self.splash.show_message("Inicializando núcleo cognitivo da GLaDOS...")
         self.backend_modules['llm_module'] = llm
 
-        self.splash.show_message("Conectando ao vault Obsidian...")
+        self.splash.show_message("Sincronização do vault será sob demanda...")
         
         self.connect_modules_to_event_bus()
         

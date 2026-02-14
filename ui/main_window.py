@@ -125,7 +125,11 @@ class MainWindow(QMainWindow):
         # Priorizar vault cedo para habilitar stats card mesmo se outro módulo falhar.
         _safe_init(
             'vault',
-            lambda: VaultController(str(self.backend_modules['vault_manager'].vault_path))
+            lambda: VaultController(
+                vault_path=str(self.backend_modules['vault_manager'].vault_path),
+                vault_manager=self.backend_modules.get('vault_manager'),
+                auto_check_connection=False
+            )
         )
         _safe_init('dashboard', lambda: DashboardController(self.backend_modules))
         _safe_init(
@@ -922,7 +926,19 @@ class MainWindow(QMainWindow):
             if 'vault_manager' in self.backend_modules:
                 vault = self.backend_modules['vault_manager']
                 if hasattr(vault, 'is_connected') and vault.is_connected():
-                    vault_status = f"🔗 Vault: {vault.get_all_notes()} notas"
+                    total_notes = None
+                    controller = self.controllers.get("vault")
+                    if controller and getattr(controller, "cache", None):
+                        stats = controller.cache.get("stats")
+                        if isinstance(stats, dict):
+                            total_notes = stats.get("total_notes")
+                    vault_status = (
+                        f"🔗 Vault: {total_notes} notas"
+                        if isinstance(total_notes, int)
+                        else "🔗 Vault: conectado"
+                    )
+                else:
+                    vault_status = "🔗 Vault: desconectado"
             self.status_indicators['vault'].setText(vault_status)
             
             # Status do LLM

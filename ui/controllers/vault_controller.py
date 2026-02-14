@@ -26,7 +26,7 @@ class VaultWorker(QObject):
     vault_stats_ready = pyqtSignal(dict)
     vault_connected = pyqtSignal(bool)
     
-    def __init__(self, vault_manager: ObsidianVaultManager):
+    def __init__(self, vault_manager: Any):
         super().__init__()
         self.vault_manager = vault_manager
     
@@ -143,11 +143,17 @@ class VaultController(QObject):
     notes_list_updated = pyqtSignal(list)  # Lista de notas
     book_notes_updated = pyqtSignal(int, list)  # (book_id, lista de notas)
     
-    def __init__(self, vault_path: Optional[str] = None):
+    def __init__(
+        self,
+        vault_path: Optional[str] = None,
+        vault_manager: Optional[Any] = None,
+        auto_check_connection: bool = False
+    ):
         super().__init__()
-        
-        # Inicializar o gerenciador do vault (singleton)
-        self.vault_manager = ObsidianVaultManager.instance(vault_path)
+        self.vault_manager = vault_manager
+        self.vault_path = Path(vault_path).expanduser().resolve() if vault_path else None
+        if self.vault_manager and hasattr(self.vault_manager, "vault_path"):
+            self.vault_path = Path(self.vault_manager.vault_path).expanduser().resolve()
         
         # Thread e worker para operações assíncronas
         self.worker_thread = None
@@ -160,8 +166,16 @@ class VaultController(QObject):
             'last_sync': None
         }
         
-        # Verificar conexão inicial
-        self.check_vault_connection()
+        if auto_check_connection:
+            self.check_vault_connection()
+
+    def _ensure_vault_manager(self) -> Any:
+        """Garante manager real apenas quando uma operação exige dados do vault."""
+        if self.vault_manager is None:
+            self.vault_manager = ObsidianVaultManager.instance(
+                str(self.vault_path) if self.vault_path else None
+            )
+        return self.vault_manager
 
     def _stop_worker_thread(self, timeout_ms: int = 3000):
         """Encerra thread ativa de forma segura antes de iniciar uma nova."""
@@ -184,7 +198,7 @@ class VaultController(QObject):
         self._stop_worker_thread()
 
         self.worker_thread = QThread()
-        self.worker = VaultWorker(self.vault_manager)
+        self.worker = VaultWorker(self._ensure_vault_manager())
         self.worker.moveToThread(self.worker_thread)
 
         # Encerrar thread ao fim da operação (sucesso/erro).
@@ -199,6 +213,11 @@ class VaultController(QObject):
     
     def check_vault_connection(self):
         """Verifica a conexão com o vault"""
+        if self.vault_manager is None:
+            connected = bool(self.vault_path and self.vault_path.exists() and self.vault_path.is_dir())
+            self._handle_vault_connected(connected)
+            return
+
         self._setup_worker()
         
         # Conectar sinais do worker
@@ -214,15 +233,10 @@ class VaultController(QObject):
         """Processa resultado da verificação de conexão"""
         status = {
             'connected': connected,
-            'path': str(self.vault_manager.vault_path) if connected else None,
+            'path': str(self.vault_path) if connected and self.vault_path else None,
             'stats': None
         }
-        
-        if connected:
-            # Obter estatísticas iniciais
-            self.get_vault_stats()
-        else:
-            self.vault_status_changed.emit(status)
+        self.vault_status_changed.emit(status)
     
     @pyqtSlot()
     def get_vault_stats(self):
@@ -246,7 +260,7 @@ class VaultController(QObject):
         # Atualizar status completo
         status = {
             'connected': True,
-            'path': str(self.vault_manager.vault_path),
+            'path': str(self.vault_path) if self.vault_path else None,
             'stats': stats
         }
         self.vault_status_changed.emit(status)
@@ -324,7 +338,7 @@ class VaultController(QObject):
             return self.cache['notes']
         
         try:
-            notes = self.vault_manager.get_all_notes()
+            notes = self._ensure_vault_manager().get_all_notes()
             ui_notes = [self._note_to_ui_format(note) for note in notes]
             self.cache['notes'] = ui_notes
             return ui_notes
@@ -337,7 +351,7 @@ class VaultController(QObject):
         try:
             # Encontrar notas pelo caminho do livro
             book_path = f"01-LEITURAS/{book.author}/{book.title}"
-            all_notes = self.vault_manager.get_all_notes()
+            all_notes = self._ensure_vault_manager().get_all_notes()
             
             book_notes = []
             for note in all_notes:
@@ -354,7 +368,7 @@ class VaultController(QObject):
                    frontmatter: Optional[Dict] = None, tags: Optional[List[str]] = None) -> Dict:
         """Cria uma nova nota (síncrono)"""
         try:
-            note = self.vault_manager.create_note(
+            note = self._ensure_vault_manager().create_note(
                 relative_path, content, frontmatter, tags
             )
             ui_note = self._note_to_ui_format(note)
@@ -371,7 +385,7 @@ class VaultController(QObject):
     def update_note(self, relative_path: str, **kwargs) -> Dict:
         """Atualiza uma nota existente (síncrono)"""
         try:
-            note = self.vault_manager.update_note(relative_path, **kwargs)
+            note = self._ensure_vault_manager().update_note(relative_path, **kwargs)
             ui_note = self._note_to_ui_format(note)
             self.note_updated.emit(ui_note)
             
@@ -386,7 +400,7 @@ class VaultController(QObject):
     def delete_note(self, relative_path: str):
         """Exclui uma nota (síncrono)"""
         try:
-            self.vault_manager.delete_note(relative_path)
+            self._ensure_vault_manager().delete_note(relative_path)
             self.note_deleted.emit(relative_path)
             
             # Invalidar cache
@@ -399,12 +413,13 @@ class VaultController(QObject):
     def search_notes(self, query: str, search_in_content: bool = True) -> List[Dict]:
         """Busca notas por texto"""
         try:
+            manager = self._ensure_vault_manager()
             if search_in_content:
-                notes = self.vault_manager.find_notes_by_content(query)
+                notes = manager.find_notes_by_content(query)
             else:
                 # Buscar por tag ou título
                 notes = [
-                    note for note in self.vault_manager.get_all_notes()
+                    note for note in manager.get_all_notes()
                     if query.lower() in ' '.join(note.tags).lower() or
                        query.lower() in note.frontmatter.get('title', '').lower()
                 ]

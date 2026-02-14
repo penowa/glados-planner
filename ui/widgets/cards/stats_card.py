@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QGridLayout, QProgressBar, QToolTip,
                             QLineEdit, QTreeWidget, QTreeWidgetItem, QAbstractItemView)
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QRectF
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QPoint, QRectF
 from PyQt6.QtGui import (QPainter, QColor, QLinearGradient, QFont, 
                         QPen, QBrush, QFontMetrics, QIcon)
 
@@ -35,11 +35,6 @@ class VaultStatsCard(PhilosophyCard):
         self.last_sync_time = None
         self.all_notes: List[Dict[str, Any]] = []
         self.selected_note_paths = set()
-        
-        # Timer para atualização periódica
-        self.refresh_timer = QTimer()
-        self.refresh_timer.timeout.connect(self._auto_refresh)
-        self.refresh_timer.start(30000)  # Atualizar a cada 30 segundos
         
         self.setup_ui()
         self.setup_connections()
@@ -107,14 +102,32 @@ class VaultStatsCard(PhilosophyCard):
         header.addWidget(self.selected_count_label)
         layout.addLayout(header)
 
+        self.search_hint_label = QLabel(
+            "Digite um termo e pressione Enter para buscar no vault. "
+            "Nada é carregado até você pesquisar."
+        )
+        self.search_hint_label.setStyleSheet("color: #8EA6C6; font-size: 11px;")
+        self.search_hint_label.setWordWrap(True)
+        layout.addWidget(self.search_hint_label)
+
         self.notes_filter_input = QLineEdit()
-        self.notes_filter_input.setPlaceholderText("Filtrar notas por título, pasta ou tag...")
-        self.notes_filter_input.textChanged.connect(self.refresh_notes_tree)
-        layout.addWidget(self.notes_filter_input)
+        self.notes_filter_input.setPlaceholderText("Ex.: ética aristotélica, heidegger, #metafisica...")
+        self.notes_filter_input.returnPressed.connect(self.search_notes_on_demand)
+
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.setSpacing(6)
+        search_row.addWidget(self.notes_filter_input, 1)
+
+        self.search_btn = QPushButton("Buscar")
+        self.search_btn.setToolTip("Buscar notas no vault")
+        self.search_btn.clicked.connect(self.search_notes_on_demand)
+        search_row.addWidget(self.search_btn)
+        layout.addLayout(search_row)
 
         self.notes_tree = QTreeWidget()
-        self.notes_tree.setColumnCount(3)
-        self.notes_tree.setHeaderLabels(["Nota", "Pasta", "Tags"])
+        self.notes_tree.setColumnCount(1)
+        self.notes_tree.setHeaderLabels(["Item"])
         self.notes_tree.setRootIsDecorated(True)
         self.notes_tree.setAlternatingRowColors(False)
         self.notes_tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -277,104 +290,136 @@ class VaultStatsCard(PhilosophyCard):
         
     def load_initial_data(self):
         """Carregar dados iniciais"""
-        self.refresh_data()
-        self.load_notes_data()
+        self.controller.check_vault_connection()
+        self.notes_tree.clear()
+        self._update_selected_count_label()
         
     @pyqtSlot()
     def refresh_data(self):
         """Atualizar dados do vault"""
         self.controller.get_vault_stats()
-        self.load_notes_data()
 
-    def load_notes_data(self):
-        """Carrega notas do vault para exibição visual."""
+    @pyqtSlot()
+    def search_notes_on_demand(self):
+        """Carrega notas somente quando o usuário pesquisar."""
+        query = self.notes_filter_input.text().strip()
+        if not query:
+            self.search_hint_label.setText("Informe um termo para buscar no vault.")
+            return
+
+        self.search_hint_label.setText(f"Buscando por: '{query}'...")
         try:
-            self.all_notes = self.controller.get_all_notes()
+            self.all_notes = self.controller.search_notes(query, search_in_content=True)
             available_paths = {note.get("path") for note in self.all_notes if note.get("path")}
             self.selected_note_paths = {p for p in self.selected_note_paths if p in available_paths}
             self.refresh_notes_tree()
-        except Exception:
+
+            if self.all_notes:
+                self.search_hint_label.setText(
+                    f"{len(self.all_notes)} resultado(s) para '{query}'. "
+                    "Selecione as notas para enviar contexto."
+                )
+            else:
+                self.search_hint_label.setText(f"Nenhum resultado para '{query}'.")
+        except Exception as e:
             self.all_notes = []
             self.selected_note_paths.clear()
             self.refresh_notes_tree()
+            self.search_hint_label.setText(f"Erro ao buscar: {e}")
 
     def refresh_notes_tree(self):
-        """Atualiza árvore de notas com base no filtro atual."""
+        """Atualiza árvore de notas no formato autor -> obra -> nota."""
         if not hasattr(self, "notes_tree"):
             return
 
-        filter_text = self.notes_filter_input.text().strip().lower() if hasattr(self, "notes_filter_input") else ""
         selected_paths = set(self.selected_note_paths)
+        tree_data: Dict[str, Dict[str, List[Dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
 
-        folders: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for note in self.all_notes:
-            folder = self._extract_folder(note.get("path", ""))
-            if self._note_matches_filter(note, filter_text, folder):
-                folders[folder].append(note)
+            author_name, work_name = self._extract_author_work(note)
+            tree_data[author_name][work_name].append(note)
 
         self.notes_tree.blockSignals(True)
         self.notes_tree.clear()
 
-        for folder_name in sorted(folders.keys()):
-            notes = folders[folder_name]
-            folder_item = QTreeWidgetItem([f"{folder_name} ({len(notes)})", "", ""])
-            folder_item.setFlags(folder_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            folder_item.setBackground(0, QBrush(QColor("#1A304F")))
-            folder_item.setForeground(0, QBrush(QColor("#E4EEFF")))
-            self.notes_tree.addTopLevelItem(folder_item)
+        for author_name in sorted(tree_data.keys(), key=str.lower):
+            works_map = tree_data[author_name]
+            author_notes_count = sum(len(notes) for notes in works_map.values())
+            author_item = QTreeWidgetItem([f"👤 {author_name} ({author_notes_count})"])
+            author_item.setFlags(author_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            author_item.setBackground(0, QBrush(QColor("#1A304F")))
+            author_item.setForeground(0, QBrush(QColor("#E4EEFF")))
+            self.notes_tree.addTopLevelItem(author_item)
 
-            sorted_notes = sorted(notes, key=lambda n: n.get("title", "").lower())
-            for idx, note in enumerate(sorted_notes):
-                note_item = QTreeWidgetItem([
-                    f"{note.get('icon', '📝')} {note.get('title', 'Sem título')}",
-                    folder_name,
-                    ", ".join(note.get("tags", [])[:3]),
-                ])
-                note_item.setFlags(note_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                path = note.get("path", "")
-                note_item.setData(0, Qt.ItemDataRole.UserRole, note)
-                row_color = QColor("#223A5A") if idx % 2 == 0 else QColor("#29466C")
-                text_color = QBrush(QColor("#D8E8FF"))
-                note_item.setBackground(0, QBrush(row_color))
-                note_item.setBackground(1, QBrush(row_color))
-                note_item.setBackground(2, QBrush(row_color))
-                note_item.setForeground(0, text_color)
-                note_item.setForeground(1, text_color)
-                note_item.setForeground(2, text_color)
-                note_item.setCheckState(
-                    0,
-                    Qt.CheckState.Checked if path in selected_paths else Qt.CheckState.Unchecked
-                )
-                folder_item.addChild(note_item)
+            for work_name in sorted(works_map.keys(), key=str.lower):
+                notes = works_map[work_name]
+                work_item = QTreeWidgetItem([f"📚 {work_name} ({len(notes)})"])
+                work_item.setFlags(work_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                work_item.setBackground(0, QBrush(QColor("#203958")))
+                work_item.setForeground(0, QBrush(QColor("#D7E8FF")))
+                author_item.addChild(work_item)
 
-            folder_item.setExpanded(True)
+                sorted_notes = sorted(notes, key=lambda n: n.get("title", "").lower())
+                for idx, note in enumerate(sorted_notes):
+                    path = note.get("path", "")
+                    note_item = QTreeWidgetItem([
+                        f"{note.get('icon', '📝')} {note.get('title', 'Sem título')}"
+                    ])
+                    note_item.setFlags(note_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    note_item.setData(0, Qt.ItemDataRole.UserRole, note)
+                    row_color = QColor("#223A5A") if idx % 2 == 0 else QColor("#29466C")
+                    text_color = QBrush(QColor("#D8E8FF"))
+                    note_item.setBackground(0, QBrush(row_color))
+                    note_item.setForeground(0, text_color)
+                    note_item.setCheckState(
+                        0,
+                        Qt.CheckState.Checked if path in selected_paths else Qt.CheckState.Unchecked
+                    )
+                    work_item.addChild(note_item)
+
+                work_item.setExpanded(True)
+            author_item.setExpanded(True)
 
         self.notes_tree.blockSignals(False)
         self._update_selected_count_label()
 
-    def _extract_folder(self, note_path: str) -> str:
-        """Extrai pasta de exibição a partir do caminho da nota."""
+    def _extract_author_work(self, note: Dict[str, Any]) -> tuple[str, str]:
+        """Extrai autor e obra para organização em árvore."""
+        note_path = str(note.get("path", "") or "")
+        frontmatter = note.get("frontmatter") or {}
+
+        fm_author = str(frontmatter.get("author", "")).strip()
+        fm_work = str(
+            frontmatter.get("book")
+            or frontmatter.get("obra")
+            or frontmatter.get("work")
+            or ""
+        ).strip()
+
         try:
-            p = Path(note_path)
-            if p.parent and str(p.parent) != ".":
-                return str(p.parent)
+            parts = list(Path(note_path).parts)
         except Exception:
-            pass
-        return "Raiz"
+            parts = []
 
-    def _note_matches_filter(self, note: Dict[str, Any], filter_text: str, folder: str) -> bool:
-        """Aplica filtro textual em título, pasta, tags e caminho."""
-        if not filter_text:
-            return True
+        author_name = fm_author
+        work_name = fm_work
 
-        tags_text = " ".join(note.get("tags", []))
-        haystack = " ".join([
-            note.get("title", ""),
-            note.get("path", ""),
-            folder,
-            tags_text,
-        ]).lower()
-        return filter_text in haystack
+        # Padrão esperado: 01-LEITURAS/Autor/Obra/Nota.md
+        if len(parts) >= 4 and not author_name:
+            author_name = parts[1]
+        if len(parts) >= 4 and not work_name:
+            work_name = parts[2]
+
+        # Fallbacks para caminhos fora do padrão
+        if not author_name:
+            author_name = parts[-3] if len(parts) >= 3 else "Sem autor"
+        if not work_name:
+            if len(parts) >= 2:
+                work_name = parts[-2]
+            else:
+                work_name = "Sem obra"
+
+        return author_name, work_name
 
     def _on_tree_item_changed(self, item: QTreeWidgetItem, _column: int):
         """Atualiza contador quando checkboxes mudam."""
@@ -391,10 +436,15 @@ class VaultStatsCard(PhilosophyCard):
 
     def _iter_leaf_items(self):
         """Itera itens folha (notas) da árvore."""
+        def walk(item: QTreeWidgetItem):
+            if item.childCount() == 0:
+                yield item
+                return
+            for idx in range(item.childCount()):
+                yield from walk(item.child(idx))
+
         for i in range(self.notes_tree.topLevelItemCount()):
-            folder_item = self.notes_tree.topLevelItem(i)
-            for j in range(folder_item.childCount()):
-                yield folder_item.child(j)
+            yield from walk(self.notes_tree.topLevelItem(i))
 
     def get_selected_note_paths(self) -> List[str]:
         """Retorna caminhos das notas selecionadas."""
@@ -553,12 +603,6 @@ class VaultStatsCard(PhilosophyCard):
             # ou usar livro selecionado
             self.controller.sync_all_to_obsidian()
             
-    def _auto_refresh(self):
-        """Atualização automática periódica"""
-        if self.connection_status:
-            self.refresh_data()
-
-
 class TypeChartWidget(QWidget):
     """Widget de gráfico para tipos de notas"""
     

@@ -462,12 +462,6 @@ class DashboardView(QWidget):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.refresh_data)
         self.update_timer.start(300000)  # 5 minutos
-        
-        # Timer para atualizar vault stats (mais frequente se necessário)
-        if self.vault_controller:
-            self.vault_timer = QTimer()
-            self.vault_timer.timeout.connect(self.handle_vault_refresh)
-            self.vault_timer.start(60000)  # 1 minuto
     
     def load_initial_data(self):
         """Carrega dados iniciais dos controllers"""
@@ -495,9 +489,7 @@ class DashboardView(QWidget):
             except Exception as e:
                 logger.error(f"Erro ao carregar estatísticas: {e}")
         
-        # Atualizar dados do vault se houver card
-        if self.vault_stats_card:
-            QTimer.singleShot(500, self.handle_vault_refresh)
+        # Vault permanece em modo sob demanda para reduzir custo de boot.
     
     # ============ HANDLERS ============
     
@@ -749,10 +741,6 @@ class DashboardView(QWidget):
     def on_view_activated(self):
         """Chamado quando a view é ativada"""
         self.load_initial_data()
-        
-        # Forçar atualização do vault
-        if self.vault_stats_card:
-            self.handle_vault_refresh()
         
     def cleanup(self):
         """Limpeza antes de fechar"""
