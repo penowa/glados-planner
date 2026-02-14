@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QStackedWidget, QSizePolicy, QFrame, QLabel, 
     QPushButton, QToolBar, QStatusBar, QMessageBox,
-    QDialog, QProgressBar, QMenu
+    QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QPen
@@ -42,9 +42,68 @@ from core.modules.daily_checkin import DailyCheckinSystem
 import logging
 from typing import Dict, Any, List
 from datetime import datetime
+from pathlib import Path
 import os
 
 logger = logging.getLogger('GLaDOS.UI.MainWindow')
+
+
+class AdHocReadingDialog(QDialog):
+    """Diálogo para seleção de leitura avulsa."""
+
+    def __init__(self, book_dirs: List[Path], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Leitura Avulsa")
+        self.setModal(True)
+        self.resize(560, 420)
+        self._book_dirs = book_dirs
+        self._filtered = list(book_dirs)
+        self.selected_book_dir: Path | None = None
+
+        layout = QVBoxLayout(self)
+        info = QLabel("Selecione um livro pelo nome do diretório:")
+        layout.addWidget(info)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Pesquisar livro...")
+        layout.addWidget(self.search_input)
+
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        layout.addWidget(buttons)
+
+        self.search_input.textChanged.connect(self._apply_filter)
+        self.list_widget.itemDoubleClicked.connect(lambda *_: self._accept_selection())
+        buttons.accepted.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+
+        self._render_list()
+
+    def _apply_filter(self, text: str):
+        q = (text or "").strip().lower()
+        if not q:
+            self._filtered = list(self._book_dirs)
+        else:
+            self._filtered = [p for p in self._book_dirs if q in p.name.lower()]
+        self._render_list()
+
+    def _render_list(self):
+        self.list_widget.clear()
+        for p in self._filtered:
+            self.list_widget.addItem(p.name)
+        if self._filtered:
+            self.list_widget.setCurrentRow(0)
+
+    def _accept_selection(self):
+        idx = self.list_widget.currentRow()
+        if idx < 0 or idx >= len(self._filtered):
+            return
+        self.selected_book_dir = self._filtered[idx]
+        self.accept()
 
 class MainWindow(QMainWindow):
     """Janela principal com todos os sistemas integrados"""
@@ -218,6 +277,14 @@ class MainWindow(QMainWindow):
         font = QFont("Georgia", 16, QFont.Weight.Bold)
         self.app_logo.setFont(font)
         layout.addWidget(self.app_logo)
+
+        # Detalhe do livro atual em leitura (visível na view de sessão)
+        self.session_book_label = QLabel("")
+        self.session_book_label.setObjectName("session_book_label")
+        self.session_book_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.session_book_label.setStyleSheet("color: #9AA4B2; font-size: 11px;")
+        self.session_book_label.setVisible(False)
+        layout.addWidget(self.session_book_label)
         
         # Spacer
         layout.addStretch(1)
@@ -229,6 +296,14 @@ class MainWindow(QMainWindow):
         # Sistema de performance
         self.setup_performance_indicator()
         layout.addWidget(self.performance_widget)
+
+        # Acesso rápido à sessão de leitura
+        self.session_quick_button = QPushButton("📚")
+        self.session_quick_button.setObjectName("session_quick_button")
+        self.session_quick_button.setFixedSize(36, 36)
+        self.session_quick_button.setToolTip("Abrir sessão de leitura")
+        self.session_quick_button.clicked.connect(self.open_session_quick_access)
+        layout.addWidget(self.session_quick_button)
         
         # Controles da janela
         controls_layout = QHBoxLayout()
@@ -341,6 +416,9 @@ class MainWindow(QMainWindow):
         
         # Adicionar ao stack
         for view_name, view in self.views.items():
+            # Necessário para SlideAnimation.transition_to(view_name)
+            # localizar corretamente a view pelo nome lógico.
+            view.setObjectName(view_name)
             self.view_stack.addWidget(view)
             
             # Conectar sinais comuns
@@ -498,6 +576,28 @@ class MainWindow(QMainWindow):
         current_view = self.views[view_name]
         if hasattr(current_view, 'on_view_activated'):
             current_view.on_view_activated()
+
+        self._update_session_book_indicator()
+
+    def _update_session_book_indicator(self):
+        """Atualiza rótulo discreto com livro atual na view de sessão."""
+        if self.current_view != "session":
+            self.session_book_label.clear()
+            self.session_book_label.setVisible(False)
+            return
+
+        session_view = self.views.get("session")
+        book_title = ""
+        if session_view is not None:
+            book_title = str(getattr(session_view, "current_book_title", "") or "").strip()
+
+        if not book_title or book_title == "Sessão de leitura":
+            self.session_book_label.clear()
+            self.session_book_label.setVisible(False)
+            return
+
+        self.session_book_label.setText(f"• {book_title}")
+        self.session_book_label.setVisible(True)
     
     def toggle_theme(self):
         """Alterna entre temas com animação"""
@@ -586,6 +686,93 @@ class MainWindow(QMainWindow):
             # Fechar completamente a aplicação
             from PyQt6.QtWidgets import QApplication
             QApplication.instance().quit()
+
+    def open_session_quick_access(self):
+        """Acesso alternativo para a SessionView."""
+        if self._has_upcoming_reading_session(10):
+            self.change_view("session")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Sessão de leitura",
+            "Nenhuma sessão agenda, deseja iniciar uma leitura avulsa?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        book_dirs = self._list_vault_book_dirs()
+        if not book_dirs:
+            QMessageBox.information(
+                self,
+                "Leitura avulsa",
+                "Nenhum livro foi encontrado no vault."
+            )
+            return
+
+        picker = AdHocReadingDialog(book_dirs, self)
+        if picker.exec() != QDialog.DialogCode.Accepted or not picker.selected_book_dir:
+            return
+
+        session_view = self.views.get("session")
+        if session_view and hasattr(session_view, "start_ad_hoc_reading"):
+            session_view.start_ad_hoc_reading(picker.selected_book_dir)
+        self.change_view("session")
+
+    def _has_upcoming_reading_session(self, window_minutes: int = 10) -> bool:
+        agenda_controller = self.controllers.get("agenda")
+        if not agenda_controller:
+            return False
+
+        agenda_manager = getattr(agenda_controller, "agenda_manager", None)
+        events_map = getattr(agenda_manager, "events", None)
+        if not isinstance(events_map, dict):
+            return False
+
+        now = datetime.now()
+        max_seconds = max(0, int(window_minutes)) * 60
+
+        for event in events_map.values():
+            try:
+                event_type = str(getattr(getattr(event, "type", None), "value", "")).strip().lower()
+                if event_type != "leitura":
+                    continue
+                if bool(getattr(event, "completed", False)):
+                    continue
+
+                start_at = getattr(event, "start", None)
+                if not start_at:
+                    continue
+
+                delta = (start_at - now).total_seconds()
+                if 0 <= delta <= max_seconds:
+                    return True
+            except Exception:
+                continue
+
+        return False
+
+    def _list_vault_book_dirs(self) -> List[Path]:
+        reading_controller = self.controllers.get("reading")
+        if not reading_controller or not getattr(reading_controller, "reading_manager", None):
+            return []
+
+        vault_root = Path(reading_controller.reading_manager.vault_path) / "01-LEITURAS"
+        if not vault_root.exists():
+            return []
+
+        book_dirs: List[Path] = []
+        for author_dir in vault_root.iterdir():
+            if not author_dir.is_dir():
+                continue
+            for book_dir in author_dir.iterdir():
+                if book_dir.is_dir():
+                    book_dirs.append(book_dir)
+
+        book_dirs.sort(key=lambda p: p.name.lower())
+        return book_dirs
     
     # ============ HANDLERS DO EVENTBUS ============
     
@@ -1192,6 +1379,7 @@ class MainWindow(QMainWindow):
     def on_view_changed(self, view_name: str):
         """Loga mudança de view"""
         logger.info(f"View alterada para: {view_name}")
+        self._update_session_book_indicator()
     
     @pyqtSlot(str, dict)
     def on_view_data_updated(self, view_name: str, data: dict):
