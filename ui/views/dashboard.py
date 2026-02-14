@@ -589,12 +589,27 @@ class DashboardView(QWidget):
         """Iniciar sessão de leitura (agora vindo da agenda)"""
         if self.reading_controller:
             try:
-                self.reading_controller.start_session(session_data)
-                logger.info("Sessão de leitura iniciada")
-                # Atualizar a agenda após iniciar sessão
-                self.refresh_data()
+                metadata = session_data.get("metadata", {}) if isinstance(session_data, dict) else {}
+                book_id = (
+                    session_data.get("book_id")
+                    or metadata.get("book_id")
+                    or metadata.get("id")
+                ) if isinstance(session_data, dict) else None
+                target_pages = (
+                    session_data.get("target_pages")
+                    or metadata.get("pages_planned")
+                    or 10
+                ) if isinstance(session_data, dict) else 10
+
+                if book_id and hasattr(self.reading_controller, "start_reading_session"):
+                    self.reading_controller.start_reading_session(str(book_id), int(target_pages))
+                    logger.info("Sessão de leitura iniciada para livro %s", book_id)
+                else:
+                    logger.warning("Sessão iniciada sem book_id válido no evento: %s", session_data)
             except Exception as e:
                 logger.error(f"Erro ao iniciar sessão: {e}")
+
+        self.navigate_to.emit('session')
     
     def handle_edit_session(self, session_data):
         """Editar sessão de leitura (agora vindo da agenda)"""

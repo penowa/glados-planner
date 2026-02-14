@@ -68,6 +68,10 @@ class AgendaCard(PhilosophyCard):
 
         self.timer_label = QLabel("--:--")
         self.timer_label.setObjectName("timer_display")
+        self.start_session_button = QPushButton("Iniciar sessão agendada")
+        self.start_session_button.setObjectName("primary_button")
+        self.start_session_button.setVisible(False)
+        self.start_session_button.clicked.connect(self._start_next_reading_session)
         self.next_event_name = QLabel("Sem próximos eventos")
         self.next_event_name.setObjectName("next_event_name")
 
@@ -76,6 +80,7 @@ class AgendaCard(PhilosophyCard):
         timer_box_layout.setContentsMargins(0, 0, 0, 0)
         timer_box_layout.setSpacing(2)
         timer_box_layout.addWidget(self.timer_label)
+        timer_box_layout.addWidget(self.start_session_button)
         timer_box_layout.addWidget(self.next_event_name)
 
         stats = QWidget()
@@ -373,6 +378,9 @@ class AgendaCard(PhilosophyCard):
             self.next_event_name.setText("Sem próximos eventos")
             self.timer_label.setText("--:--")
             self.next_event_time = None
+            self.next_event_data = None
+            self.start_session_button.setVisible(False)
+            self.timer_label.setVisible(True)
             return
 
         now = datetime.now()
@@ -391,20 +399,35 @@ class AgendaCard(PhilosophyCard):
             self.next_event_name.setText("Sem próximos eventos")
             self.timer_label.setText("--:--")
             self.next_event_time = None
+            self.next_event_data = None
+            self.start_session_button.setVisible(False)
+            self.timer_label.setVisible(True)
             return
 
         future.sort(key=lambda item: item[0])
         self.next_event_time, next_event = future[0]
+        self.next_event_data = next_event
         self.next_event_name.setText(next_event.get("title", "Próximo evento")[:30])
         self.update_countdown()
 
     def update_countdown(self):
         if not getattr(self, "next_event_time", None):
+            self.start_session_button.setVisible(False)
+            self.timer_label.setVisible(True)
             self.timer_label.setText("--:--")
             return
 
         now = datetime.now()
         delta = self.next_event_time - now
+        next_event = getattr(self, "next_event_data", None) or {}
+        is_reading = self._is_reading_event(next_event)
+
+        if is_reading and delta.total_seconds() <= 300:
+            self.timer_label.setVisible(False)
+            self.start_session_button.setVisible(True)
+        else:
+            self.start_session_button.setVisible(False)
+            self.timer_label.setVisible(True)
 
         if delta.total_seconds() <= 0:
             self.timer_label.setText("AGORA")
@@ -418,6 +441,16 @@ class AgendaCard(PhilosophyCard):
             self.timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
         else:
             self.timer_label.setText(f"{minutes:02d}:{seconds:02d}")
+
+    def _is_reading_event(self, event: Dict[str, Any]) -> bool:
+        event_type = str(event.get("type", "")).strip().lower()
+        return event_type == "leitura"
+
+    def _start_next_reading_session(self):
+        event_data = getattr(self, "next_event_data", None)
+        if not event_data:
+            return
+        self.start_reading_session.emit(event_data)
 
     def on_add_event(self):
         self.add_event_requested.emit()

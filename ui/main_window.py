@@ -26,6 +26,7 @@ from ui.utils.animation import FadeAnimation, SlideAnimation
 # Views
 from ui.views.dashboard import DashboardView
 from ui.views.agenda import AgendaView
+from ui.views.session import SessionView
 
 # Controllers
 from ui.controllers.book_controller import BookController
@@ -40,6 +41,7 @@ from core.modules.daily_checkin import DailyCheckinSystem
 
 import logging
 from typing import Dict, Any, List
+from datetime import datetime
 import os
 
 logger = logging.getLogger('GLaDOS.UI.MainWindow')
@@ -82,6 +84,7 @@ class MainWindow(QMainWindow):
         self.animations_enabled = True
         self.notifications_enabled = True
         self._event_notification_count = 0
+        self._reading_session_notified_ids = set()
         
         # Inicializar
         self.setup_window()
@@ -321,6 +324,8 @@ class MainWindow(QMainWindow):
         # Criar views com referências aos controllers
         self.views['dashboard'] = DashboardView(self.controllers)
         self.views['dashboard'].navigate_to.connect(self.change_view)
+        self.views['session'] = SessionView(self.controllers)
+        self.views['session'].navigate_to.connect(self.change_view)
         #self.views['library'] =  LibraryView(self.controllers['reading'])
         #self.views['agenda'] = AgendaView(self.controllers['agenda'])
         #self.views['focus'] = FocusView(self.controllers['focus'])
@@ -460,6 +465,7 @@ class MainWindow(QMainWindow):
         # Atualizar título do app_logo
         titles = {
             'dashboard': 'GLaDOS',
+            'session': 'Sessão',
             'library': 'Biblioteca',
             'agenda': 'Agenda',
             'focus': 'Modo Foco',
@@ -939,6 +945,7 @@ class MainWindow(QMainWindow):
     def check_notifications(self):
         """Verifica notificações pendentes"""
         self._refresh_notification_counter()
+        self._check_upcoming_reading_notifications()
 
         # Buscar notificações do sistema
         pending = self.get_pending_notifications()
@@ -955,6 +962,48 @@ class MainWindow(QMainWindow):
         # Implementar lógica para buscar notificações
         # Ex: tarefas atrasadas, revisões pendentes, etc.
         return []
+
+    def _check_upcoming_reading_notifications(self):
+        """Dispara notificação quando leitura estiver a até 5 minutos do início."""
+        agenda_controller = self.controllers.get("agenda")
+        if not agenda_controller:
+            return
+
+        agenda_manager = getattr(agenda_controller, "agenda_manager", None)
+        events_map = getattr(agenda_manager, "events", None)
+        if not isinstance(events_map, dict):
+            return
+
+        now = datetime.now()
+        active_ids = set()
+
+        for event in events_map.values():
+            try:
+                event_id = str(getattr(event, "id", "")).strip()
+                event_type = str(getattr(getattr(event, "type", None), "value", "")).strip().lower()
+                start_at = getattr(event, "start", None)
+                completed = bool(getattr(event, "completed", False))
+
+                if not event_id:
+                    continue
+
+                active_ids.add(event_id)
+
+                if completed or event_type != "leitura" or not start_at:
+                    continue
+
+                seconds_to_start = (start_at - now).total_seconds()
+                if 0 < seconds_to_start <= 300 and event_id not in self._reading_session_notified_ids:
+                    self._reading_session_notified_ids.add(event_id)
+                    self.event_bus.notification.emit(
+                        "info",
+                        "Sessão agendada",
+                        f"{getattr(event, 'title', 'Leitura')} começa em menos de 5 minutos."
+                    )
+            except Exception:
+                continue
+
+        self._reading_session_notified_ids.intersection_update(active_ids)
     
     def update_dashboard(self):
         """Atualiza dados do dashboard"""
