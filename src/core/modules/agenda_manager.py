@@ -380,7 +380,15 @@ class AgendaManager:
         if date_str is None:
             target_date = datetime.now().date()
         else:
-            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            # Evita dependência de locale/strptime para robustez.
+            raw_date = str(date_str).strip()
+            if "T" in raw_date:
+                raw_date = raw_date.split("T", 1)[0]
+            try:
+                target_date = date.fromisoformat(raw_date)
+            except ValueError:
+                # Fallback conservador para não quebrar a UI.
+                target_date = datetime.now().date()
         
         day_events = []
         for event in self.events.values():
@@ -414,9 +422,9 @@ class AgendaManager:
         # Eventos do dia
         day_events = self.get_day_events(date)
         
-        # Converte para objetos datetime
-        day_start = datetime.strptime(f"{date} {start_hour:02d}:00", "%Y-%m-%d %H:%M")
-        day_end = datetime.strptime(f"{date} {end_hour:02d}:00", "%Y-%m-%d %H:%M")
+        # Converte para datetime sem depender de locale.
+        day_start = datetime.fromisoformat(f"{date}T{start_hour:02d}:00")
+        day_end = datetime.fromisoformat(f"{date}T{end_hour:02d}:00")
         
         # Blocos ocupados
         occupied = []

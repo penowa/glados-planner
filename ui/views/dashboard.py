@@ -321,6 +321,8 @@ class DashboardView(QWidget):
             self.book_controller.book_processing_progress.connect(self.on_book_processing_progress)
             self.book_controller.book_processing_completed.connect(self.on_book_processing_completed)
             self.book_controller.book_processing_failed.connect(self.on_book_processing_failed)
+            if hasattr(self.book_controller, "book_scheduled"):
+                self.book_controller.book_scheduled.connect(self.on_book_scheduled)
 
         if self.book_controller and hasattr(self.book_controller, 'current_book_updated'):
             self.book_controller.current_book_updated.connect(self.update_current_book)
@@ -386,7 +388,6 @@ class DashboardView(QWidget):
                 
                 "notes_config": {
                     "structure": config["note_structure"],
-                    "pages_per_note": config["pages_per_note"],
                     "template": config["note_template"],
                     "vault_location": config["vault_location"]
                 },
@@ -426,6 +427,10 @@ class DashboardView(QWidget):
         # Mostrar notificação
         title = result.get("title", "Livro")
         self.show_notification(f"✓ '{title}' processado com sucesso!", "success")
+
+        warnings = result.get("warnings", []) if isinstance(result, dict) else []
+        if warnings:
+            self.show_notification(f"⚠️ {warnings[0]}", "warning")
         
         # Atualizar outras partes do dashboard se necessário
         self.refresh_data()
@@ -436,6 +441,15 @@ class DashboardView(QWidget):
             self.add_book_card.on_processing_failed(pipeline_id, error)
         
         self.show_notification(f"✗ Erro no processamento: {error[:100]}...", "error")
+
+    @pyqtSlot(str, dict)
+    def on_book_scheduled(self, _book_id, scheduling_result):
+        """Atualiza agenda/card quando sessões de leitura são agendadas."""
+        sessions = int(scheduling_result.get("agenda_events_created", 0))
+        if self.agenda_card and hasattr(self.agenda_card, "refresh"):
+            self.agenda_card.refresh()
+        if sessions > 0:
+            self.show_notification(f"📅 {sessions} sessão(ões) de leitura agendadas", "success")
     
     def setup_timers(self):
         """Configura timers para atualizações"""

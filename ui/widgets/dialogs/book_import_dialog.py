@@ -22,6 +22,8 @@ class BookImportDialog(QDialog):
         super().__init__(parent)
         self.file_path = file_path
         self.initial_metadata = initial_metadata or {}
+        self.field_confidence_labels = {}
+        self.confidence_summary_label = None
         
         self.setup_ui()
         self.load_initial_data()
@@ -83,19 +85,19 @@ class BookImportDialog(QDialog):
         
         self.title_input = QLineEdit()
         self.title_input.setPlaceholderText("Título do livro")
-        basic_layout.addRow("Título:", self.title_input)
+        basic_layout.addRow("Título:", self._wrap_with_confidence("title", self.title_input))
         
         self.author_input = QLineEdit()
         self.author_input.setPlaceholderText("Autor do livro")
-        basic_layout.addRow("Autor:", self.author_input)
+        basic_layout.addRow("Autor:", self._wrap_with_confidence("author", self.author_input))
         
         self.year_input = QLineEdit()
         self.year_input.setPlaceholderText("Ano de publicação")
-        basic_layout.addRow("Ano:", self.year_input)
+        basic_layout.addRow("Ano:", self._wrap_with_confidence("year", self.year_input))
         
         self.publisher_input = QLineEdit()
         self.publisher_input.setPlaceholderText("Editora")
-        basic_layout.addRow("Editora:", self.publisher_input)
+        basic_layout.addRow("Editora:", self._wrap_with_confidence("publisher", self.publisher_input))
         
         basic_group.setLayout(basic_layout)
         layout.addWidget(basic_group)
@@ -106,15 +108,15 @@ class BookImportDialog(QDialog):
         
         self.isbn_input = QLineEdit()
         self.isbn_input.setPlaceholderText("ISBN")
-        advanced_layout.addRow("ISBN:", self.isbn_input)
+        advanced_layout.addRow("ISBN:", self._wrap_with_confidence("isbn", self.isbn_input))
         
         self.language_combo = QComboBox()
         self.language_combo.addItems(["Português", "Inglês", "Espanhol", "Francês", "Alemão", "Outro"])
-        advanced_layout.addRow("Idioma:", self.language_combo)
+        advanced_layout.addRow("Idioma:", self._wrap_with_confidence("language", self.language_combo))
         
         self.genre_input = QLineEdit()
         self.genre_input.setPlaceholderText("Filosofia, Ficção, Não-ficção...")
-        advanced_layout.addRow("Gênero:", self.genre_input)
+        advanced_layout.addRow("Gênero:", self._wrap_with_confidence("genre", self.genre_input))
         
         advanced_group.setLayout(advanced_layout)
         layout.addWidget(advanced_group)
@@ -126,13 +128,84 @@ class BookImportDialog(QDialog):
         self.tags_input = QLineEdit()
         self.tags_input.setPlaceholderText("filosofia, existencialismo, literatura (separadas por vírgula)")
         tags_layout.addWidget(self.tags_input)
+        tags_confidence = QLabel("Confiança tags: --")
+        tags_confidence.setStyleSheet("color: #808080; font-size: 11px;")
+        self.field_confidence_labels["tags"] = tags_confidence
+        tags_layout.addWidget(tags_confidence)
         
         tags_group.setLayout(tags_layout)
         layout.addWidget(tags_group)
+
+        self.confidence_summary_label = QLabel("Confiança da extração automática: --")
+        self.confidence_summary_label.setWordWrap(True)
+        self.confidence_summary_label.setStyleSheet("color: #707070; font-size: 11px;")
+        layout.addWidget(self.confidence_summary_label)
         
         layout.addStretch()
         
         self.tab_widget.addTab(tab, "📋 Metadados")
+
+    def _wrap_with_confidence(self, field_key, input_widget):
+        """Cria linha com input + indicador de confiança."""
+        container = QWidget()
+        row_layout = QHBoxLayout(container)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_layout.addWidget(input_widget)
+
+        confidence_label = QLabel("Confiança: --")
+        confidence_label.setMinimumWidth(130)
+        confidence_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        confidence_label.setStyleSheet("color: #808080; font-size: 11px;")
+        row_layout.addWidget(confidence_label)
+
+        self.field_confidence_labels[field_key] = confidence_label
+        return container
+
+    def _render_confidence(self, score):
+        """Retorna texto e cor do indicador de confiança."""
+        if score >= 0.85:
+            return f"Alta ({int(score * 100)}%)", "#2E7D32"
+        if score >= 0.60:
+            return f"Média ({int(score * 100)}%)", "#B26A00"
+        if score > 0:
+            return f"Baixa ({int(score * 100)}%)", "#B03A2E"
+        return "Não detectado", "#808080"
+
+    def _apply_confidence_layer(self):
+        """Aplica confiança por campo e resumo geral."""
+        confidence_by_field = self.initial_metadata.get("confidence_by_field", {}) or {}
+        available_scores = []
+
+        for field, label in self.field_confidence_labels.items():
+            data = confidence_by_field.get(field, {})
+            score = float(data.get("score", 0.0) or 0.0)
+            source = data.get("source", "Sem fonte")
+            available_scores.append(score)
+
+            confidence_text, color = self._render_confidence(score)
+            if field == "tags":
+                label.setText(f"Confiança tags: {confidence_text}")
+            else:
+                label.setText(confidence_text)
+            label.setStyleSheet(f"color: {color}; font-size: 11px;")
+            label.setToolTip(f"Origem: {source}")
+
+        if self.confidence_summary_label:
+            scores = [score for score in available_scores if score > 0]
+            if scores:
+                avg_score = sum(scores) / len(scores)
+                confidence_text, color = self._render_confidence(avg_score)
+                self.confidence_summary_label.setText(
+                    f"Confiança média da extração automática: {confidence_text}. "
+                    "Você pode revisar e editar qualquer campo."
+                )
+                self.confidence_summary_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+            else:
+                self.confidence_summary_label.setText(
+                    "Não foi possível estimar confiança dos metadados. Revise os campos manualmente."
+                )
+                self.confidence_summary_label.setStyleSheet("color: #808080; font-size: 11px;")
         
     def setup_processing_tab(self):
         """Configurar tab de processamento"""
@@ -201,22 +274,12 @@ class BookImportDialog(QDialog):
         structure_group = QGroupBox("Estrutura das Notas")
         structure_layout = QVBoxLayout()
         
-        self.note_structure_combo = QComboBox()
-        self.note_structure_combo.addItems([
-            "Uma nota por capítulo (Recomendado)",
-            "Nota única para todo o livro",
-            "Uma nota por seção",
-            "Uma nota por página"
-        ])
-        structure_layout.addWidget(QLabel("Como dividir o conteúdo:"))
-        structure_layout.addWidget(self.note_structure_combo)
-        
-        # Configurações específicas por estrutura
-        self.pages_per_note_spin = QSpinBox()
-        self.pages_per_note_spin.setRange(1, 100)
-        self.pages_per_note_spin.setValue(10)
-        self.pages_per_note_spin.setSuffix(" páginas por nota")
-        structure_layout.addWidget(self.pages_per_note_spin)
+        structure_layout.addWidget(QLabel(
+            "A estrutura é automática e sempre cria:\n"
+            "• Nota completa do livro\n"
+            "• Notas por capítulo\n"
+            "• Nota de metadados/índice"
+        ))
         
         structure_group.setLayout(structure_layout)
         layout.addWidget(structure_group)
@@ -322,10 +385,35 @@ class BookImportDialog(QDialog):
         if self.initial_metadata:
             self.title_input.setText(self.initial_metadata.get("title", ""))
             self.author_input.setText(self.initial_metadata.get("author", ""))
+            self.year_input.setText(str(self.initial_metadata.get("year", "") or ""))
+            self.publisher_input.setText(self.initial_metadata.get("publisher", ""))
+            self.isbn_input.setText(self.initial_metadata.get("isbn", ""))
+            self.genre_input.setText(self.initial_metadata.get("genre", ""))
+
+            tags = self.initial_metadata.get("tags", [])
+            if isinstance(tags, list):
+                self.tags_input.setText(", ".join([str(tag) for tag in tags if str(tag).strip()]))
+            elif isinstance(tags, str):
+                self.tags_input.setText(tags)
+
+            language = self.initial_metadata.get("language", "")
+            if language:
+                index = self.language_combo.findText(language)
+                if index >= 0:
+                    self.language_combo.setCurrentIndex(index)
+                else:
+                    other_index = self.language_combo.findText("Outro")
+                    if other_index >= 0:
+                        self.language_combo.setCurrentIndex(other_index)
+
+            self._apply_confidence_layer()
             
             # Atualizar estatísticas
             pages = self.initial_metadata.get("pages", 0)
             self.pages_label.setText(str(pages) if pages > 0 else "Desconhecido")
+
+            requires_ocr = bool(self.initial_metadata.get("requires_ocr", False))
+            self.ocr_checkbox.setChecked(requires_ocr)
             
             # Calcular tempo estimado baseado em páginas
             if pages > 0:
@@ -367,8 +455,7 @@ class BookImportDialog(QDialog):
             "preserve_layout": self.preserve_layout_checkbox.isChecked(),
             
             # Notas
-            "note_structure": self.note_structure_combo.currentText(),
-            "pages_per_note": self.pages_per_note_spin.value(),
+            "note_structure": "Automático: completo + capítulos + metadados",
             "note_template": self.template_combo.currentText(),
             "vault_location": self.vault_location_input.text().strip(),
             

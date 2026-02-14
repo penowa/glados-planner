@@ -349,29 +349,144 @@ class AddBookCard(PhilosophyCard):
             self.import_config_requested.emit(file_path, {})
             
     def quick_analyze_file(self, file_path):
-        """Análise rápida do arquivo para obter metadados básicos"""
-        import fitz  # PyMuPDF
+        """Análise rápida do arquivo para obter metadados iniciais."""
         from pathlib import Path
+        import re
+
+        def _extract_year(raw_value):
+            if not raw_value:
+                return ""
+            # Suporta formatos como "D:20190510120000" e datas ISO.
+            match = re.search(r"(19|20)\d{2}", str(raw_value))
+            return match.group(0) if match else ""
+
+        def _extract_isbn(text):
+            if not text:
+                return ""
+            # Aceita ISBN-10 e ISBN-13 com separadores.
+            pattern = re.compile(r"\b(?:97[89][\-\s]?)?(?:\d[\-\s]?){9,12}[\dXx]\b")
+            for candidate in pattern.findall(text):
+                cleaned = re.sub(r"[^0-9Xx]", "", candidate).upper()
+                if len(cleaned) in (10, 13):
+                    return cleaned
+            return ""
+
+        def _normalize_language(raw_language):
+            if not raw_language:
+                return ""
+            lang = str(raw_language).strip().lower()
+            mapping = {
+                "pt": "Português",
+                "pt-br": "Português",
+                "por": "Português",
+                "portuguese": "Português",
+                "en": "Inglês",
+                "eng": "Inglês",
+                "english": "Inglês",
+                "es": "Espanhol",
+                "spa": "Espanhol",
+                "spanish": "Espanhol",
+                "fr": "Francês",
+                "fra": "Francês",
+                "fre": "Francês",
+                "french": "Francês",
+                "de": "Alemão",
+                "deu": "Alemão",
+                "ger": "Alemão",
+                "german": "Alemão"
+            }
+            return mapping.get(lang, "Outro")
         
         metadata = {
             "file_path": file_path,
             "file_name": os.path.basename(file_path),
             "file_size": os.path.getsize(file_path),
             "pages": 0,
-            "requires_ocr": False
+            "requires_ocr": False,
+            "title": "",
+            "author": "",
+            "year": "",
+            "publisher": "",
+            "isbn": "",
+            "language": "",
+            "genre": "",
+            "tags": [],
+            "confidence_by_field": {}
         }
+
+        confidence = metadata["confidence_by_field"]
+
+        def _set_confidence(field, score, source):
+            current = confidence.get(field, {})
+            current_score = float(current.get("score", 0.0))
+            if score >= current_score:
+                confidence[field] = {
+                    "score": round(float(score), 2),
+                    "source": source
+                }
         
         try:
             if file_path.endswith('.pdf'):
+                import fitz  # PyMuPDF
+
                 with fitz.open(file_path) as doc:
                     metadata["pages"] = len(doc)
+                    pdf_meta = doc.metadata or {}
                     
-                    # Tentar extrair título do PDF
-                    if doc.metadata.get('title'):
-                        metadata["title"] = doc.metadata['title']
-                    else:
-                        # Usar nome do arquivo como título
-                        metadata["title"] = Path(file_path).stem
+                    # Metadados embutidos.
+                    metadata["title"] = (pdf_meta.get("title") or "").strip()
+                    if metadata["title"]:
+                        _set_confidence("title", 0.95, "Metadado embutido do PDF")
+
+                    metadata["author"] = (pdf_meta.get("author") or "").strip()
+                    if metadata["author"]:
+                        _set_confidence("author", 0.95, "Metadado embutido do PDF")
+
+                    metadata["publisher"] = (
+                        pdf_meta.get("publisher")
+                        or pdf_meta.get("producer")
+                        or pdf_meta.get("creator")
+                        or ""
+                    ).strip()
+                    if metadata["publisher"]:
+                        _set_confidence("publisher", 0.7, "Metadado técnico do PDF")
+
+                    metadata["genre"] = (pdf_meta.get("subject") or "").strip()
+                    if metadata["genre"]:
+                        _set_confidence("genre", 0.75, "Campo subject do PDF")
+
+                    metadata["year"] = _extract_year(
+                        pdf_meta.get("creationDate") or pdf_meta.get("modDate")
+                    )
+                    if metadata["year"]:
+                        _set_confidence("year", 0.6, "Data de criação/modificação do PDF")
+
+                    metadata["language"] = _normalize_language(pdf_meta.get("language"))
+                    if metadata["language"]:
+                        _set_confidence("language", 0.8, "Metadado de idioma do PDF")
+                    
+                    keywords = (pdf_meta.get("keywords") or "").strip()
+                    if keywords:
+                        keyword_tags = [
+                            tag.strip()
+                            for tag in re.split(r"[,;|]", keywords)
+                            if tag.strip()
+                        ]
+                        metadata["tags"].extend(keyword_tags)
+                        _set_confidence("tags", 0.7, "Keywords do PDF")
+                    
+                    metadata["isbn"] = _extract_isbn(
+                        " ".join(
+                            [
+                                keywords,
+                                metadata["genre"],
+                                metadata["title"],
+                                metadata["author"]
+                            ]
+                        )
+                    )
+                    if metadata["isbn"]:
+                        _set_confidence("isbn", 0.75, "ISBN inferido de metadados PDF")
                     
                     # Verificar se precisa de OCR
                     # Simplificado: verifica se há texto na primeira página
@@ -379,11 +494,35 @@ class AddBookCard(PhilosophyCard):
                         page = doc[0]
                         text = page.get_text()
                         metadata["requires_ocr"] = len(text.strip()) < 100
-                        
-                    metadata["author"] = doc.metadata.get('author', '')
+
+                    # Fallback para campos faltantes: tentar inferir pela capa/primeiras páginas.
+                    sampled_text = ""
+                    for idx in range(min(5, len(doc))):
+                        sampled_text += "\n" + (doc[idx].get_text() or "")
+
+                    lines = [line.strip() for line in sampled_text.splitlines() if line.strip()]
+                    if not metadata["title"]:
+                        for line in lines[:30]:
+                            if 4 <= len(line) <= 120 and not re.match(r"^\d+$", line):
+                                metadata["title"] = line
+                                _set_confidence("title", 0.55, "Inferido das primeiras páginas do PDF")
+                                break
+
+                    if not metadata["author"]:
+                        by_pattern = re.compile(r"^(?:por|by)\s+(.+)$", re.IGNORECASE)
+                        for line in lines[:40]:
+                            match = by_pattern.match(line)
+                            if match:
+                                metadata["author"] = match.group(1).strip()
+                                _set_confidence("author", 0.5, "Inferido por padrão 'por/by' no PDF")
+                                break
+
+                    if not metadata["isbn"]:
+                        metadata["isbn"] = _extract_isbn(sampled_text)
+                        if metadata["isbn"]:
+                            _set_confidence("isbn", 0.6, "ISBN inferido do texto inicial do PDF")
                     
             elif file_path.endswith('.epub'):
-                # Análise básica de EPUB
                 import zipfile
                 import xml.etree.ElementTree as ET
                 
@@ -398,23 +537,62 @@ class AddBookCard(PhilosophyCard):
                             ns = {'opf': 'http://www.idpf.org/2007/opf',
                                   'dc': 'http://purl.org/dc/elements/1.1/'}
                             
-                            # Extrair título
+                            # Extrair múltiplos metadados.
                             title_elem = root.find('.//dc:title', ns)
-                            if title_elem is not None:
-                                metadata["title"] = title_elem.text
-                            else:
-                                metadata["title"] = Path(file_path).stem
-                                
-                            # Extrair autor
-                            author_elem = root.find('.//dc:creator', ns)
-                            if author_elem is not None:
-                                metadata["author"] = author_elem.text
+                            if title_elem is not None and title_elem.text:
+                                metadata["title"] = title_elem.text.strip()
+                                _set_confidence("title", 0.98, "Metadado OPF do EPUB")
+
+                            creator_elems = root.findall('.//dc:creator', ns)
+                            creators = [elem.text.strip() for elem in creator_elems if elem is not None and elem.text]
+                            if creators:
+                                metadata["author"] = ", ".join(creators)
+                                _set_confidence("author", 0.98, "Metadado OPF do EPUB")
+
+                            publisher_elem = root.find('.//dc:publisher', ns)
+                            if publisher_elem is not None and publisher_elem.text:
+                                metadata["publisher"] = publisher_elem.text.strip()
+                                _set_confidence("publisher", 0.9, "Metadado OPF do EPUB")
+
+                            date_elem = root.find('.//dc:date', ns)
+                            if date_elem is not None and date_elem.text:
+                                metadata["year"] = _extract_year(date_elem.text)
+                                if metadata["year"]:
+                                    _set_confidence("year", 0.9, "Metadado OPF do EPUB")
+
+                            language_elem = root.find('.//dc:language', ns)
+                            if language_elem is not None and language_elem.text:
+                                metadata["language"] = _normalize_language(language_elem.text)
+                                _set_confidence("language", 0.9, "Metadado OPF do EPUB")
+
+                            subject_elems = root.findall('.//dc:subject', ns)
+                            subjects = [elem.text.strip() for elem in subject_elems if elem is not None and elem.text]
+                            if subjects:
+                                metadata["genre"] = subjects[0]
+                                metadata["tags"].extend(subjects)
+                                _set_confidence("genre", 0.85, "Metadado subject do EPUB")
+                                _set_confidence("tags", 0.85, "Subjects do EPUB")
+
+                            identifier_elems = root.findall('.//dc:identifier', ns)
+                            identifiers = " ".join(
+                                [elem.text.strip() for elem in identifier_elems if elem is not None and elem.text]
+                            )
+                            metadata["isbn"] = _extract_isbn(identifiers)
+                            if metadata["isbn"]:
+                                _set_confidence("isbn", 0.9, "Identifier do EPUB")
                                 
                             break
-                            
+
         except Exception as e:
             logger.warning(f"Erro na análise rápida: {e}")
+
+        if not metadata["title"]:
             metadata["title"] = Path(file_path).stem
+            _set_confidence("title", 0.2, "Fallback: nome do arquivo")
+        if not metadata["language"]:
+            metadata["language"] = "Português"
+            _set_confidence("language", 0.2, "Fallback padrão do sistema")
+        metadata["tags"] = list(dict.fromkeys(metadata["tags"]))  # remove duplicatas preservando ordem
             
         return metadata
     

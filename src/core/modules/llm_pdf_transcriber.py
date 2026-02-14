@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 import fitz  # PyMuPDF
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib

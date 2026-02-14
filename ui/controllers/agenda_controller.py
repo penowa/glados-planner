@@ -670,8 +670,7 @@ class AgendaController(QObject):
     @pyqtSlot(str)
     def load_agenda_async(self, date_str: str = None):
         """Carrega agenda para data específica"""
-        # Implementação existente...
-        pass
+        self.load_agenda(date_str)
     
     @pyqtSlot()
     def load_upcoming_deadlines_async(self, days: int = 7):
@@ -694,8 +693,28 @@ class AgendaController(QObject):
     @pyqtSlot(str, result=list)
     def load_agenda(self, date_str: str = None) -> List[Dict]:
         """Versão síncrona para compatibilidade"""
-        # Implementação existente...
-        pass
+        try:
+            if date_str is None:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+
+            events = self.agenda_manager.get_day_events(date_str) if self.agenda_manager else []
+            serialized = [
+                event.to_dict() if hasattr(event, "to_dict") else event
+                for event in events
+            ]
+
+            self.agenda_loaded.emit(serialized)
+            self.agenda_updated.emit(date_str, serialized)
+            return serialized
+        except Exception as e:
+            try:
+                logger.error(f"Erro ao carregar agenda ({date_str}): {e}")
+            except RecursionError:
+                # Fallback extremo para cenários com stack recursiva.
+                print(f"[AGENDA] Erro ao carregar agenda ({date_str})")
+            self.agenda_loaded.emit([])
+            self.agenda_updated.emit(date_str or datetime.now().strftime("%Y-%m-%d"), [])
+            return []
     
     # ====== LIMPEZA ======
     

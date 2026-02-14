@@ -44,6 +44,7 @@ class AgendaCard(PhilosophyCard):
         self.items: List[Dict[str, Any]] = []
         self.current_week_start = self._get_week_start(date.today())
         self._is_active = True
+        self._is_refreshing = False
 
         self._build_ui()
         self._setup_connections()
@@ -251,12 +252,6 @@ class AgendaCard(PhilosophyCard):
         date_str = day.strftime("%Y-%m-%d")
 
         try:
-            if self.controller and hasattr(self.controller, "load_agenda"):
-                events = self.controller.load_agenda(date_str)
-                if isinstance(events, list):
-                    logger.debug("AgendaCard: %s eventos via controller.load_agenda(%s)", len(events), date_str)
-                    return [self._normalize_event(event) for event in events]
-
             if self.controller and hasattr(self.controller, "agenda_manager"):
                 manager = self.controller.agenda_manager
                 if hasattr(manager, "get_day_events"):
@@ -269,7 +264,10 @@ class AgendaCard(PhilosophyCard):
                 logger.debug("AgendaCard: %s eventos via controller.get_day_events(%s)", len(events), date_str)
                 return [self._normalize_event(event) for event in events]
         except Exception as exc:
-            logger.error("Erro ao carregar agenda de %s: %s", date_str, exc)
+            try:
+                logger.error("Erro ao carregar agenda de %s: %s", date_str, exc)
+            except RecursionError:
+                print(f"[AGENDA_CARD] Erro ao carregar agenda de {date_str}")
 
         return []
 
@@ -336,7 +334,7 @@ class AgendaCard(PhilosophyCard):
     @pyqtSlot(list)
     def on_agenda_loaded(self, events):
         # Compatibilidade: sempre renderiza semana atual em vez de lista diária.
-        if not self._is_active:
+        if not self._is_active or self._is_refreshing:
             return
         self.refresh()
 
@@ -481,9 +479,13 @@ class AgendaCard(PhilosophyCard):
             logger.error("Erro ao concluir evento %s: %s", event_id, exc)
 
     def refresh(self):
-        if not self._is_active:
+        if not self._is_active or self._is_refreshing:
             return
-        self._render_week()
+        self._is_refreshing = True
+        try:
+            self._render_week()
+        finally:
+            self._is_refreshing = False
 
     def set_current_book(self, _book_data: dict):
         # Compatibilidade com chamadas do dashboard.

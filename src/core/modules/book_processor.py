@@ -4,6 +4,8 @@ import logging
 import json
 import hashlib
 import re
+import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
@@ -157,7 +159,8 @@ class BookProcessor:
         quality: ProcessingQuality = None,
         output_dir: Optional[str] = None,
         schedule_night: bool = False,
-        force_immediate: bool = False
+        force_immediate: bool = False,
+        integrate_with_vault: bool = True
     ) -> ProcessingResult:
         """
         Processa um livro completo.
@@ -168,6 +171,7 @@ class BookProcessor:
             output_dir: Diretório de saída (opcional)
             schedule_night: Agendar para processamento noturno
             force_immediate: Se True, não agenda automaticamente por tempo estimado
+            integrate_with_vault: Se True, integra resultado no vault automaticamente
             
         Returns:
             ProcessingResult com o resultado
@@ -197,7 +201,7 @@ class BookProcessor:
                 output_path = Path(output_dir).expanduser()
             else:
                 # Usar estrutura padrão do vault: 01-LEITURAS/Autor/Título/
-                safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+                safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
                 safe_title = self._sanitize_filename(metadata.title)
                 output_path = (
                     self.vault_manager.vault_path / 
@@ -229,7 +233,7 @@ class BookProcessor:
             result.end_time = datetime.now()
             
             # Integrar com o vault
-            if result.status == ProcessingStatus.COMPLETED:
+            if result.status == ProcessingStatus.COMPLETED and integrate_with_vault:
                 self._integrate_with_vault(result, output_path)
             
             if result.status == ProcessingStatus.COMPLETED:
@@ -359,7 +363,7 @@ class BookProcessor:
                     error=warning
                 )
 
-            chapters = result.get('chapters', [])
+            chapters = self._normalize_chapters(result.get('chapters', []))
             if not chapters:
                 return ProcessingResult(
                     status=ProcessingStatus.FAILED,
@@ -370,12 +374,17 @@ class BookProcessor:
                     error="Nenhum conteúdo foi extraído do PDF"
                 )
             
+            warnings = result.get('warnings', [])
+            chapter_warning = self._build_chapter_detection_warning(metadata, chapters)
+            if chapter_warning:
+                warnings = [*warnings, chapter_warning]
+
             return ProcessingResult(
                 status=ProcessingStatus.COMPLETED,
                 metadata=metadata,
                 output_dir=output_dir,
                 processed_chapters=chapters,
-                warnings=result.get('warnings', [])
+                warnings=warnings
             )
             
         except ImportError as e:
@@ -430,6 +439,9 @@ class BookProcessor:
         """Integra o livro processado com o vault do Obsidian."""
         try:
             metadata = result.metadata
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            base_path = f"01-LEITURAS/{safe_author}/{safe_title}"
 
             def create_or_update_note(path: str, content: str, frontmatter: Dict[str, Any]) -> None:
                 """Cria a nota; se já existir, atualiza conteúdo e frontmatter."""
@@ -449,7 +461,7 @@ class BookProcessor:
                     )
             
             # 1. Criar nota de metadados do livro
-            book_note_path = f"01-LEITURAS/{metadata.author}/{metadata.title}/📖 {metadata.title}.md"
+            book_note_path = f"{base_path}/📖 {safe_title}.md"
             
             frontmatter = {
                 'title': metadata.title,
@@ -493,24 +505,37 @@ class BookProcessor:
             
             # 2. Criar notas para cada capítulo
             for chapter in result.processed_chapters:
-                chapter_note_path = f"01-LEITURAS/{metadata.author}/{metadata.title}/{chapter['filename']}.md"
+                chapter_number = chapter.get('chapter_num') or chapter.get('number') or 0
+                chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_number}"
+                safe_chapter_title = self._sanitize_filename(chapter_title)
+                chapter_filename = f"{int(chapter_number):03d} - {safe_chapter_title}"
+                chapter_note_path = f"{base_path}/{chapter_filename}.md"
                 
                 chapter_frontmatter = {
-                    'title': chapter['title'],
+                    'title': chapter_title,
                     'book': metadata.title,
                     'author': metadata.author,
-                    'chapter_number': chapter.get('number'),
+                    'chapter_number': chapter_number,
+                    'pages': chapter.get('pages'),
                     'tags': ['chapter', 'book', f'book:{metadata.title}']
                 }
+
+                chapter_content = chapter.get('content', '')
+                if not chapter_content.strip().startswith("# "):
+                    chapter_content = (
+                        f"# {chapter_title}\n\n"
+                        f"## 📖 Páginas\n{chapter.get('pages', 'N/A')}\n\n"
+                        f"{chapter_content}"
+                    )
                 
                 create_or_update_note(
                     chapter_note_path,
-                    content=chapter['content'],
+                    content=chapter_content,
                     frontmatter=chapter_frontmatter
                 )
             
             # 3. Criar índice de conceitos vazio
-            concepts_path = f"01-LEITURAS/{metadata.author}/{metadata.title}/🧠 Conceitos-Chave.md"
+            concepts_path = f"{base_path}/🧠 Conceitos-Chave.md"
             
             concepts_content = f"""# Conceitos-Chave - {metadata.title}
 
@@ -546,40 +571,153 @@ class BookProcessor:
         
         formatted = ""
         for chapter in chapters:
-            title = chapter.get('title', 'Capítulo sem título')
-            filename = chapter.get('filename', '').replace('.md', '')
+            chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
+            title = chapter.get('chapter_title') or chapter.get('title') or 'Capítulo sem título'
+            filename = f"{int(chapter_num):03d} - {self._sanitize_filename(title)}"
             formatted += f"- [[{filename}|{title}]]\n"
         
         return formatted
     
     def _detect_pdf_chapters(self, doc) -> List[Dict]:
         """Detecta capítulos em um PDF."""
-        chapters = []
-        
         try:
-            for i in range(len(doc)):
-                page = doc.load_page(i)
-                text = page.get_text("text")
-                
-                # Heurística: linhas que podem ser títulos de capítulo
-                lines = text.split('\n')
-                for line in lines[:10]:  # Primeiras linhas da página
-                    line = line.strip()
-                    if (len(line) < 100 and  # Não muito longo
-                        any(word in line.lower() for word in ['capítulo', 'chapter', 'parte', 'part', 'livro', 'book']) and
-                        any(char.isdigit() for char in line)):
-                        
-                        chapters.append({
-                            'page': i + 1,
-                            'title': line,
-                            'number': i + 1
+            total_pages = len(doc)
+
+            toc_entries = []
+            try:
+                toc_entries = doc.get_toc(simple=True) or []
+            except Exception:
+                toc_entries = []
+
+            # Prioriza entradas de primeiro nível do sumário (TOC).
+            if toc_entries:
+                level_one = [entry for entry in toc_entries if len(entry) >= 3 and entry[0] == 1]
+                if not level_one:
+                    min_level = min(entry[0] for entry in toc_entries if len(entry) >= 3)
+                    level_one = [entry for entry in toc_entries if len(entry) >= 3 and entry[0] == min_level]
+
+                chapter_points = []
+                seen_pages = set()
+                for entry in level_one:
+                    _, title, page = entry[:3]
+                    if not title or page in seen_pages or page < 1 or page > total_pages:
+                        continue
+                    seen_pages.add(page)
+                    chapter_points.append({"title": str(title).strip(), "start_page": int(page)})
+
+                if len(chapter_points) >= 2:
+                    return self._build_chapter_ranges(chapter_points, total_pages, source="toc", confidence=0.95)
+
+            # Fallback heurístico no topo das páginas.
+            heading_pattern = re.compile(
+                r"^(cap[ií]tulo|chapter|parte|part|livro|book)\s+([ivxlcdm]+|\d+)",
+                re.IGNORECASE
+            )
+            chapter_points = []
+            for page_idx in range(total_pages):
+                page = doc.load_page(page_idx)
+                text = page.get_text("text") or ""
+                lines = [ln.strip() for ln in text.split('\n')[:12] if ln.strip()]
+                for line in lines:
+                    normalized = re.sub(r"\s+", " ", line)
+                    if len(normalized) <= 120 and heading_pattern.search(normalized):
+                        chapter_points.append({
+                            "title": normalized,
+                            "start_page": page_idx + 1
                         })
                         break
-        
+
+            dedup = []
+            seen = set()
+            for item in chapter_points:
+                key = (item["start_page"], item["title"].lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                dedup.append(item)
+
+            if len(dedup) >= 2:
+                return self._build_chapter_ranges(dedup, total_pages, source="heuristic", confidence=0.6)
+
         except Exception as e:
             logger.debug(f"Erro na detecção de capítulos: {e}")
-        
+
+        return []
+
+    def _build_chapter_ranges(self, chapter_points: List[Dict[str, Any]], total_pages: int,
+                              source: str, confidence: float) -> List[Dict[str, Any]]:
+        """Transforma pontos de início em intervalos completos de capítulos."""
+        chapter_points = sorted(chapter_points, key=lambda item: item["start_page"])
+        chapters: List[Dict[str, Any]] = []
+
+        for idx, chapter in enumerate(chapter_points):
+            start_page = chapter["start_page"]
+            if idx + 1 < len(chapter_points):
+                end_page = chapter_points[idx + 1]["start_page"] - 1
+            else:
+                end_page = total_pages
+
+            if end_page < start_page:
+                continue
+
+            chapters.append({
+                "number": idx + 1,
+                "title": chapter["title"] or f"Capítulo {idx + 1}",
+                "page": start_page,
+                "start_page": start_page,
+                "end_page": end_page,
+                "source": source,
+                "confidence": confidence
+            })
+
         return chapters
+
+    def _normalize_chapters(self, chapters: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normaliza estrutura de capítulos para uso consistente no pipeline/UI."""
+        normalized: List[Dict[str, Any]] = []
+        for index, chapter in enumerate(chapters, start=1):
+            chapter_num = chapter.get("chapter_num") or chapter.get("number") or index
+            chapter_title = chapter.get("chapter_title") or chapter.get("title") or f"Capítulo {chapter_num}"
+            start_page = chapter.get("start_page")
+            end_page = chapter.get("end_page")
+            pages = chapter.get("pages")
+            if not pages and start_page and end_page:
+                pages = f"{start_page}-{end_page}"
+
+            normalized.append({
+                **chapter,
+                "number": chapter_num,
+                "chapter_num": chapter_num,
+                "title": chapter_title,
+                "chapter_title": chapter_title,
+                "pages": pages or ""
+            })
+        return normalized
+
+    def _build_chapter_detection_warning(self, metadata: BookMetadata,
+                                         processed_chapters: List[Dict[str, Any]]) -> Optional[str]:
+        """Retorna aviso quando a divisão em capítulos não está clara."""
+        detected = metadata.chapters or []
+        if len(detected) < 2:
+            return (
+                "Não foi possível identificar com clareza os capítulos pelo sumário do arquivo. "
+                "As notas por capítulo foram criadas por faixas de páginas."
+            )
+
+        low_confidence = [chapter for chapter in detected if float(chapter.get("confidence", 0)) < 0.8]
+        if low_confidence:
+            return (
+                "A divisão de capítulos foi identificada com baixa confiança. "
+                "Revise os títulos e intervalos das notas de capítulo."
+            )
+
+        if len(processed_chapters) < len(detected):
+            return (
+                "Nem todos os capítulos detectados puderam ser materializados em notas. "
+                "Revise a estrutura gerada no vault."
+            )
+
+        return None
     
     def _extract_epub_toc(self, book) -> List[Dict]:
         """Extrai TOC de um EPUB."""
@@ -616,6 +754,139 @@ class BookProcessor:
         filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
         filename = re.sub(r'\s+', ' ', filename).strip()
         return filename[:100]  # Limitar tamanho
+
+    def _normalize_path_key(self, value: str) -> str:
+        """Normaliza texto para comparação estável de pastas."""
+        normalized = unicodedata.normalize("NFKD", value or "")
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", " ", normalized).strip().lower()
+        return re.sub(r"\s+", " ", normalized)
+
+    def _primary_author(self, author_name: str) -> str:
+        """Extrai autor principal para evitar duplicatas por coautoria/formato."""
+        raw = (author_name or "").strip()
+        if not raw:
+            return "Autor Desconhecido"
+
+        split_patterns = [r"\s*&\s*", r"\s+and\s+", r"\s+e\s+", r"\s*;\s*", r"\s*/\s*", r"\s*\|\s*"]
+        for pattern in split_patterns:
+            parts = re.split(pattern, raw, maxsplit=1, flags=re.IGNORECASE)
+            if parts and parts[0].strip() and len(parts) > 1:
+                raw = parts[0].strip()
+                break
+
+        if "," in raw:
+            fragments = [frag.strip() for frag in raw.split(",") if frag.strip()]
+            if len(fragments) >= 2:
+                raw = f"{fragments[1]} {fragments[0]}".strip()
+
+        return raw
+
+    def _author_tokens(self, author_name: str) -> set[str]:
+        normalized = self._normalize_path_key(self._primary_author(author_name))
+        return {tok for tok in normalized.split(" ") if len(tok) > 1}
+
+    def _soft_token_overlap(self, left_tokens: set[str], right_tokens: set[str]) -> float:
+        """Sobreposição fuzzy de tokens para variações ortográficas leves."""
+        if not left_tokens or not right_tokens:
+            return 0.0
+
+        right_list = list(right_tokens)
+        used = set()
+        matched = 0
+
+        for token in left_tokens:
+            best_idx = None
+            best_ratio = 0.0
+            for idx, candidate in enumerate(right_list):
+                if idx in used:
+                    continue
+                ratio = SequenceMatcher(None, token, candidate).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_idx = idx
+
+            if best_idx is not None and best_ratio >= 0.84:
+                used.add(best_idx)
+                matched += 1
+
+        return matched / max(len(left_tokens), len(right_tokens))
+
+    def _soft_token_overlap(self, left_tokens: set[str], right_tokens: set[str]) -> float:
+        """Sobreposição fuzzy de tokens para variações ortográficas leves."""
+        if not left_tokens or not right_tokens:
+            return 0.0
+
+        right_list = list(right_tokens)
+        used = set()
+        matched = 0
+
+        for token in left_tokens:
+            best_idx = None
+            best_ratio = 0.0
+            for idx, candidate in enumerate(right_list):
+                if idx in used:
+                    continue
+                ratio = SequenceMatcher(None, token, candidate).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_idx = idx
+
+            if best_idx is not None and best_ratio >= 0.84:
+                used.add(best_idx)
+                matched += 1
+
+        return matched / max(len(left_tokens), len(right_tokens))
+
+    def _resolve_author_directory_name(self, author_name: str) -> str:
+        """
+        Reutiliza pasta de autor já existente em 01-LEITURAS quando o nome bate
+        por normalização (acentos/pontuação/caixa ignorados).
+        """
+        canonical_author = self._primary_author(author_name or "Autor Desconhecido")
+        safe_author = self._sanitize_filename(canonical_author)
+        authors_root = self.vault_manager.vault_path / "01-LEITURAS"
+
+        if not authors_root.exists():
+            return safe_author
+
+        target_key = self._normalize_path_key(canonical_author)
+        target_tokens = self._author_tokens(canonical_author)
+        if not target_key:
+            return safe_author
+
+        best_match_name = None
+        best_score = 0.0
+
+        try:
+            for child in authors_root.iterdir():
+                if not child.is_dir():
+                    continue
+
+                child_key = self._normalize_path_key(child.name)
+                if child_key == target_key:
+                    return child.name
+
+                child_tokens = self._author_tokens(child.name)
+                if not target_tokens or not child_tokens:
+                    continue
+
+                intersection = len(target_tokens & child_tokens)
+                union = len(target_tokens | child_tokens)
+                jaccard_score = (intersection / union) if union else 0.0
+                fuzzy_score = self._soft_token_overlap(target_tokens, child_tokens)
+                score = max(jaccard_score, fuzzy_score)
+
+                if score > best_score:
+                    best_score = score
+                    best_match_name = child.name
+        except Exception:
+            return safe_author
+
+        if best_match_name and best_score >= 0.8:
+            return best_match_name
+
+        return safe_author
 
 class ChapterProcessor:
     """Processador incremental de capítulos de livros"""
@@ -684,7 +955,7 @@ class ChapterProcessor:
             metadata, _ = self._analyze_pdf(pdf_path)
             
             # Determinar diretório de saída no vault
-            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
             safe_title = self._sanitize_filename(metadata.title)
             
             output_dir = self.vault_manager.vault_path / "01-LEITURAS" / safe_author / safe_title
@@ -835,7 +1106,9 @@ class ChapterProcessor:
             
             # Nome do arquivo
             filename = f"{chapter_num:03d} - {safe_title}.md"
-            relative_path = f"01-LEITURAS/{self._sanitize_filename(metadata.author)}/{self._sanitize_filename(metadata.title)}/{filename}"
+            author_dir = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
+            title_dir = self._sanitize_filename(metadata.title)
+            relative_path = f"01-LEITURAS/{author_dir}/{title_dir}/{filename}"
             
             # Frontmatter
             frontmatter = {
@@ -899,12 +1172,14 @@ class ChapterProcessor:
     def _update_book_index(self, metadata: BookMetadata, output_dir: Path, book_id: str):
         """Cria/atualiza índice do livro no vault"""
         try:
-            relative_path = f"01-LEITURAS/{self._sanitize_filename(metadata.author)}/{self._sanitize_filename(metadata.title)}/📖 {metadata.title}.md"
+            author_dir = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
+            title_dir = self._sanitize_filename(metadata.title)
+            relative_path = f"01-LEITURAS/{author_dir}/{title_dir}/📖 {metadata.title}.md"
             
             # Buscar capítulos existentes
             book_notes = []
             for note in self.vault_manager.get_all_notes():
-                if (f"01-LEITURAS/{self._sanitize_filename(metadata.author)}/{self._sanitize_filename(metadata.title)}" in str(note.path) and
+                if (f"01-LEITURAS/{author_dir}/{title_dir}" in str(note.path) and
                     note.path.name != f"📖 {metadata.title}.md"):
                     if 'chapter' in note.frontmatter:
                         book_notes.append({
@@ -1050,5 +1325,82 @@ class ChapterProcessor:
         filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
         filename = re.sub(r'\s+', ' ', filename).strip()
         return filename[:100]
+
+    def _normalize_path_key(self, value: str) -> str:
+        """Normaliza texto para comparação de nomes de pasta."""
+        normalized = unicodedata.normalize("NFKD", value or "")
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", " ", normalized).strip().lower()
+        return re.sub(r"\s+", " ", normalized)
+
+    def _primary_author(self, author_name: str) -> str:
+        """Extrai autor principal para evitar duplicatas por coautoria/formato."""
+        raw = (author_name or "").strip()
+        if not raw:
+            return "Autor Desconhecido"
+
+        split_patterns = [r"\s*&\s*", r"\s+and\s+", r"\s+e\s+", r"\s*;\s*", r"\s*/\s*", r"\s*\|\s*"]
+        for pattern in split_patterns:
+            parts = re.split(pattern, raw, maxsplit=1, flags=re.IGNORECASE)
+            if parts and parts[0].strip() and len(parts) > 1:
+                raw = parts[0].strip()
+                break
+
+        if "," in raw:
+            fragments = [frag.strip() for frag in raw.split(",") if frag.strip()]
+            if len(fragments) >= 2:
+                raw = f"{fragments[1]} {fragments[0]}".strip()
+
+        return raw
+
+    def _author_tokens(self, author_name: str) -> set[str]:
+        normalized = self._normalize_path_key(self._primary_author(author_name))
+        return {tok for tok in normalized.split(" ") if len(tok) > 1}
+
+    def _resolve_author_directory_name(self, author_name: str) -> str:
+        """Reutiliza diretório de autor existente em 01-LEITURAS."""
+        canonical_author = self._primary_author(author_name or "Autor Desconhecido")
+        safe_author = self._sanitize_filename(canonical_author)
+        authors_root = self.vault_manager.vault_path / "01-LEITURAS"
+        if not authors_root.exists():
+            return safe_author
+
+        target_key = self._normalize_path_key(canonical_author)
+        target_tokens = self._author_tokens(canonical_author)
+        if not target_key:
+            return safe_author
+
+        best_match_name = None
+        best_score = 0.0
+
+        try:
+            for child in authors_root.iterdir():
+                if not child.is_dir():
+                    continue
+
+                child_key = self._normalize_path_key(child.name)
+                if child_key == target_key:
+                    return child.name
+
+                child_tokens = self._author_tokens(child.name)
+                if not target_tokens or not child_tokens:
+                    continue
+
+                intersection = len(target_tokens & child_tokens)
+                union = len(target_tokens | child_tokens)
+                jaccard_score = (intersection / union) if union else 0.0
+                fuzzy_score = self._soft_token_overlap(target_tokens, child_tokens)
+                score = max(jaccard_score, fuzzy_score)
+
+                if score > best_score:
+                    best_score = score
+                    best_match_name = child.name
+        except Exception:
+            return safe_author
+
+        if best_match_name and best_score >= 0.8:
+            return best_match_name
+
+        return safe_author
 # Adicione ao final do arquivo book_processor.py
 chapter_processor = ChapterProcessor(ObsidianVaultManager())

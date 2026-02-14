@@ -11,6 +11,9 @@ from pathlib import Path
 import uuid
 import hashlib
 import re
+import unicodedata
+import tempfile
+from difflib import SequenceMatcher
 from enum import Enum
 
 logger = logging.getLogger('GLaDOS.UI.BookController')
@@ -264,17 +267,24 @@ class BookProcessingPipeline(QThread):
         # Usar book_processor para análise
         metadata, recommendations = self.controller.book_processor.analyze_book(str(self.file_path))
         self.metadata = metadata
+
+        # Aplicar metadados informados no diálogo de importação.
+        if self.user_metadata:
+            for key, value in self.user_metadata.items():
+                if value not in (None, "", []):
+                    setattr(self.metadata, key, value)
         
         self.stage_progress.emit(self.pipeline_id, "analysis", 100, "Análise concluída")
         
         return {
-            "title": metadata.title,
-            "author": metadata.author,
-            "total_pages": metadata.total_pages,
-            "requires_ocr": metadata.requires_ocr,
-            "estimated_time": metadata.estimated_processing_time,
+            "title": self.metadata.title,
+            "author": self.metadata.author,
+            "total_pages": self.metadata.total_pages,
+            "requires_ocr": self.metadata.requires_ocr,
+            "estimated_time": self.metadata.estimated_processing_time,
             "recommendations": recommendations,
-            "chapters_detected": len(metadata.chapters)
+            "chapters_detected": len(self.metadata.chapters),
+            "user_metadata_applied": bool(self.user_metadata)
         }
     
     def _extract_content(self) -> Dict:
@@ -290,13 +300,24 @@ class BookProcessingPipeline(QThread):
             'academic': ProcessingQuality.ACADEMIC
         }
         processing_quality = quality_map.get(self.quality, ProcessingQuality.STANDARD)
+
+        # Extração técnica em diretório temporário para evitar criação de estrutura
+        # paralela no vault com metadados crus do PDF.
+        temp_output_dir = (
+            Path(tempfile.gettempdir()) /
+            "glados_book_processing" /
+            self.pipeline_id
+        )
+        temp_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Processar livro usando book_processor
         result = self.controller.book_processor.process_book(
             filepath=str(self.file_path),
             quality=processing_quality,
+            output_dir=str(temp_output_dir),
             schedule_night=False,  # Processar imediatamente
-            force_immediate=True
+            force_immediate=True,
+            integrate_with_vault=False
         )
         
         if result.status.value == "failed":
@@ -317,7 +338,8 @@ class BookProcessingPipeline(QThread):
             "chapters_extracted": len(result.processed_chapters),
             "total_pages": result.metadata.total_pages,
             "requires_ocr": result.metadata.requires_ocr,
-            "extraction_method": "standard" + ("+llm" if self.use_llm else "")
+            "extraction_method": "standard" + ("+llm" if self.use_llm else ""),
+            "warnings": result.warnings or []
         }
     
     def _structure_content(self) -> Dict:
@@ -332,11 +354,19 @@ class BookProcessingPipeline(QThread):
             self.metadata.title, self.metadata.author
         )
         
-        # Criar estrutura de diretórios no vault
-        structure_result = self.controller.create_book_structure(
+        # Sempre criar notas por capítulo
+        chapters_result = self.controller.create_book_structure(
             book_id=self.book_id,
             metadata=self.metadata,
             chapters=self.extracted_content
+        )
+
+        # Sempre criar nota única com conteúdo completo
+        full_note_result = self.controller.create_single_note_structure(
+            book_id=self.book_id,
+            metadata=self.metadata,
+            content=self.extracted_content,
+            config=self.notes_config
         )
         
         # Criar índice do livro
@@ -350,9 +380,12 @@ class BookProcessingPipeline(QThread):
         
         return {
             "book_id": self.book_id,
-            "directory_created": structure_result.get("directory_created", False),
+            "directory_created": chapters_result.get("directory_created", False),
             "index_created": index_result.get("index_created", False),
-            "notes_created": structure_result.get("notes_created", 0)
+            "chapter_notes_created": chapters_result.get("notes_created", 0),
+            "full_note_created": full_note_result.get("notes_created", 0) > 0,
+            "notes_created": chapters_result.get("notes_created", 0) + full_note_result.get("notes_created", 0),
+            "warnings": (self.processing_result.warnings if self.processing_result else []) or []
         }
     
     def _enhance_with_llm(self) -> Dict:
@@ -469,6 +502,14 @@ class BookProcessingPipeline(QThread):
     
     def _complete_pipeline(self):
         """Finaliza o pipeline com sucesso"""
+        warnings = []
+        extraction_stage = self.consolidated_result.get("extraction", {})
+        if isinstance(extraction_stage, dict):
+            warnings.extend(extraction_stage.get("warnings", []) or [])
+        structure_stage = self.consolidated_result.get("structuring", {})
+        if isinstance(structure_stage, dict):
+            warnings.extend(structure_stage.get("warnings", []) or [])
+
         final_result = {
             "status": "completed",
             "pipeline_id": self.pipeline_id,
@@ -480,6 +521,7 @@ class BookProcessingPipeline(QThread):
             "quality": self.quality,
             "use_llm": self.use_llm,
             "stages": self.consolidated_result,
+            "warnings": warnings,
             "timestamp": datetime.now().isoformat(),
             "processing_time": (
                 datetime.now() - datetime.fromisoformat(
@@ -796,7 +838,7 @@ class BookController(QObject):
                 return result
             
             # Sanitizar nomes
-            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
             safe_title = self._sanitize_filename(metadata.title)
             
             # Criar diretório principal
@@ -808,8 +850,8 @@ class BookController(QObject):
             # Criar notas para cada capítulo
             for chapter in chapters:
                 try:
-                    chapter_num = chapter.get('chapter_num', 0)
-                    chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                    chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
+                    chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
                     content = chapter.get('content', '')
                     
                     # Nome do arquivo
@@ -818,11 +860,11 @@ class BookController(QObject):
                     
                     # Frontmatter
                     frontmatter = {
-                        'title': f"{metadata.title} - {chapter_title}",
+                        'title': chapter_title,
                         'book': metadata.title,
                         'author': metadata.author,
                         'chapter': chapter_num,
-                        'pages': chapter.get('pages', ''),
+                        'pages': chapter.get('pages') or f"{chapter.get('start_page', 'N/A')}-{chapter.get('end_page', 'N/A')}",
                         'book_id': book_id,
                         'tags': ['livro', 'capitulo']
                     }
@@ -850,11 +892,19 @@ class BookController(QObject):
 """
                     
                     # Criar nota
-                    self.vault_manager.create_note(
-                        relative_path,
-                        content=note_content,
-                        frontmatter=frontmatter
-                    )
+                    existing_note = self.vault_manager.get_note_by_path(relative_path)
+                    if existing_note:
+                        self.vault_manager.update_note(
+                            relative_path,
+                            content=note_content,
+                            frontmatter=frontmatter
+                        )
+                    else:
+                        self.vault_manager.create_note(
+                            relative_path,
+                            content=note_content,
+                            frontmatter=frontmatter
+                        )
                     
                     result["notes_created"] += 1
                     
@@ -880,7 +930,7 @@ class BookController(QObject):
             if not self.vault_manager:
                 return result
             
-            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
             safe_title = self._sanitize_filename(metadata.title)
             
             # Caminho para o índice
@@ -901,8 +951,8 @@ class BookController(QObject):
             # Lista de capítulos
             chapters_list = ""
             for chapter in chapters:
-                chapter_num = chapter.get('chapter_num', 0)
-                chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
+                chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
                 safe_chapter_title = self._sanitize_filename(chapter_title)
                 
                 chapters_list += f"{chapter_num}. [[{chapter_num:03d} - {safe_chapter_title}|{chapter_title}]]\n"
@@ -976,7 +1026,7 @@ class BookController(QObject):
                 return result
             
             # Sanitizar nomes
-            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
             safe_title = self._sanitize_filename(metadata.title)
             
             # Criar diretório principal
@@ -988,15 +1038,15 @@ class BookController(QObject):
             # Combinar todo o conteúdo em uma única string
             full_content = ""
             for chapter in content:
-                chapter_num = chapter.get('chapter_num', 0)
-                chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
+                chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
                 chapter_text = chapter.get('content', '')
                 
                 full_content += f"\n\n## Capítulo {chapter_num}: {chapter_title}\n\n"
                 full_content += chapter_text
             
             # Caminho para a nota única
-            note_path = f"01-LEITURAS/{safe_author}/{safe_title}/{safe_title}.md"
+            note_path = f"01-LEITURAS/{safe_author}/{safe_title}/📚 {safe_title} - Completo.md"
             
             # Frontmatter
             frontmatter = {
@@ -1038,16 +1088,23 @@ class BookController(QObject):
             
             # Adicionar índice
             for chapter in content:
-                chapter_num = chapter.get('chapter_num', 0)
-                chapter_title = chapter.get('chapter_title', f"Capítulo {chapter_num}")
+                chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
+                chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
                 note_content += f"{chapter_num}. {chapter_title}\n"
             
-            # Criar nota
-            self.vault_manager.create_note(
-                note_path,
-                content=note_content,
-                frontmatter=frontmatter
-            )
+            existing_note = self.vault_manager.get_note_by_path(note_path)
+            if existing_note:
+                self.vault_manager.update_note(
+                    note_path,
+                    content=note_content,
+                    frontmatter=frontmatter
+                )
+            else:
+                self.vault_manager.create_note(
+                    note_path,
+                    content=note_content,
+                    frontmatter=frontmatter
+                )
             
             result["notes_created"] = 1
             
@@ -1105,7 +1162,7 @@ class BookController(QObject):
             if not self.vault_manager:
                 return result
             
-            safe_author = self._sanitize_filename(metadata.author or "Autor Desconhecido")
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
             safe_title = self._sanitize_filename(metadata.title)
             
             # Caminho para a nota de conceitos
@@ -1280,6 +1337,17 @@ class BookController(QObject):
                 
                 title = book_info.get("title", title)
                 total_pages = book_info.get("total_pages", total_pages)
+                author = book_info.get("author", "Desconhecido")
+            else:
+                author = self.book_registry.get(book_id, {}).get("author", "Desconhecido")
+
+            # Sincroniza o livro no ReadingManager usado pela camada de agenda.
+            self._sync_book_to_agenda_reading_manager(
+                book_id=book_id,
+                title=title,
+                author=author,
+                total_pages=total_pages
+            )
             
             # Calcular páginas por dia
             pages_per_day = self._calculate_pages_per_day(total_pages)
@@ -1314,6 +1382,53 @@ class BookController(QObject):
             logger.error(f"Erro no agendamento de {book_id}: {e}")
         
         return result
+
+    def _get_agenda_reading_manager(self):
+        """Retorna o ReadingManager efetivo usado pelo agendador."""
+        if not self.agenda_controller:
+            return None
+        if hasattr(self.agenda_controller, "reading_manager"):
+            return self.agenda_controller.reading_manager
+        if hasattr(self.agenda_controller, "agenda_manager"):
+            agenda_manager = getattr(self.agenda_controller, "agenda_manager", None)
+            if agenda_manager and hasattr(agenda_manager, "reading_manager"):
+                return agenda_manager.reading_manager
+        return None
+
+    def _sync_book_to_agenda_reading_manager(self, book_id: str, title: str,
+                                             author: str, total_pages: int):
+        """
+        Garante que o livro exista no ReadingManager consultado pelo agendador.
+        Evita erro de "Livro não encontrado" após importação recém-concluída.
+        """
+        agenda_reading_manager = self._get_agenda_reading_manager()
+        if not agenda_reading_manager:
+            return
+
+        try:
+            agenda_progress = agenda_reading_manager.get_reading_progress(book_id)
+            if agenda_progress:
+                return
+
+            source_progress = None
+            if self.reading_manager and hasattr(self.reading_manager, "readings"):
+                source_progress = self.reading_manager.readings.get(book_id)
+
+            if source_progress is not None and hasattr(agenda_reading_manager, "readings"):
+                agenda_reading_manager.readings[book_id] = source_progress
+                if hasattr(agenda_reading_manager, "_save_progress"):
+                    agenda_reading_manager._save_progress()
+                return
+
+            if hasattr(agenda_reading_manager, "add_book"):
+                agenda_reading_manager.add_book(
+                    title=title or "Desconhecido",
+                    author=author or "Desconhecido",
+                    total_pages=int(total_pages or 0),
+                    book_id=book_id
+                )
+        except Exception as e:
+            logger.warning(f"Não foi possível sincronizar livro {book_id} para agenda: {e}")
     
     def _execute_scheduling(self, book_id: str, pages_per_day: float, strategy: str) -> Dict:
         """Executa agendamento de forma síncrona com fallback"""
@@ -1575,6 +1690,121 @@ class BookController(QObject):
         filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
         filename = re.sub(r'\s+', ' ', filename).strip()
         return filename[:100]  # Limitar tamanho
+
+    def _normalize_path_key(self, value: str) -> str:
+        """Normaliza texto para comparação estável de nomes de pastas."""
+        normalized = unicodedata.normalize("NFKD", value or "")
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", " ", normalized).strip().lower()
+        return re.sub(r"\s+", " ", normalized)
+
+    def _primary_author(self, author_name: str) -> str:
+        """Extrai autor principal para evitar duplicações por coautoria/formato."""
+        raw = (author_name or "").strip()
+        if not raw:
+            return "Autor Desconhecido"
+
+        # Separadores comuns de múltiplos autores.
+        split_patterns = [r"\s*&\s*", r"\s+and\s+", r"\s+e\s+", r"\s*;\s*", r"\s*/\s*", r"\s*\|\s*"]
+        for pattern in split_patterns:
+            parts = re.split(pattern, raw, maxsplit=1, flags=re.IGNORECASE)
+            if parts and parts[0].strip() and len(parts) > 1:
+                raw = parts[0].strip()
+                break
+
+        # "Sobrenome, Nome" -> "Nome Sobrenome"
+        if "," in raw:
+            fragments = [frag.strip() for frag in raw.split(",") if frag.strip()]
+            if len(fragments) >= 2:
+                raw = f"{fragments[1]} {fragments[0]}".strip()
+
+        return raw
+
+    def _author_tokens(self, author_name: str) -> set[str]:
+        """Tokeniza nome de autor para comparação por similaridade."""
+        normalized = self._normalize_path_key(self._primary_author(author_name))
+        tokens = {tok for tok in normalized.split(" ") if len(tok) > 1}
+        return tokens
+
+    def _soft_token_overlap(self, left_tokens: set[str], right_tokens: set[str]) -> float:
+        """
+        Sobreposição fuzzy de tokens para capturar pequenas variações ortográficas.
+        Ex.: guatarri ~= guattari.
+        """
+        if not left_tokens or not right_tokens:
+            return 0.0
+
+        right_list = list(right_tokens)
+        used = set()
+        matched = 0
+
+        for token in left_tokens:
+            best_idx = None
+            best_ratio = 0.0
+            for idx, candidate in enumerate(right_list):
+                if idx in used:
+                    continue
+                ratio = SequenceMatcher(None, token, candidate).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_idx = idx
+
+            if best_idx is not None and best_ratio >= 0.84:
+                used.add(best_idx)
+                matched += 1
+
+        return matched / max(len(left_tokens), len(right_tokens))
+
+    def _resolve_author_directory_name(self, author_name: str) -> str:
+        """
+        Reutiliza diretório existente do autor, evitando duplicatas por acento/caixa/pontuação.
+        """
+        canonical_author = self._primary_author(author_name or "Autor Desconhecido")
+        safe_author = self._sanitize_filename(canonical_author)
+        if not self.vault_manager:
+            return safe_author
+
+        authors_root = self.vault_manager.vault_path / "01-LEITURAS"
+        if not authors_root.exists():
+            return safe_author
+
+        target_key = self._normalize_path_key(canonical_author)
+        target_tokens = self._author_tokens(canonical_author)
+        if not target_key:
+            return safe_author
+
+        best_match_name = None
+        best_score = 0.0
+
+        try:
+            for child in authors_root.iterdir():
+                if not child.is_dir():
+                    continue
+
+                child_key = self._normalize_path_key(child.name)
+                if child_key == target_key:
+                    return child.name
+
+                child_tokens = self._author_tokens(child.name)
+                if not target_tokens or not child_tokens:
+                    continue
+
+                intersection = len(target_tokens & child_tokens)
+                union = len(target_tokens | child_tokens)
+                jaccard_score = (intersection / union) if union else 0.0
+                fuzzy_score = self._soft_token_overlap(target_tokens, child_tokens)
+                score = max(jaccard_score, fuzzy_score)
+
+                if score > best_score:
+                    best_score = score
+                    best_match_name = child.name
+        except Exception:
+            return safe_author
+
+        if best_match_name and best_score >= 0.8:
+            return best_match_name
+
+        return safe_author
     
     def _perform_maintenance(self):
         """Executa manutenção periódica"""
