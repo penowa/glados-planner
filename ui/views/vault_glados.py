@@ -27,15 +27,37 @@ class VaultGladosView(QWidget):
         self.controllers = controllers or {}
         self.glados_controller = self.controllers.get("glados")
         self.vault_controller = self._resolve_vault_controller()
+        self.assistant_name = "GLaDOS"
+        self._load_identity_from_settings()
 
         self.vault_stats_card = None
         self.glados_card = None
+        self.header_title_label = None
 
         self.setup_ui()
         self.setup_connections()
 
         QTimer.singleShot(100, self.load_initial_data)
         logger.info("VaultGladosView inicializada")
+
+    def _load_identity_from_settings(self):
+        try:
+            from core.config.settings import Settings
+            current_settings = Settings.from_yaml()
+            name = str(current_settings.llm.glados.glados_name or "").strip()
+            if name:
+                self.assistant_name = name
+        except Exception:
+            pass
+
+    def update_identity(self, user_name: str | None = None, assistant_name: str | None = None):
+        del user_name  # Atualmente não utilizado nesta view.
+        if assistant_name is not None:
+            normalized = str(assistant_name).strip()
+            if normalized:
+                self.assistant_name = normalized
+        if self.header_title_label:
+            self.header_title_label.setText(f"🔍 Vault + {self.assistant_name}")
 
     def _resolve_vault_controller(self):
         if self.controllers.get("vault"):
@@ -124,8 +146,9 @@ class VaultGladosView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        title = QLabel("🔍 Vault + GLaDOS")
+        title = QLabel(f"🔍 Vault + {self.assistant_name}")
         title.setFont(QFont("FiraCode Nerd Font Propo", 18, QFont.Weight.Medium))
+        self.header_title_label = title
         subtitle = QLabel("Contextualização de notas e chat assistido")
         subtitle.setFont(QFont("FiraCode Nerd Font Propo", 10))
         subtitle.setStyleSheet("color: #8A94A6;")

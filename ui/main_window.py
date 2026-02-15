@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self.recovery_manager = recovery_manager
         self.backend_modules = backend_modules
         self.config = config
+        self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(config)
         
         # Estado interno
         self.current_theme = config.get('theme', 'philosophy_dark')
@@ -159,7 +160,7 @@ class MainWindow(QMainWindow):
     
     def setup_window(self):
         """Configura propriedades da janela"""
-        self.setWindowTitle("GLaDOS Philosophy Planner")
+        self.setWindowTitle(self._build_window_title())
         self.setGeometry(100, 100, 1360, 720)
         
         # Centralizar na tela
@@ -274,7 +275,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(15)
         
         # Logo/título da aplicação
-        self.app_logo = QLabel("GLaDOS")
+        self.app_logo = QLabel(self._get_view_title("dashboard"))
         self.app_logo.setObjectName("app_logo")
         self.app_logo.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.app_logo.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -315,7 +316,7 @@ class MainWindow(QMainWindow):
         self.vault_glados_button = QPushButton("🔍")
         self.vault_glados_button.setObjectName("vault_glados_button")
         self.vault_glados_button.setFixedSize(36, 36)
-        self.vault_glados_button.setToolTip("Abrir Vault + GLaDOS")
+        self.vault_glados_button.setToolTip(f"Abrir Vault + {self.custom_assistant_name}")
         self.vault_glados_button.clicked.connect(lambda: self.change_view("vault_glados"))
         layout.addWidget(self.vault_glados_button)
 
@@ -432,8 +433,18 @@ class MainWindow(QMainWindow):
         """Inicializa todas as views do sistema"""
         # Criar views com referências aos controllers
         self.views['dashboard'] = DashboardView(self.controllers)
+        if hasattr(self.views['dashboard'], "update_identity"):
+            self.views['dashboard'].update_identity(
+                self.custom_user_name,
+                self.custom_assistant_name
+            )
         self.views['dashboard'].navigate_to.connect(self.change_view)
         self.views['vault_glados'] = VaultGladosView(self.controllers)
+        if hasattr(self.views['vault_glados'], "update_identity"):
+            self.views['vault_glados'].update_identity(
+                self.custom_user_name,
+                self.custom_assistant_name
+            )
         self.views['vault_glados'].navigate_to.connect(self.change_view)
         self.views['session'] = SessionView(self.controllers)
         self.views['session'].navigate_to.connect(self.change_view)
@@ -584,22 +595,7 @@ class MainWindow(QMainWindow):
         self.current_view = view_name
         
         # Atualizar título do app_logo
-        titles = {
-            'dashboard': 'GLaDOS',
-            'vault_glados': 'Vault + GLaDOS',
-            'session': 'Sessão',
-            'library': 'Biblioteca',
-            'agenda': 'Agenda',
-            'weekly_review': 'Revisão Semanal',
-            'focus': 'Modo Foco',
-            'concepts': 'Conceitos',
-            'analytics': 'Analytics',
-            'goals': 'Metas',
-            'glados': 'GLaDOS',
-            'settings': 'Configurações'
-        }
-        
-        self.app_logo.setText(titles.get(view_name, view_name))
+        self.app_logo.setText(self._get_view_title(view_name))
         
         # Animar transição se habilitado
         if self.animations_enabled and hasattr(self, 'view_stack_transition'):
@@ -710,10 +706,84 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self, updated_settings: dict):
         """Atualiza estado local após salvar configurações."""
         self.config.update(updated_settings)
+        self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(updated_settings)
+        self._apply_custom_identity_to_ui()
         self.show_success_notification(
             "Configurações salvas",
             "As configurações foram atualizadas com sucesso."
         )
+
+    def _resolve_custom_identity(self, source: Dict[str, Any] | None = None) -> tuple[str, str]:
+        """Obtém nomes customizados (usuário/assistente) de config local ou YAML."""
+        user_name = "Usuário"
+        assistant_name = "GLaDOS"
+        data = source if isinstance(source, dict) else {}
+
+        llm_cfg = data.get("llm", {}) if isinstance(data.get("llm"), dict) else {}
+        glados_cfg = llm_cfg.get("glados", {}) if isinstance(llm_cfg.get("glados"), dict) else {}
+
+        configured_user = str(glados_cfg.get("user_name", "")).strip()
+        configured_assistant = str(glados_cfg.get("glados_name", "")).strip()
+
+        if configured_user:
+            user_name = configured_user
+        if configured_assistant:
+            assistant_name = configured_assistant
+
+        if not configured_user or not configured_assistant:
+            try:
+                from core.config.settings import Settings
+                current_settings = Settings.from_yaml()
+                if not configured_user:
+                    yaml_user = str(current_settings.llm.glados.user_name or "").strip()
+                    if yaml_user:
+                        user_name = yaml_user
+                if not configured_assistant:
+                    yaml_assistant = str(current_settings.llm.glados.glados_name or "").strip()
+                    if yaml_assistant:
+                        assistant_name = yaml_assistant
+            except Exception:
+                pass
+
+        return user_name, assistant_name
+
+    def _build_window_title(self) -> str:
+        return f"{self.custom_assistant_name} Philosophy Planner"
+
+    def _get_view_title(self, view_name: str) -> str:
+        titles = {
+            'dashboard': self.custom_assistant_name,
+            'vault_glados': f'Vault + {self.custom_assistant_name}',
+            'session': 'Sessão',
+            'library': 'Biblioteca',
+            'agenda': 'Agenda',
+            'weekly_review': 'Revisão Semanal',
+            'focus': 'Modo Foco',
+            'concepts': 'Conceitos',
+            'analytics': 'Analytics',
+            'goals': 'Metas',
+            'glados': self.custom_assistant_name,
+            'settings': 'Configurações'
+        }
+        return titles.get(view_name, view_name)
+
+    def _apply_custom_identity_to_ui(self):
+        """Reaplica textos customizados na interface principal."""
+        self.setWindowTitle(self._build_window_title())
+
+        if hasattr(self, "vault_glados_button"):
+            self.vault_glados_button.setToolTip(f"Abrir Vault + {self.custom_assistant_name}")
+
+        if hasattr(self, "app_logo"):
+            self.app_logo.setText(self._get_view_title(self.current_view))
+
+        dashboard_view = self.views.get("dashboard") if isinstance(getattr(self, "views", None), dict) else None
+        if dashboard_view and hasattr(dashboard_view, "update_identity"):
+            dashboard_view.update_identity(self.custom_user_name, self.custom_assistant_name)
+
+        vault_glados_view = self.views.get("vault_glados") if isinstance(getattr(self, "views", None), dict) else None
+        if vault_glados_view and hasattr(vault_glados_view, "update_identity"):
+            vault_glados_view.update_identity(self.custom_user_name, self.custom_assistant_name)
     
     def close_application(self):
         """Fecha a aplicação com confirmação"""

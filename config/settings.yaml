@@ -26,7 +26,7 @@ llm:
     batch_size: 128
     use_mlock: true
   glados:
-    user_name: Helio
+    user_name: Hélio
     glados_name: GLaDOS
     gender: feminino
     personality_intensity: 0.7

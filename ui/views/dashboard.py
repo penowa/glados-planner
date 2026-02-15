@@ -45,12 +45,39 @@ class DashboardView(QWidget):
         self.current_reading = None
         self.today_agenda = []
         self.daily_stats = {}
+        self.user_name = "Usuário"
+        self.assistant_name = "GLaDOS"
+        self._load_identity_from_settings()
         
         self.setup_ui()
         self.setup_connections()
         self.setup_timers()
         
         logger.info("DashboardView inicializado com cards integrados")
+
+    def _load_identity_from_settings(self):
+        """Carrega nomes customizáveis (usuário/assistente) do settings.yaml."""
+        try:
+            from core.config.settings import Settings
+            current_settings = Settings.from_yaml()
+            glados_cfg = current_settings.llm.glados
+            self.user_name = str(glados_cfg.user_name or "").strip() or self.user_name
+            self.assistant_name = str(glados_cfg.glados_name or "").strip() or self.assistant_name
+        except Exception:
+            # Mantém fallback local quando configurações ainda não estão disponíveis.
+            pass
+
+    def update_identity(self, user_name: str | None = None, assistant_name: str | None = None):
+        """Atualiza nomes exibidos na UI em tempo de execução."""
+        if user_name is not None:
+            normalized_user = str(user_name).strip()
+            if normalized_user:
+                self.user_name = normalized_user
+        if assistant_name is not None:
+            normalized_assistant = str(assistant_name).strip()
+            if normalized_assistant:
+                self.assistant_name = normalized_assistant
+        self.update_greeting()
     
     def handle_navigation(self, destination):
         """Método para tratamento de navegação interna"""
@@ -198,13 +225,14 @@ class DashboardView(QWidget):
     
     def get_time_greeting(self):
         """Retorna saudação baseada na hora"""
+        user_display_name = self.user_name or "Usuário"
         hour = QDateTime.currentDateTime().time().hour()
         if hour < 12:
-            return "🌅 Bom dia Hélio"
+            return f"🌅 Bom dia {user_display_name}"
         elif hour < 18:
-            return "☀️ Boa tarde Hélio"
+            return f"☀️ Boa tarde {user_display_name}"
         else:
-            return "🌙 Boa noite Hélio"
+            return f"🌙 Boa noite {user_display_name}"
     
     def setup_connections(self):
         """Configura conexões com controllers e cards"""

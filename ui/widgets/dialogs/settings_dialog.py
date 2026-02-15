@@ -97,6 +97,8 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         form = QFormLayout(tab)
 
+        self.llm_user_name_input = QLineEdit()
+        self.llm_assistant_name_input = QLineEdit()
         self.llm_model_name_input = QLineEdit()
         self.llm_model_path_input = QLineEdit()
         self.llm_n_ctx_spin = QSpinBox()
@@ -118,6 +120,8 @@ class SettingsDialog(QDialog):
         model_btn.clicked.connect(self._select_model_path)
         model_path_layout.addWidget(model_btn)
 
+        form.addRow("Nome do usuário (dashboard):", self.llm_user_name_input)
+        form.addRow("Nome do assistente:", self.llm_assistant_name_input)
         form.addRow("Nome do modelo:", self.llm_model_name_input)
         form.addRow("Caminho do modelo:", model_path_layout)
         form.addRow("Context window (n_ctx):", self.llm_n_ctx_spin)
@@ -152,7 +156,7 @@ class SettingsDialog(QDialog):
         self.feature_obsidian = QCheckBox("Habilitar sincronização Obsidian")
         self.feature_pomodoro = QCheckBox("Habilitar Pomodoro")
         self.feature_translation = QCheckBox("Habilitar tradução")
-        self.feature_glados_personality = QCheckBox("Habilitar personalidade GLaDOS")
+        self.feature_glados_personality = QCheckBox("Habilitar personalidade do assistente")
         self.feature_vault_brain = QCheckBox("Habilitar vault como cérebro")
 
         layout.addWidget(self.feature_llm)
@@ -190,6 +194,8 @@ class SettingsDialog(QDialog):
         self.llm_temperature_spin.setValue(llm.temperature)
         self.llm_top_p_spin.setValue(llm.top_p)
         self.llm_max_tokens_spin.setValue(llm.max_tokens)
+        self.llm_user_name_input.setText(llm.glados.user_name)
+        self.llm_assistant_name_input.setText(llm.glados.glados_name)
 
         self.obsidian_templates_dir_input.setText(obsidian.templates_dir)
         self.obsidian_auto_sync_check.setChecked(obsidian.auto_sync)
@@ -222,6 +228,8 @@ class SettingsDialog(QDialog):
             self.settings_model.llm.temperature = self.llm_temperature_spin.value()
             self.settings_model.llm.top_p = self.llm_top_p_spin.value()
             self.settings_model.llm.max_tokens = self.llm_max_tokens_spin.value()
+            self.settings_model.llm.glados.user_name = self.llm_user_name_input.text().strip()
+            self.settings_model.llm.glados.glados_name = self.llm_assistant_name_input.text().strip()
 
             self.settings_model.obsidian.templates_dir = self.obsidian_templates_dir_input.text().strip()
             self.settings_model.obsidian.auto_sync = self.obsidian_auto_sync_check.isChecked()
