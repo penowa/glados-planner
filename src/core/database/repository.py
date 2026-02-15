@@ -13,6 +13,7 @@ class BaseRepository(Generic[T]):
     
     def __init__(self, model: Type[T], session: Session = None):
         self.model = model
+        self._owns_session = session is None
         self.session = session or SessionLocal()
     
     def create(self, **kwargs) -> T:
@@ -95,3 +96,22 @@ class BaseRepository(Generic[T]):
     def exists(self, **filters) -> bool:
         """Verifica se existe um registro com os filtros."""
         return self.find_one(**filters) is not None
+
+    def close(self):
+        """Fecha sessão local quando o repositório é dono dela."""
+        if self._owns_session and self.session is not None:
+            self.session.close()
+            self.session = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

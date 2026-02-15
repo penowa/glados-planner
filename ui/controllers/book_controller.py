@@ -13,6 +13,8 @@ import hashlib
 import re
 import unicodedata
 import tempfile
+import zipfile
+import xml.etree.ElementTree as ET
 from difflib import SequenceMatcher
 from enum import Enum
 
@@ -360,6 +362,10 @@ class BookProcessingPipeline(QThread):
             metadata=self.metadata,
             chapters=self.extracted_content
         )
+        cover_result = self.controller.create_book_cover(
+            metadata=self.metadata,
+            source_file=self.file_path
+        )
 
         # Sempre criar nota única com conteúdo completo
         full_note_result = self.controller.create_single_note_structure(
@@ -382,6 +388,8 @@ class BookProcessingPipeline(QThread):
             "book_id": self.book_id,
             "directory_created": chapters_result.get("directory_created", False),
             "index_created": index_result.get("index_created", False),
+            "cover_created": bool(cover_result.get("cover_created", False)),
+            "cover_path": cover_result.get("cover_path"),
             "chapter_notes_created": chapters_result.get("notes_created", 0),
             "full_note_created": full_note_result.get("notes_created", 0) > 0,
             "notes_created": chapters_result.get("notes_created", 0) + full_note_result.get("notes_created", 0),
@@ -1009,6 +1017,154 @@ class BookController(QObject):
             result["error"] = str(e)
         
         return result
+
+    def create_book_cover(self, metadata, source_file: Path) -> Dict:
+        """Gera e salva a capa do livro no diretório do vault."""
+        result = {
+            "cover_created": False,
+            "cover_path": None,
+            "error": None
+        }
+
+        try:
+            if not self.vault_manager:
+                result["error"] = "VaultManager não disponível"
+                return result
+
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            book_dir = self.vault_manager.vault_path / "01-LEITURAS" / safe_author / safe_title
+            book_dir.mkdir(parents=True, exist_ok=True)
+
+            source_path = Path(source_file)
+            ext = source_path.suffix.lower()
+            cover_path: Optional[Path] = None
+
+            if ext == ".pdf":
+                cover_path = self._extract_pdf_cover(source_path, book_dir)
+            elif ext == ".epub":
+                cover_path = self._extract_epub_cover(source_path, book_dir)
+
+            if cover_path and cover_path.exists():
+                result["cover_created"] = True
+                result["cover_path"] = str(cover_path)
+            else:
+                result["error"] = "Não foi possível extrair capa do arquivo"
+
+        except Exception as e:
+            result["error"] = str(e)
+            logger.warning("Falha ao criar capa do livro: %s", e)
+
+        return result
+
+    def _extract_pdf_cover(self, pdf_path: Path, output_dir: Path) -> Optional[Path]:
+        """Extrai a primeira página do PDF como capa."""
+        try:
+            import fitz
+
+            with fitz.open(pdf_path) as doc:
+                if len(doc) == 0:
+                    return None
+                page = doc.load_page(0)
+                pix = page.get_pixmap(matrix=fitz.Matrix(1.4, 1.4), alpha=False)
+                cover_path = output_dir / "cover.jpg"
+                pix.save(str(cover_path))
+                return cover_path
+        except Exception as e:
+            logger.debug("Não foi possível extrair capa PDF (%s): %s", pdf_path, e)
+            return None
+
+    def _extract_epub_cover(self, epub_path: Path, output_dir: Path) -> Optional[Path]:
+        """Extrai imagem de capa de EPUB para o diretório do livro."""
+        try:
+            with zipfile.ZipFile(epub_path, "r") as zf:
+                opf_path = self._find_epub_opf_path(zf)
+                if not opf_path:
+                    return None
+
+                opf_data = zf.read(opf_path)
+                root = ET.fromstring(opf_data)
+                ns = {
+                    "opf": "http://www.idpf.org/2007/opf",
+                    "dc": "http://purl.org/dc/elements/1.1/",
+                }
+
+                manifest_items = {}
+                for item in root.findall(".//opf:manifest/opf:item", ns):
+                    item_id = item.attrib.get("id", "")
+                    href = item.attrib.get("href", "")
+                    media_type = item.attrib.get("media-type", "")
+                    props = item.attrib.get("properties", "")
+                    if item_id:
+                        manifest_items[item_id] = {
+                            "href": href,
+                            "media_type": media_type,
+                            "properties": props,
+                        }
+
+                cover_id = None
+                for meta in root.findall(".//opf:metadata/opf:meta", ns):
+                    if meta.attrib.get("name") == "cover":
+                        cover_id = meta.attrib.get("content")
+                        break
+
+                selected = None
+                if cover_id and cover_id in manifest_items:
+                    selected = manifest_items[cover_id]
+                if not selected:
+                    for item in manifest_items.values():
+                        if "cover-image" in (item.get("properties") or ""):
+                            selected = item
+                            break
+                if not selected:
+                    for item in manifest_items.values():
+                        if item.get("media_type", "").startswith("image/"):
+                            selected = item
+                            break
+                if not selected:
+                    return None
+
+                image_path = self._resolve_epub_item_path(opf_path, selected["href"])
+                image_data = zf.read(image_path)
+
+                media_type = selected.get("media_type", "")
+                ext = {
+                    "image/jpeg": ".jpg",
+                    "image/jpg": ".jpg",
+                    "image/png": ".png",
+                    "image/webp": ".webp",
+                }.get(media_type, Path(selected["href"]).suffix or ".jpg")
+
+                cover_path = output_dir / f"cover{ext}"
+                with open(cover_path, "wb") as f:
+                    f.write(image_data)
+                return cover_path
+        except Exception as e:
+            logger.debug("Não foi possível extrair capa EPUB (%s): %s", epub_path, e)
+            return None
+
+    def _find_epub_opf_path(self, zf: zipfile.ZipFile) -> Optional[str]:
+        """Localiza caminho do OPF dentro do EPUB."""
+        try:
+            container_path = "META-INF/container.xml"
+            if container_path in zf.namelist():
+                container_root = ET.fromstring(zf.read(container_path))
+                namespace = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
+                rootfile = container_root.find(".//c:rootfile", namespace)
+                if rootfile is not None and rootfile.attrib.get("full-path"):
+                    return rootfile.attrib.get("full-path")
+            for name in zf.namelist():
+                if name.lower().endswith(".opf"):
+                    return name
+            return None
+        except Exception:
+            return None
+
+    def _resolve_epub_item_path(self, opf_path: str, href: str) -> str:
+        """Resolve caminho relativo de item do EPUB a partir do OPF."""
+        base = Path(opf_path).parent
+        resolved = (base / href).as_posix()
+        return resolved.lstrip("/")
 
     def create_single_note_structure(self, book_id: str, metadata, content: List[Dict], config: Dict = None) -> Dict:
         """Cria uma única nota para todo o livro"""

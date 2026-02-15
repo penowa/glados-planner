@@ -159,7 +159,7 @@ class VaultGladosView(QWidget):
     def load_initial_data(self):
         if self.vault_stats_card:
             try:
-                self.vault_stats_card.refresh_data()
+                self.vault_stats_card.load_initial_data()
             except Exception as e:
                 logger.error("Erro ao carregar dados do vault: %s", e)
 

@@ -94,6 +94,9 @@ class BackendController(QObject):
         worker.finished.connect(worker_thread.quit)
         worker.finished.connect(worker.deleteLater)
         worker_thread.finished.connect(worker_thread.deleteLater)
+        worker_thread.finished.connect(
+            lambda: self._on_worker_thread_finished(worker_thread, worker)
+        )
         
         # Armazenar referência
         self.workers.append((worker_thread, worker))
@@ -110,6 +113,17 @@ class BackendController(QObject):
         worker_thread.start()
         
         return worker_thread
+
+    def _on_worker_thread_finished(self, worker_thread: QThread, worker: BackendWorker):
+        """Remove referências de workers finalizados para evitar retenção em memória."""
+        try:
+            self.workers = [
+                (thread, w)
+                for thread, w in self.workers
+                if thread is not worker_thread and w is not worker
+            ]
+        except Exception as e:
+            logger.debug(f"Falha ao limpar worker finalizado em {self.name}: {e}")
     
     def _handle_result(self, operation: str, result: Any, callback: Optional[Callable]):
         """Processa resultado bem-sucedido"""

@@ -28,6 +28,8 @@ from ui.views.dashboard import DashboardView
 from ui.views.agenda import AgendaView
 from ui.views.session import SessionView
 from ui.views.vault_glados import VaultGladosView
+from ui.views.weekly_review import WeeklyReviewView
+from ui.views.library import LibraryView
 
 # Controllers
 from ui.controllers.book_controller import BookController
@@ -316,6 +318,22 @@ class MainWindow(QMainWindow):
         self.vault_glados_button.setToolTip("Abrir Vault + GLaDOS")
         self.vault_glados_button.clicked.connect(lambda: self.change_view("vault_glados"))
         layout.addWidget(self.vault_glados_button)
+
+        # Acesso à Agenda
+        self.agenda_button = QPushButton("📅")
+        self.agenda_button.setObjectName("agenda_button")
+        self.agenda_button.setFixedSize(36, 36)
+        self.agenda_button.setToolTip("Abrir Agenda")
+        self.agenda_button.clicked.connect(lambda: self.change_view("agenda"))
+        layout.addWidget(self.agenda_button)
+
+        # Acesso à Biblioteca
+        self.library_button = QPushButton("📖")
+        self.library_button.setObjectName("library_button")
+        self.library_button.setFixedSize(36, 36)
+        self.library_button.setToolTip("Abrir Biblioteca")
+        self.library_button.clicked.connect(lambda: self.change_view("library"))
+        layout.addWidget(self.library_button)
         
         # Controles da janela
         controls_layout = QHBoxLayout()
@@ -380,8 +398,8 @@ class MainWindow(QMainWindow):
         self.performance_button = QPushButton("📈")
         self.performance_button.setObjectName("performance_button")
         self.performance_button.setFixedSize(36, 36)
-        self.performance_button.clicked.connect(self.show_performance_monitor)
-        self.performance_button.setToolTip("Monitor de performance")
+        self.performance_button.clicked.connect(lambda: self.change_view("weekly_review"))
+        self.performance_button.setToolTip("Revisão semanal")
         
         layout.addWidget(self.performance_button)
     
@@ -419,8 +437,14 @@ class MainWindow(QMainWindow):
         self.views['vault_glados'].navigate_to.connect(self.change_view)
         self.views['session'] = SessionView(self.controllers)
         self.views['session'].navigate_to.connect(self.change_view)
+        self.views['library'] = LibraryView(self.controllers)
+        self.views['library'].navigate_to.connect(self.change_view)
+        self.views['library'].open_book_requested.connect(self.open_book_from_library)
+        self.views['agenda'] = AgendaView(self.controllers.get('agenda'))
+        self.views['agenda'].navigate_to.connect(self.change_view)
+        self.views['weekly_review'] = WeeklyReviewView(self.controllers)
+        self.views['weekly_review'].navigate_to.connect(self.change_view)
         #self.views['library'] =  LibraryView(self.controllers['reading'])
-        #self.views['agenda'] = AgendaView(self.controllers['agenda'])
         #self.views['focus'] = FocusView(self.controllers['focus'])
         #self.views['concepts'] = ConceptsView(self.controllers['book'])
         #self.views['analytics'] = AnalyticsView(self.controllers)
@@ -503,7 +527,7 @@ class MainWindow(QMainWindow):
             'Ctrl+3': lambda: self.change_view('agenda'),
             'Ctrl+4': lambda: self.change_view('focus'),
             'Ctrl+5': lambda: self.change_view('concepts'),
-            'Ctrl+6': lambda: self.change_view('analytics'),
+            'Ctrl+6': lambda: self.change_view('weekly_review'),
             'Ctrl+7': lambda: self.change_view('goals'),
             'Ctrl+8': lambda: self.change_view('vault_glados'),
             'Ctrl+Shift+G': lambda: self.change_view('vault_glados'),
@@ -566,6 +590,7 @@ class MainWindow(QMainWindow):
             'session': 'Sessão',
             'library': 'Biblioteca',
             'agenda': 'Agenda',
+            'weekly_review': 'Revisão Semanal',
             'focus': 'Modo Foco',
             'concepts': 'Conceitos',
             'analytics': 'Analytics',
@@ -740,6 +765,17 @@ class MainWindow(QMainWindow):
         if session_view and hasattr(session_view, "start_ad_hoc_reading"):
             session_view.start_ad_hoc_reading(picker.selected_book_dir)
         self.change_view("session")
+
+    def open_book_from_library(self, book_dir: Path):
+        """Abre livro selecionado na biblioteca via fluxo padrão de sessão."""
+        session_view = self.views.get("session")
+        if not session_view or not hasattr(session_view, "start_ad_hoc_reading"):
+            return
+        try:
+            session_view.start_ad_hoc_reading(Path(book_dir))
+            self.change_view("session")
+        except Exception as exc:
+            logger.error("Falha ao abrir livro da biblioteca: %s", exc)
 
     def _has_upcoming_reading_session(self, window_minutes: int = 10) -> bool:
         agenda_controller = self.controllers.get("agenda")

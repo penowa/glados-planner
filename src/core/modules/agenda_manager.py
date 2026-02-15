@@ -27,11 +27,14 @@ class AgendaEventType(Enum):
     PRODUCAO = "producao"
     REVISAO = "revisao"
     ORIENTACAO = "orientacao"
+    REUNIAO = "reuniao"
     GRUPO_ESTUDO = "grupo_estudo"
     REFEICAO = "refeicao"
     SONO = "sono"
     LAZER = "lazer"
     CASUAL = "casual"
+    PROVA = "prova"
+    SEMINARIO = "seminario"
     TRANSCRICAO = "transcricao"  # Processamento de livros
     CHECKIN = "checkin"  # Check-in diário
     REVISAO_DOMINICAL = "revisao_dominical"
@@ -174,6 +177,7 @@ class AgendaManager:
         
         # Configurações padrão
         self._setup_default_preferences()
+        self._sync_weekly_review_events()
     
     def _load_events(self) -> Dict[str, AgendaEvent]:
         """Carrega eventos da agenda"""
@@ -218,6 +222,11 @@ class AgendaManager:
                 "lunch": "12:30",
                 "dinner": "19:30"
             },
+            "weekly_review": {
+                "weekday": 6,  # domingo
+                "time": "18:00",
+                "duration_minutes": 90
+            },
             "work_preferences": {
                 "production_time": "night",  # morning, afternoon, night
                 "reading_sessions_per_day": 3,
@@ -242,6 +251,127 @@ class AgendaManager:
                 self.user_preferences[key] = value
         
         self._save_preferences()
+
+    def _normalize_hhmm(self, value: str, fallback: str) -> str:
+        """Normaliza string HH:MM para formato estável."""
+        raw = str(value or "").strip()
+        try:
+            dt = datetime.strptime(raw, "%H:%M")
+            return dt.strftime("%H:%M")
+        except Exception:
+            return fallback
+
+    def get_routine_preferences(self) -> Dict[str, Any]:
+        """Retorna preferências de rotina em formato simplificado para UI."""
+        sleep_cfg = self.user_preferences.get("sleep_schedule", {})
+        meal_cfg = self.user_preferences.get("meal_times", {})
+        review_cfg = self.user_preferences.get("weekly_review", {})
+        return {
+            "sleep_start": self._normalize_hhmm(sleep_cfg.get("start", "23:00"), "23:00"),
+            "sleep_end": self._normalize_hhmm(sleep_cfg.get("end", "07:00"), "07:00"),
+            "breakfast_time": self._normalize_hhmm(meal_cfg.get("breakfast", "08:00"), "08:00"),
+            "lunch_time": self._normalize_hhmm(meal_cfg.get("lunch", "12:30"), "12:30"),
+            "dinner_time": self._normalize_hhmm(meal_cfg.get("dinner", "19:30"), "19:30"),
+            "weekly_review_time": self._normalize_hhmm(review_cfg.get("time", "18:00"), "18:00"),
+            "weekly_review_duration_minutes": int(review_cfg.get("duration_minutes", 90) or 90),
+            "weekly_review_weekday": int(review_cfg.get("weekday", 6) or 6),
+        }
+
+    def update_routine_preferences(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Atualiza preferências de rotina e sincroniza revisão semanal.
+
+        Args:
+            updates: dicionário de preferências vindas da UI
+
+        Returns:
+            Preferências já normalizadas
+        """
+        current = self.get_routine_preferences()
+        merged = {**current, **(updates or {})}
+
+        sleep_start = self._normalize_hhmm(merged.get("sleep_start"), current["sleep_start"])
+        sleep_end = self._normalize_hhmm(merged.get("sleep_end"), current["sleep_end"])
+        breakfast = self._normalize_hhmm(merged.get("breakfast_time"), current["breakfast_time"])
+        lunch = self._normalize_hhmm(merged.get("lunch_time"), current["lunch_time"])
+        dinner = self._normalize_hhmm(merged.get("dinner_time"), current["dinner_time"])
+        review_time = self._normalize_hhmm(merged.get("weekly_review_time"), current["weekly_review_time"])
+
+        try:
+            review_duration = int(merged.get("weekly_review_duration_minutes", current["weekly_review_duration_minutes"]))
+        except Exception:
+            review_duration = current["weekly_review_duration_minutes"]
+        review_duration = max(30, min(240, review_duration))
+
+        self.user_preferences.setdefault("sleep_schedule", {})
+        self.user_preferences["sleep_schedule"]["start"] = sleep_start
+        self.user_preferences["sleep_schedule"]["end"] = sleep_end
+
+        self.user_preferences.setdefault("meal_times", {})
+        self.user_preferences["meal_times"]["breakfast"] = breakfast
+        self.user_preferences["meal_times"]["lunch"] = lunch
+        self.user_preferences["meal_times"]["dinner"] = dinner
+
+        self.user_preferences.setdefault("weekly_review", {})
+        self.user_preferences["weekly_review"]["weekday"] = 6
+        self.user_preferences["weekly_review"]["time"] = review_time
+        self.user_preferences["weekly_review"]["duration_minutes"] = review_duration
+
+        self._save_preferences()
+        self._sync_weekly_review_events()
+        return self.get_routine_preferences()
+
+    def _sync_weekly_review_events(self, weeks_ahead: int = 12):
+        """Mantém eventos de revisão dominical alinhados com as preferências."""
+        review_cfg = self.user_preferences.get("weekly_review", {})
+        review_time = self._normalize_hhmm(review_cfg.get("time", "18:00"), "18:00")
+        try:
+            review_duration = int(review_cfg.get("duration_minutes", 90) or 90)
+        except Exception:
+            review_duration = 90
+        review_duration = max(30, min(240, review_duration))
+
+        now = datetime.now()
+        today = now.date()
+
+        # Remove revisões dominicais auto-geradas futuras para recriar com novo horário.
+        to_remove = []
+        for event_id, event in self.events.items():
+            if (
+                event.type == AgendaEventType.REVISAO_DOMINICAL
+                and event.auto_generated
+                and event.start.date() >= today
+            ):
+                to_remove.append(event_id)
+        for event_id in to_remove:
+            self.events.pop(event_id, None)
+
+        # Agenda revisões nos próximos domingos.
+        first_sunday = today + timedelta(days=(6 - today.weekday()) % 7)
+        review_hour, review_minute = [int(p) for p in review_time.split(":", 1)]
+
+        for offset in range(weeks_ahead):
+            day_date = first_sunday + timedelta(days=7 * offset)
+            start_dt = datetime.combine(day_date, datetime.min.time()).replace(
+                hour=review_hour, minute=review_minute, second=0, microsecond=0
+            )
+            if start_dt < now:
+                continue
+            end_dt = start_dt + timedelta(minutes=review_duration)
+            event = AgendaEvent(
+                id=str(uuid.uuid4()),
+                type=AgendaEventType.REVISAO_DOMINICAL,
+                title="Revisão Semanal",
+                start=start_dt,
+                end=end_dt,
+                completed=False,
+                auto_generated=True,
+                metadata={"routine_anchor": True},
+                priority=EventPriority.FIXO,
+            )
+            self.events[event.id] = event
+
+        self._save_events()
     
     def _create_default_agenda(self):
         """Cria agenda padrão com blocos fixos"""
@@ -352,6 +482,9 @@ class AgendaManager:
         priority_map = {
             AgendaEventType.AULA: EventPriority.FIXO,
             AgendaEventType.ORIENTACAO: EventPriority.FIXO,
+            AgendaEventType.REUNIAO: EventPriority.FIXO,
+            AgendaEventType.SEMINARIO: EventPriority.FIXO,
+            AgendaEventType.PROVA: EventPriority.ALTA,
             AgendaEventType.PRODUCAO: EventPriority.ALTA,
             AgendaEventType.LEITURA: EventPriority.MEDIA,
             AgendaEventType.REVISAO: EventPriority.MEDIA,

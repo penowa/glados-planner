@@ -157,6 +157,7 @@ class AgendaController(QObject):
     productivity_insights_loaded = pyqtSignal(dict)
     emergency_mode_activated = pyqtSignal(dict)
     review_transitioned = pyqtSignal(dict)
+    routine_preferences_updated = pyqtSignal(dict)
     
     # === CONSTANTES ===
     CACHE_TTL_SECONDS = 300
@@ -400,6 +401,8 @@ class AgendaController(QObject):
                     "completed_at": datetime.now().isoformat(),
                     "result": result
                 })
+                # Operação concluída: remover para não acumular estado indefinidamente.
+                self.scheduling_operations.pop(book_id, None)
         finally:
             self.operations_mutex.unlock()
         
@@ -455,6 +458,12 @@ class AgendaController(QObject):
         }
         
         self.reading_scheduling_failed.emit(book_id, error, context)
+        self.operations_mutex.lock()
+        try:
+            # Falha final: remover para evitar retenção de contexto de erro antigo.
+            self.scheduling_operations.pop(book_id, None)
+        finally:
+            self.operations_mutex.unlock()
         logger.error(f"Agendamento falhou para {book_id}: {error}")
     
     def _retry_scheduling(self, book_id: str):
@@ -666,6 +675,48 @@ class AgendaController(QObject):
             self.cache_mutex.unlock()
     
     # ====== MÉTODOS DE AGENDA (mantidos para compatibilidade) ======
+
+    def _serialize_events(self, events: List[Any]) -> List[Dict]:
+        """Serializa lista de eventos para dicionário."""
+        return [
+            event.to_dict() if hasattr(event, "to_dict") else dict(event)
+            for event in events
+        ]
+
+    def _parse_datetime(self, value: str) -> datetime:
+        """Converte string de data/hora para datetime de forma tolerante."""
+        if not value:
+            raise ValueError("Data/hora inválida")
+        raw = str(value).strip()
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Formato de data/hora não suportado: {value}")
+
+    def _priority_from_value(self, value: Any) -> int:
+        """Converte prioridade textual/numérica para inteiro (1-5)."""
+        if isinstance(value, int):
+            return max(1, min(5, value))
+        mapping = {
+            "baixa": 1,
+            "low": 1,
+            "média": 2,
+            "media": 2,
+            "medium": 2,
+            "alta": 3,
+            "high": 3,
+            "fixo": 4,
+            "fixed": 4,
+            "bloqueio": 5,
+            "critical": 5,
+        }
+        return mapping.get(str(value).strip().lower(), 2)
     
     @pyqtSlot(str)
     def load_agenda_async(self, date_str: str = None):
@@ -675,20 +726,30 @@ class AgendaController(QObject):
     @pyqtSlot()
     def load_upcoming_deadlines_async(self, days: int = 7):
         """Carrega prazos próximos"""
-        # Implementação existente...
-        pass
+        self.load_upcoming_deadlines(days)
     
     @pyqtSlot(dict)
     def add_event_async(self, event_data: Dict):
         """Adiciona evento à agenda"""
-        # Implementação existente...
-        pass
+        self.add_event(event_data)
     
     @pyqtSlot(str, result=bool)
     def delete_event(self, event_id: str) -> bool:
         """Remove evento da agenda"""
-        # Implementação existente...
-        pass
+        try:
+            if not self.agenda_manager or event_id not in self.agenda_manager.events:
+                return False
+            event = self.agenda_manager.events[event_id]
+            event_day = event.start.date().isoformat()
+            del self.agenda_manager.events[event_id]
+            self.agenda_manager._save_events()
+            self._invalidate_agenda_cache()
+            self.event_deleted.emit(event_id)
+            self.load_agenda(event_day)
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao remover evento {event_id}: {e}")
+            return False
     
     @pyqtSlot(str, result=list)
     def load_agenda(self, date_str: str = None) -> List[Dict]:
@@ -715,6 +776,267 @@ class AgendaController(QObject):
             self.agenda_loaded.emit([])
             self.agenda_updated.emit(date_str or datetime.now().strftime("%Y-%m-%d"), [])
             return []
+
+    @pyqtSlot(str, result=list)
+    def get_day_events(self, date_str: str = None) -> List[Dict]:
+        """Retorna eventos serializados de um dia específico."""
+        return self.load_agenda(date_str)
+
+    @pyqtSlot(int, int, result=dict)
+    def get_month_events(self, year: int, month: int) -> Dict[str, List[Dict]]:
+        """Retorna eventos serializados por dia para um mês específico."""
+        result: Dict[str, List[Dict]] = {}
+        try:
+            first_day = date(year, month, 1)
+            if month == 12:
+                next_month = date(year + 1, 1, 1)
+            else:
+                next_month = date(year, month + 1, 1)
+            total_days = (next_month - first_day).days
+            for day in range(total_days):
+                current = first_day + timedelta(days=day)
+                current_str = current.isoformat()
+                events = self.agenda_manager.get_day_events(current_str) if self.agenda_manager else []
+                result[current_str] = self._serialize_events(events)
+        except Exception as e:
+            logger.error(f"Erro ao carregar mês {year}-{month:02d}: {e}")
+        return result
+
+    @pyqtSlot(dict, result=str)
+    def add_event(self, event_data: Dict) -> str:
+        """Adiciona evento e emite sinais de atualização."""
+        try:
+            title = event_data.get("title", "").strip()
+            start = event_data.get("start")
+            end = event_data.get("end")
+            event_type = event_data.get("event_type") or event_data.get("type") or "casual"
+            if not title or not start or not end:
+                raise ValueError("Campos obrigatórios: title, start e end")
+
+            metadata = {
+                k: v for k, v in event_data.items()
+                if k not in {"id", "title", "start", "end", "type", "event_type"}
+            }
+            event_id = self.agenda_manager.add_event(
+                title=title,
+                start=start,
+                end=end,
+                event_type=event_type,
+                **metadata,
+            )
+            self._invalidate_agenda_cache()
+            created = self.agenda_manager.events.get(event_id)
+            if created and "priority" in event_data:
+                try:
+                    created.priority = type(created.priority)(self._priority_from_value(event_data["priority"]))
+                except Exception:
+                    pass
+            if created and "discipline" in event_data and hasattr(created, "discipline"):
+                created.discipline = event_data.get("discipline")
+            if created and "description" in event_data and hasattr(created, "metadata"):
+                created.metadata["description"] = event_data.get("description")
+            if created:
+                self.agenda_manager._save_events()
+            created_data = created.to_dict() if created and hasattr(created, "to_dict") else {"id": event_id}
+            self.event_added.emit(created_data)
+
+            if created:
+                day_str = created.start.date().isoformat()
+                self.load_agenda(day_str)
+            return event_id
+        except Exception as e:
+            logger.error(f"Erro ao adicionar evento: {e}")
+            return ""
+
+    @pyqtSlot(str, dict, result=bool)
+    def update_event(self, event_id: str, updates: Dict) -> bool:
+        """Atualiza evento existente de forma compatível com a UI."""
+        try:
+            event = self.agenda_manager.events.get(event_id) if self.agenda_manager else None
+            if not event:
+                return False
+
+            old_day = event.start.date().isoformat()
+
+            if updates.get("deleted", False):
+                return self.delete_event(event_id)
+
+            if "title" in updates:
+                event.title = str(updates["title"]).strip() or event.title
+
+            if "start" in updates:
+                event.start = self._parse_datetime(updates["start"])
+            if "end" in updates:
+                event.end = self._parse_datetime(updates["end"])
+
+            event_type = updates.get("event_type", updates.get("type"))
+            if event_type:
+                try:
+                    event.type = type(event.type)(str(event_type))
+                except Exception:
+                    logger.warning(f"Tipo de evento inválido para {event_id}: {event_type}")
+
+            if "priority" in updates:
+                priority_value = self._priority_from_value(updates["priority"])
+                try:
+                    event.priority = type(event.priority)(priority_value)
+                except Exception:
+                    pass
+
+            if "completed" in updates:
+                event.completed = bool(updates["completed"])
+
+            if hasattr(event, "discipline") and "discipline" in updates:
+                event.discipline = updates.get("discipline")
+
+            if hasattr(event, "metadata"):
+                for key in ("description", "notes"):
+                    if key in updates:
+                        event.metadata[key] = updates[key]
+
+            self.agenda_manager._save_events()
+            self._invalidate_agenda_cache()
+
+            event_data = event.to_dict() if hasattr(event, "to_dict") else {"id": event_id}
+            self.event_updated.emit(event_id, event_data)
+
+            new_day = event.start.date().isoformat()
+            self.load_agenda(old_day)
+            if new_day != old_day:
+                self.load_agenda(new_day)
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar evento {event_id}: {e}")
+            return False
+
+    @pyqtSlot(str, bool, result=bool)
+    def toggle_event_completion(self, event_id: str, completed: bool) -> bool:
+        """Marca evento como concluído/não concluído."""
+        success = self.update_event(event_id, {"completed": completed})
+        if success:
+            self.event_completed.emit(event_id, completed)
+        return success
+
+    @pyqtSlot(str, str, int, result=bool)
+    def move_event(self, event_id: str, target_date: str, target_hour: int = -1) -> bool:
+        """Move um evento para outro dia e/ou horário, preservando duração."""
+        try:
+            event = self.agenda_manager.events.get(event_id) if self.agenda_manager else None
+            if not event:
+                return False
+            old_day = event.start.date().isoformat()
+            duration = event.end - event.start
+            target_day = date.fromisoformat(str(target_date))
+            hour = event.start.hour if target_hour is None or target_hour < 0 else int(target_hour)
+            hour = max(0, min(23, hour))
+            new_start = datetime.combine(target_day, datetime.min.time()).replace(
+                hour=hour,
+                minute=event.start.minute if target_hour is None or target_hour < 0 else 0,
+                second=0,
+                microsecond=0,
+            )
+            event.start = new_start
+            event.end = new_start + duration
+            self.agenda_manager._save_events()
+            self._invalidate_agenda_cache()
+            event_data = event.to_dict() if hasattr(event, "to_dict") else {"id": event_id}
+            self.event_updated.emit(event_id, event_data)
+            self.load_agenda(old_day)
+            new_day = event.start.date().isoformat()
+            self.load_agenda(new_day)
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao mover evento {event_id}: {e}")
+            return False
+
+    @pyqtSlot(int)
+    def load_upcoming_deadlines(self, days: int = 7):
+        """Carrega prazos próximos e emite sinal."""
+        try:
+            deadlines = self.agenda_manager.get_upcoming_deadlines(days=days) if self.agenda_manager else []
+            self.deadlines_loaded.emit(deadlines)
+        except Exception as e:
+            logger.error(f"Erro ao carregar prazos: {e}")
+            self.deadlines_loaded.emit([])
+
+    @pyqtSlot()
+    def load_optimizations(self):
+        """Carrega sugestões de otimização e emite sinal."""
+        try:
+            suggestions = self.agenda_manager.suggest_optimizations() if self.agenda_manager else []
+            self.optimizations_loaded.emit(suggestions)
+        except Exception as e:
+            logger.error(f"Erro ao carregar otimizações: {e}")
+            self.optimizations_loaded.emit([])
+
+    @pyqtSlot(str, int, int, int)
+    def find_free_slots(self, date_str: str, duration_minutes: int, start_hour: int = 8, end_hour: int = 22):
+        """Busca slots livres e emite sinal."""
+        try:
+            slots = self.agenda_manager.find_free_slots(
+                date_str,
+                duration_minutes=duration_minutes,
+                start_hour=start_hour,
+                end_hour=end_hour,
+            ) if self.agenda_manager else []
+            self.free_slots_found.emit(date_str, slots)
+        except Exception as e:
+            logger.error(f"Erro ao buscar slots livres: {e}")
+            self.free_slots_found.emit(date_str, [])
+
+    @pyqtSlot(str, int, str)
+    def activate_emergency_mode(self, objective: str, days: int = 3, focus_area: str = None):
+        """Ativa modo emergência se disponível no manager."""
+        payload = {
+            "objective": objective,
+            "days": days,
+            "focus_area": focus_area,
+            "activated_at": datetime.now().isoformat(),
+        }
+        try:
+            if self.agenda_manager and hasattr(self.agenda_manager, "activate_emergency_mode"):
+                result = self.agenda_manager.activate_emergency_mode(objective, days, focus_area)
+                if isinstance(result, dict):
+                    payload.update(result)
+            self.emergency_mode_activated.emit(payload)
+        except Exception as e:
+            payload["error"] = str(e)
+            logger.error(f"Erro ao ativar modo emergência: {e}")
+            self.emergency_mode_activated.emit(payload)
+
+    @pyqtSlot(result=dict)
+    def get_routine_preferences(self) -> Dict:
+        """Obtém preferências de rotina (sono/refeições/revisão dominical)."""
+        try:
+            if self.agenda_manager and hasattr(self.agenda_manager, "get_routine_preferences"):
+                return self.agenda_manager.get_routine_preferences()
+        except Exception as e:
+            logger.error(f"Erro ao obter preferências de rotina: {e}")
+        return {
+            "sleep_start": "23:00",
+            "sleep_end": "07:00",
+            "breakfast_time": "08:00",
+            "lunch_time": "12:30",
+            "dinner_time": "19:30",
+            "weekly_review_time": "18:00",
+            "weekly_review_duration_minutes": 90,
+            "weekly_review_weekday": 6,
+        }
+
+    @pyqtSlot(dict, result=dict)
+    def update_routine_preferences(self, updates: Dict) -> Dict:
+        """Atualiza preferências de rotina e recarrega agenda visível."""
+        try:
+            if self.agenda_manager and hasattr(self.agenda_manager, "update_routine_preferences"):
+                result = self.agenda_manager.update_routine_preferences(updates or {})
+                self._invalidate_agenda_cache()
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                self.load_agenda(today_str)
+                self.routine_preferences_updated.emit(result)
+                return result
+        except Exception as e:
+            logger.error(f"Erro ao atualizar preferências de rotina: {e}")
+        return {}
     
     # ====== LIMPEZA ======
     
@@ -731,5 +1053,6 @@ class AgendaController(QObject):
         # Limpar estruturas
         self.active_workers.clear()
         self.scheduling_operations.clear()
+        self._invalidate_agenda_cache()
         
         logger.info("AgendaController finalizado")

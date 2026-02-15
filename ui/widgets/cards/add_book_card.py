@@ -1,7 +1,7 @@
 # ui/widgets/cards/add_book_card.py
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QSizePolicy, QFrame, QFileDialog,
-                            QProgressBar, QMenu, QToolButton)
+                            QProgressBar, QMenu, QToolButton, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint, QTimer, QPropertyAnimation, QEasingCurve, QTime, QEvent
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QLinearGradient, QFont, 
                         QBrush, QPen, QIcon, QPainterPath)
@@ -49,6 +49,7 @@ class AddBookCard(PhilosophyCard):
         self.drop_area = None
         self.progress_bar = None
         self.status_label = None
+        self.auto_schedule_checkbox = None
         self.idle_timer = None
         self.processing_timer = None
         self.pulse_animation = None
@@ -151,6 +152,9 @@ class AddBookCard(PhilosophyCard):
         if self.eta_label:
             self.eta_label.setVisible(is_processing)
 
+        if self.auto_schedule_checkbox:
+            self.auto_schedule_checkbox.setVisible(not is_processing)
+
     def setup_footer(self):
         """Configura área de rodapé (se necessário)"""
         # Esta função pode ficar vazia por enquanto
@@ -213,6 +217,13 @@ class AddBookCard(PhilosophyCard):
         self.eta_label.setProperty("role", "eta_text")
         self.eta_label.setVisible(False)
         content_layout.addWidget(self.eta_label)
+
+        self.auto_schedule_checkbox = QCheckBox("Agendar sessões automaticamente")
+        self.auto_schedule_checkbox.setChecked(True)
+        self.auto_schedule_checkbox.setToolTip(
+            "Se desmarcado, o processamento importa o livro sem criar sessões de leitura."
+        )
+        content_layout.addWidget(self.auto_schedule_checkbox, 0, Qt.AlignmentFlag.AlignHCenter)
         
         # Adicionar ao layout principal
         self.content_widget = content_widget
@@ -335,6 +346,9 @@ class AddBookCard(PhilosophyCard):
             try:
                 # Análise básica do arquivo
                 metadata = self.quick_analyze_file(file_path)
+                metadata["auto_schedule_default"] = bool(
+                    self.auto_schedule_checkbox.isChecked() if self.auto_schedule_checkbox else True
+                )
                 
                 # Emitir sinal para abrir diálogo de configuração
                 self.import_config_requested.emit(file_path, metadata)

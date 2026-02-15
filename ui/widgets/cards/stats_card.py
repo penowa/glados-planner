@@ -55,7 +55,7 @@ class VaultStatsCard(PhilosophyCard):
         # Botões de ação
         self.setup_action_buttons()
         self.footer_layout.addStretch()
-        for btn in [self.sync_from_btn, self.sync_to_btn, self.refresh_btn]:
+        for btn in [self.sync_from_btn, self.sync_to_btn, self.refresh_btn, self.clear_cache_btn]:
             self.footer_layout.addWidget(btn)
         
         # Área de conteúdo principal do card
@@ -194,6 +194,11 @@ class VaultStatsCard(PhilosophyCard):
         self.refresh_btn.setToolTip("Atualizar estatísticas")
         self.refresh_btn.setFixedSize(30, 30)
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
+
+        self.clear_cache_btn = QPushButton("🧹")
+        self.clear_cache_btn.setToolTip("Limpar cache de notas carregadas em memória")
+        self.clear_cache_btn.setFixedSize(30, 30)
+        self.clear_cache_btn.clicked.connect(self.clear_runtime_cache)
         
     def create_status_widget(self) -> QWidget:
         """Criar widget de status de conexão"""
@@ -293,10 +298,14 @@ class VaultStatsCard(PhilosophyCard):
         self.controller.check_vault_connection()
         self.notes_tree.clear()
         self._update_selected_count_label()
+        self.search_hint_label.setText(
+            "Conectado em modo leve. Nada será carregado até você pesquisar ou clicar em atualizar stats."
+        )
         
     @pyqtSlot()
     def refresh_data(self):
         """Atualizar dados do vault"""
+        self.search_hint_label.setText("Atualizando estatísticas do vault...")
         self.controller.get_vault_stats()
 
     @pyqtSlot()
@@ -326,6 +335,22 @@ class VaultStatsCard(PhilosophyCard):
             self.selected_note_paths.clear()
             self.refresh_notes_tree()
             self.search_hint_label.setText(f"Erro ao buscar: {e}")
+
+    @pyqtSlot()
+    def clear_runtime_cache(self):
+        """Limpa caches locais e do manager para reduzir RAM."""
+        try:
+            self.controller.clear_cache(clear_manager_cache=True)
+        except Exception:
+            # Fallback silencioso para não quebrar UI.
+            pass
+        self.all_notes = []
+        self.selected_note_paths.clear()
+        self.notes_tree.clear()
+        self.search_hint_label.setText(
+            "Cache limpo. Faça uma nova busca para carregar notas novamente."
+        )
+        self._update_selected_count_label()
 
     def refresh_notes_tree(self):
         """Atualiza árvore de notas no formato autor -> obra -> nota."""
@@ -451,11 +476,11 @@ class VaultStatsCard(PhilosophyCard):
         return sorted(self.selected_note_paths)
 
     def get_selected_notes(self) -> List[Dict[str, Any]]:
-        """Retorna metadados das notas selecionadas."""
+        """Retorna metadados completos das notas selecionadas (sob demanda)."""
         selected = []
-        for note in self.all_notes:
-            note_path = note.get("path")
-            if note_path and note_path in self.selected_note_paths:
+        for note_path in sorted(self.selected_note_paths):
+            note = self.controller.get_note(note_path)
+            if note:
                 selected.append(note)
         return selected
 
@@ -472,7 +497,7 @@ class VaultStatsCard(PhilosophyCard):
 
     def _update_selected_count_label(self):
         """Atualiza label com quantidade de notas selecionadas."""
-        selected_count = len(self.get_selected_notes())
+        selected_count = len(self.selected_note_paths)
         self.selected_count_label.setText(f"{selected_count} nota(s) selecionada(s)")
 
     def confirm_selected_context(self):
@@ -559,6 +584,7 @@ class VaultStatsCard(PhilosophyCard):
         self.sync_from_btn.setEnabled(False)
         self.sync_to_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
+        self.clear_cache_btn.setEnabled(False)
         
     @pyqtSlot(int, str)
     def on_sync_progress(self, percent: int, message: str):
@@ -575,6 +601,7 @@ class VaultStatsCard(PhilosophyCard):
         self.sync_from_btn.setEnabled(True)
         self.sync_to_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
+        self.clear_cache_btn.setEnabled(True)
         
         # Atualizar dados se sincronização bem sucedida
         if result.get('success', False):
@@ -592,6 +619,7 @@ class VaultStatsCard(PhilosophyCard):
         self.sync_from_btn.setEnabled(True)
         self.sync_to_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
+        self.clear_cache_btn.setEnabled(True)
         
     @pyqtSlot(str)
     def handle_sync_request(self, sync_type: str):

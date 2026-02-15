@@ -97,7 +97,7 @@ def list_notes(
         notes = vault_manager.find_notes_by_content(search)
         title = f"🔍 Notas contendo: '{search}'"
     else:
-        notes = vault_manager.get_all_notes()
+        notes = vault_manager.get_all_notes(include_content=False)
         title = "📝 Todas as Notas"
     
     # Ordenar por data de modificação (mais recentes primeiro)
@@ -133,7 +133,7 @@ def list_notes(
         )
     
     console.print(table)
-    console.print(f"[dim]Mostrando {len(notes)} de {len(vault_manager.get_all_notes())} notas[/dim]")
+    console.print(f"[dim]Mostrando {len(notes)} de {len(vault_manager.get_all_notes(include_content=False))} notas[/dim]")
 
 @app.command()
 def sync_from_obsidian(
@@ -151,7 +151,7 @@ def sync_from_obsidian(
         console.print("[yellow]🧪 Modo dry-run: apenas simulação[/yellow]")
         
         # Contar notas que seriam processadas
-        notes = vault_manager.get_all_notes()
+        notes = vault_manager.get_all_notes(include_content=False)
         book_notes = vault_manager.find_notes_by_tag('book')
         
         console.print(f"\n[bold]📊 Estatísticas estimadas:[/bold]")
@@ -339,10 +339,8 @@ def search_backlinks(
         return
     
     note_name = Path(note_path).stem
-    all_notes = vault_manager.get_all_notes()
-    
     backlinks = []
-    for note in all_notes:
+    for note in vault_manager.iter_notes(include_content=True):
         # Verificar se a nota menciona a nota alvo
         if f"[[{note_name}]]" in note.content or f"[[{note_path}]]" in note.content:
             backlinks.append(note)

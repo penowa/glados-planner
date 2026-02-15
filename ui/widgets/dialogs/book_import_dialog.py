@@ -407,6 +407,11 @@ class BookImportDialog(QDialog):
                         self.language_combo.setCurrentIndex(other_index)
 
             self._apply_confidence_layer()
+
+            if "auto_schedule_default" in self.initial_metadata:
+                self.auto_schedule_checkbox.setChecked(
+                    bool(self.initial_metadata.get("auto_schedule_default", True))
+                )
             
             # Atualizar estatísticas
             pages = self.initial_metadata.get("pages", 0)

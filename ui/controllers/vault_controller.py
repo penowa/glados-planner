@@ -142,6 +142,7 @@ class VaultController(QObject):
     # Sinais para UI
     notes_list_updated = pyqtSignal(list)  # Lista de notas
     book_notes_updated = pyqtSignal(int, list)  # (book_id, lista de notas)
+    cache_cleared = pyqtSignal(dict)  # {"manager_cache_cleared": bool}
     
     def __init__(
         self,
@@ -338,8 +339,8 @@ class VaultController(QObject):
             return self.cache['notes']
         
         try:
-            notes = self._ensure_vault_manager().get_all_notes()
-            ui_notes = [self._note_to_ui_format(note) for note in notes]
+            notes = self._ensure_vault_manager().get_all_notes(include_content=False)
+            ui_notes = [self._note_to_ui_format(note, include_content=False) for note in notes]
             self.cache['notes'] = ui_notes
             return ui_notes
         except Exception as e:
@@ -351,13 +352,15 @@ class VaultController(QObject):
         try:
             # Encontrar notas pelo caminho do livro
             book_path = f"01-LEITURAS/{book.author}/{book.title}"
-            all_notes = self._ensure_vault_manager().get_all_notes()
+            all_notes = self._ensure_vault_manager().get_notes_by_prefix(
+                book_path,
+                include_content=False
+            )
             
             book_notes = []
             for note in all_notes:
-                if str(note.path).startswith(book_path):
-                    ui_note = self._note_to_ui_format(note)
-                    book_notes.append(ui_note)
+                ui_note = self._note_to_ui_format(note, include_content=False)
+                book_notes.append(ui_note)
             
             return book_notes
         except Exception as e:
@@ -371,7 +374,7 @@ class VaultController(QObject):
             note = self._ensure_vault_manager().create_note(
                 relative_path, content, frontmatter, tags
             )
-            ui_note = self._note_to_ui_format(note)
+            ui_note = self._note_to_ui_format(note, include_content=True)
             self.note_created.emit(ui_note)
             
             # Invalidar cache
@@ -386,7 +389,7 @@ class VaultController(QObject):
         """Atualiza uma nota existente (síncrono)"""
         try:
             note = self._ensure_vault_manager().update_note(relative_path, **kwargs)
-            ui_note = self._note_to_ui_format(note)
+            ui_note = self._note_to_ui_format(note, include_content=True)
             self.note_updated.emit(ui_note)
             
             # Invalidar cache
@@ -419,23 +422,64 @@ class VaultController(QObject):
             else:
                 # Buscar por tag ou título
                 notes = [
-                    note for note in manager.get_all_notes()
+                    note for note in manager.get_all_notes(include_content=False)
                     if query.lower() in ' '.join(note.tags).lower() or
                        query.lower() in note.frontmatter.get('title', '').lower()
                 ]
             
-            return [self._note_to_ui_format(note) for note in notes]
+            return [self._note_to_ui_format(note, include_content=False) for note in notes]
         except Exception as e:
             logger.error(f"Erro na busca: {e}")
             return []
+
+    def get_note(self, relative_path: str) -> Optional[Dict]:
+        """Obtém uma nota específica com conteúdo completo."""
+        try:
+            note = self._ensure_vault_manager().get_note_by_path(relative_path)
+            if note is None:
+                return None
+            return self._note_to_ui_format(note, include_content=True)
+        except Exception as e:
+            logger.error(f"Erro ao obter nota {relative_path}: {e}")
+            return None
+
+    def clear_cache(self, clear_manager_cache: bool = True):
+        """
+        Limpa cache local da UI e opcionalmente cache de notas carregadas do manager.
+        Não força scan nem carrega o vault.
+        """
+        self.cache['notes'] = None
+        self.cache['stats'] = None
+        self.cache['last_sync'] = None
+
+        manager_cache_cleared = False
+        if clear_manager_cache and self.vault_manager is not None:
+            manager = self.vault_manager
+            # Evita materializar manager lazy apenas para limpar cache.
+            if hasattr(manager, "_manager") and getattr(manager, "_manager", None) is None:
+                self.cache_cleared.emit({"manager_cache_cleared": False})
+                return
+            clear_fn = getattr(manager, "clear_note_cache", None)
+            if callable(clear_fn):
+                clear_fn()
+                manager_cache_cleared = True
+            else:
+                cleanup_fn = getattr(manager, "cleanup", None)
+                if callable(cleanup_fn):
+                    cleanup_fn()
+                    manager_cache_cleared = True
+
+        self.cache_cleared.emit({"manager_cache_cleared": manager_cache_cleared})
     
-    def _note_to_ui_format(self, note) -> Dict:
+    def _note_to_ui_format(self, note, include_content: bool = True) -> Dict:
         """Converte uma nota do backend para formato da UI"""
+        content = note.content if include_content else ""
+        preview_source = note.content if note.content else ""
         return {
             'path': str(note.path),
             'title': note.frontmatter.get('title', note.path.stem),
-            'content': note.content,
-            'content_preview': note.content[:200] + '...' if len(note.content) > 200 else note.content,
+            'content': content,
+            'content_preview': preview_source[:200] + '...' if len(preview_source) > 200 else preview_source,
             'tags': list(note.tags),
             'frontmatter': note.frontmatter,
             'created': note.created.isoformat() if note.created else None,

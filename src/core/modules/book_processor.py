@@ -1176,17 +1176,16 @@ class ChapterProcessor:
             title_dir = self._sanitize_filename(metadata.title)
             relative_path = f"01-LEITURAS/{author_dir}/{title_dir}/📖 {metadata.title}.md"
             
-            # Buscar capítulos existentes
+            # Buscar capítulos existentes apenas no diretório do livro.
             book_notes = []
-            for note in self.vault_manager.get_all_notes():
-                if (f"01-LEITURAS/{author_dir}/{title_dir}" in str(note.path) and
-                    note.path.name != f"📖 {metadata.title}.md"):
-                    if 'chapter' in note.frontmatter:
-                        book_notes.append({
-                            'path': note.path,
-                            'chapter': note.frontmatter.get('chapter', 0),
-                            'title': note.frontmatter.get('title', '')
-                        })
+            book_prefix = f"01-LEITURAS/{author_dir}/{title_dir}"
+            for note in self.vault_manager.get_notes_by_prefix(book_prefix, include_content=False):
+                if note.path.name != f"📖 {metadata.title}.md" and 'chapter' in note.frontmatter:
+                    book_notes.append({
+                        'path': note.path,
+                        'chapter': note.frontmatter.get('chapter', 0),
+                        'title': note.frontmatter.get('title', '')
+                    })
             
             # Ordenar por capítulo
             book_notes.sort(key=lambda x: x['chapter'])
