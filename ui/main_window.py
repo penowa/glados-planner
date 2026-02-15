@@ -27,6 +27,7 @@ from ui.utils.animation import FadeAnimation, SlideAnimation
 from ui.views.dashboard import DashboardView
 from ui.views.agenda import AgendaView
 from ui.views.session import SessionView
+from ui.views.vault_glados import VaultGladosView
 
 # Controllers
 from ui.controllers.book_controller import BookController
@@ -274,8 +275,11 @@ class MainWindow(QMainWindow):
         self.app_logo = QLabel("GLaDOS")
         self.app_logo.setObjectName("app_logo")
         self.app_logo.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.app_logo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.app_logo.setToolTip("Voltar para Dashboard")
         font = QFont("Georgia", 16, QFont.Weight.Bold)
         self.app_logo.setFont(font)
+        self.app_logo.mousePressEvent = self._on_logo_clicked
         layout.addWidget(self.app_logo)
 
         # Detalhe do livro atual em leitura (visível na view de sessão)
@@ -304,6 +308,14 @@ class MainWindow(QMainWindow):
         self.session_quick_button.setToolTip("Abrir sessão de leitura")
         self.session_quick_button.clicked.connect(self.open_session_quick_access)
         layout.addWidget(self.session_quick_button)
+
+        # Acesso à view de contexto (Vault + GLaDOS)
+        self.vault_glados_button = QPushButton("🔍")
+        self.vault_glados_button.setObjectName("vault_glados_button")
+        self.vault_glados_button.setFixedSize(36, 36)
+        self.vault_glados_button.setToolTip("Abrir Vault + GLaDOS")
+        self.vault_glados_button.clicked.connect(lambda: self.change_view("vault_glados"))
+        layout.addWidget(self.vault_glados_button)
         
         # Controles da janela
         controls_layout = QHBoxLayout()
@@ -403,6 +415,8 @@ class MainWindow(QMainWindow):
         # Criar views com referências aos controllers
         self.views['dashboard'] = DashboardView(self.controllers)
         self.views['dashboard'].navigate_to.connect(self.change_view)
+        self.views['vault_glados'] = VaultGladosView(self.controllers)
+        self.views['vault_glados'].navigate_to.connect(self.change_view)
         self.views['session'] = SessionView(self.controllers)
         self.views['session'].navigate_to.connect(self.change_view)
         #self.views['library'] =  LibraryView(self.controllers['reading'])
@@ -491,14 +505,15 @@ class MainWindow(QMainWindow):
             'Ctrl+5': lambda: self.change_view('concepts'),
             'Ctrl+6': lambda: self.change_view('analytics'),
             'Ctrl+7': lambda: self.change_view('goals'),
-            'Ctrl+8': lambda: self.change_view('glados'),
+            'Ctrl+8': lambda: self.change_view('vault_glados'),
+            'Ctrl+Shift+G': lambda: self.change_view('vault_glados'),
             'Ctrl+9': lambda: self.change_view('settings'),
             
             # Ações gerais
             'Ctrl+T': self.toggle_theme,
             'Ctrl+S': self.show_search_dialog,
             'Ctrl+F': self.show_focus_mode,
-            'Ctrl+G': lambda: self.change_view('glados'),
+            'Ctrl+G': lambda: self.change_view('vault_glados'),
             'Ctrl+Q': self.close_application,
             'F1': self.show_help,
             'F5': self.refresh_current_view,
@@ -547,6 +562,7 @@ class MainWindow(QMainWindow):
         # Atualizar título do app_logo
         titles = {
             'dashboard': 'GLaDOS',
+            'vault_glados': 'Vault + GLaDOS',
             'session': 'Sessão',
             'library': 'Biblioteca',
             'agenda': 'Agenda',
@@ -598,6 +614,10 @@ class MainWindow(QMainWindow):
 
         self.session_book_label.setText(f"• {book_title}")
         self.session_book_label.setVisible(True)
+
+    def _on_logo_clicked(self, _event):
+        """Atalho de navegação: logo sempre retorna ao dashboard."""
+        self.change_view("dashboard")
     
     def toggle_theme(self):
         """Alterna entre temas com animação"""

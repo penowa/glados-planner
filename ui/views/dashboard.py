@@ -12,11 +12,8 @@ import logging
 
 from ui.widgets.cards.add_book_card import AddBookCard
 from ui.widgets.cards.agenda_card import AgendaCard
-from ui.widgets.cards.glados_card import GladosCard
-from ui.widgets.cards.stats_card import VaultStatsCard
 from ui.widgets.cards.event_creation_card import EventCreationDialog
 from ui.widgets.dialogs.weekly_event_editor_dialog import WeeklyEventEditorDialog
-from ui.controllers.vault_controller import VaultController
 
 logger = logging.getLogger('GLaDOS.UI.Dashboard')
 
@@ -35,15 +32,11 @@ class DashboardView(QWidget):
         self.book_controller = controllers.get('book') if controllers else None
         self.agenda_controller = controllers.get('agenda') if controllers else None
         self.reading_controller = controllers.get('reading') if controllers else None
-        self.glados_controller = controllers.get('glados') if controllers else None
-        self.vault_controller = self._resolve_vault_controller()
         self.agenda_backend = self._resolve_agenda_backend()
         
         # Cards
         self.add_book_card = None
         self.agenda_card = None
-        self.glados_card = None
-        self.vault_stats_card = None
         self.event_creation_card = None
         self.event_creation_dialog = None
         self.weekly_event_editor_dialog = None
@@ -73,40 +66,6 @@ class DashboardView(QWidget):
 
         return None
 
-    def _resolve_vault_controller(self):
-        """Resolve VaultController com fallback para evitar placeholder 'não configurado'."""
-        if self.controllers and self.controllers.get("vault"):
-            return self.controllers.get("vault")
-
-        # Fallback 1: reutilizar vault_manager do BookController
-        if self.book_controller and hasattr(self.book_controller, "vault_manager"):
-            vault_manager = getattr(self.book_controller, "vault_manager", None)
-            if vault_manager and hasattr(vault_manager, "vault_path"):
-                try:
-                    controller = VaultController(str(vault_manager.vault_path))
-                    if self.controllers is not None:
-                        self.controllers["vault"] = controller
-                    logger.info("VaultController resolvido via book_controller.vault_manager")
-                    return controller
-                except Exception as e:
-                    logger.warning(f"Falha ao criar VaultController via BookController: {e}")
-
-        # Fallback 2: usar path do settings
-        try:
-            from core.config.settings import settings as core_settings
-            vault_path = str(core_settings.paths.vault)
-            if vault_path:
-                controller = VaultController(vault_path)
-                if self.controllers is not None:
-                    self.controllers["vault"] = controller
-                logger.info("VaultController resolvido via core.config.settings")
-                return controller
-        except Exception as e:
-            logger.warning(f"Falha ao resolver VaultController via settings: {e}")
-
-        logger.warning("VaultController indisponível: dashboard usará placeholder")
-        return None
-    
     def setup_ui(self):
         """Configura interface do dashboard com cards integrados"""
         self.setObjectName("dashboard_view")
@@ -179,42 +138,6 @@ class DashboardView(QWidget):
         row1_layout.addWidget(self.add_book_card, 20)  # 30% da largura
         
         content_layout.addLayout(row1_layout)
-        
-        # ============ LINHA 2: Vault + Glados (40-60) ============
-        row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(12)
-        
-        # 1. VaultStatsCard (40%)
-        if self.vault_controller:
-            self.vault_stats_card = VaultStatsCard(self.vault_controller)
-            self.vault_stats_card.setObjectName("dashboard_card")
-            self.vault_stats_card.setMinimumHeight(350)
-            self.vault_stats_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            row2_layout.addWidget(self.vault_stats_card, 30)  # 40% da largura
-        else:
-            # Placeholder se não houver vault controller
-            placeholder = QLabel("Vault Stats\n(Vault não configurado)")
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet("""
-                background-color: #2A2A2A;
-                border-radius: 8px;
-                color: #888;
-                font-size: 14px;
-                padding: 20px;
-            """)
-            placeholder.setMinimumHeight(350)
-            row2_layout.addWidget(placeholder, 40)
-        
-        # 2. GladosCard (60%)
-        self.glados_card = GladosCard(
-            controller=self.glados_controller
-        )
-        self.glados_card.setObjectName("dashboard_card")
-        self.glados_card.setMinimumHeight(350)
-        self.glados_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        row2_layout.addWidget(self.glados_card, 70)  # 60% da largura
-        
-        content_layout.addLayout(row2_layout)
         
         # Adicionar stretcher no final para alinhar conteúdo no topo
         content_layout.addStretch()
@@ -305,16 +228,6 @@ class DashboardView(QWidget):
             if hasattr(self.agenda_card, 'skip_reading_session'):
                 self.agenda_card.skip_reading_session.connect(self.handle_skip_session)
         
-        if self.glados_card:
-            self.glados_card.ui_message_sent.connect(self.handle_glados_message)
-            self.glados_card.ui_action_selected.connect(self.handle_glados_action)
-            self.glados_card.context_action_requested.connect(self.handle_glados_context_action)
-        
-        if self.vault_stats_card:
-            self.vault_stats_card.sync_requested.connect(self.handle_vault_sync)
-            self.vault_stats_card.refresh_requested.connect(self.handle_vault_refresh)
-            self.vault_stats_card.context_confirmed.connect(self.handle_vault_context_confirmed)
-        
         # Conexões com controllers (se necessário)
         if self.book_controller:
             self.book_controller.book_processing_started.connect(self.on_book_processing_started)
@@ -333,9 +246,6 @@ class DashboardView(QWidget):
         if self.reading_controller and hasattr(self.reading_controller, 'stats_updated'):
             self.reading_controller.stats_updated.connect(self.update_stats_data)
         
-        if self.vault_controller:
-            self.vault_controller.error_occurred.connect(self.handle_vault_error)
-    
     def show_import_dialog(self, file_path, initial_metadata):
         """Mostrar diálogo de configuração de importação"""
         from ui.widgets.dialogs.book_import_dialog import BookImportDialog
@@ -638,65 +548,6 @@ class DashboardView(QWidget):
             # Atualizar dados da próxima sessão
             self.refresh_data()
     
-    def handle_glados_message(self, message):
-        """Manipular mensagem enviada ao GLaDOS"""
-        logger.info(f"Mensagem GLaDOS: {message[:50]}...")
-        # O próprio GladosCard já lida com a mensagem através do controller
-    
-    def handle_glados_action(self, action_id):
-        """Manipular ação rápida do GLaDOS"""
-        logger.info(f"Ação GLaDOS: {action_id}")
-        # O próprio GladosCard já lida com a ação
-
-    def handle_glados_context_action(self, action_id: str, payload: dict):
-        """Manipula ações iniciadas a partir de contexto confirmado no GLaDOS."""
-        notes_count = len(payload.get("notes", []))
-        logger.info(f"Ação de contexto GLaDOS: {action_id} ({notes_count} notas)")
-
-    def handle_vault_context_confirmed(self, payload: dict):
-        """Recebe contexto do VaultStatsCard e envia para GladosCard."""
-        notes = payload.get("notes", [])
-        logger.info(f"Contexto confirmado no vault: {len(notes)} nota(s)")
-
-        if self.glados_card and hasattr(self.glados_card, "apply_vault_context"):
-            self.glados_card.apply_vault_context(payload)
-    
-    def handle_vault_sync(self, sync_type: str):
-        """Manipular requisição de sincronização do vault"""
-        logger.info(f"Sincronização do vault solicitada: {sync_type}")
-        
-        if sync_type == 'from_obsidian':
-            # Mostrar mensagem de confirmação
-            from PyQt6.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self, 'Sincronizar do Obsidian',
-                'Deseja importar todas as notas do Obsidian?\n'
-                'Notas existentes serão atualizadas.',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.vault_controller:
-                    self.vault_controller.sync_from_obsidian()
-        elif sync_type == 'to_obsidian':
-            # Sincronizar tudo para o Obsidian
-            if self.vault_controller:
-                self.vault_controller.sync_all_to_obsidian()
-    
-    def handle_vault_refresh(self):
-        """Atualizar dados do vault"""
-        if self.vault_stats_card:
-            self.vault_stats_card.refresh_data()
-    
-    def handle_vault_error(self, error_message: str):
-        """Manipular erro do vault"""
-        logger.error(f"Erro do vault: {error_message}")
-        
-        # Mostrar notificação sutil
-        if hasattr(self, 'show_notification'):
-            self.show_notification(f"Erro no vault: {error_message[:50]}...", "error")
-    
     # ============ SLOTS ============
     
     @pyqtSlot()
@@ -764,7 +615,3 @@ class DashboardView(QWidget):
             self.event_creation_dialog.close()
         if self.weekly_event_editor_dialog:
             self.weekly_event_editor_dialog.close()
-        if self.glados_card and hasattr(self.glados_card, 'closeEvent'):
-            self.glados_card.closeEvent(None)
-        if self.vault_stats_card and hasattr(self.vault_stats_card, 'cleanup'):
-            self.vault_stats_card.cleanup()
