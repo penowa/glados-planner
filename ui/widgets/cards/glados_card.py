@@ -1,10 +1,11 @@
 # ui/widgets/cards/glados_card.py
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QTextEdit, QFrame, QProgressBar,
-                            QComboBox, QSlider, QMenu)
+                            QComboBox, QMenu)
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import (QPainter, QColor, QLinearGradient, QBrush, QPen, 
                         QFont, QTextCursor, QAction)
+import re
 
 from .base_card import PhilosophyCard
 
@@ -33,6 +34,7 @@ class GladosCard(PhilosophyCard):
         self.last_query = ""
         self.auto_search_enabled = True
         self.current_context_payload = {}
+        self.current_notes_context_text = ""
         
         # Inicializar atributos de widget para evitar AttributeError
         self.avatar_label = None
@@ -41,10 +43,7 @@ class GladosCard(PhilosophyCard):
         self.chat_widget = None
         self.input_field = None
         self.send_button = None
-        self.clear_button = None
-        self.mode_combo = None
-        self.intensity_slider = None
-        self.sarcasm_button = None
+        self.preset_combo = None
         self.action_buttons = {}
         
         # Configurar UI primeiro
@@ -115,39 +114,26 @@ class GladosCard(PhilosophyCard):
         font.setPointSize(12)
         self.name_label.setFont(font)
         
-        self.mode_label = QLabel("Modo: Acadêmico")
+        self.mode_label = QLabel("Preset: Balanceado")
         self.mode_label.setObjectName("glados_mode")
         
         info_layout.addWidget(self.name_label)
         info_layout.addWidget(self.mode_label)
         
-        # Controles de personalidade
+        # Controles de geração (presets)
         controls_widget = QWidget()
         controls_layout = QHBoxLayout(controls_widget)
         controls_layout.setSpacing(10)
         
-        # Seletor de modo
-        self.mode_combo = QComboBox()
-        self.mode_combo.setObjectName("glados_mode_selector")
-        self.mode_combo.addItems(["Acadêmico", "Criativo", "Técnico", "Casual"])
-        
-        # Controle de intensidade
-        intensity_label = QLabel("Intensidade:")
-        self.intensity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.intensity_slider.setRange(0, 100)
-        self.intensity_slider.setValue(70)
-        self.intensity_slider.setFixedWidth(80)
-        
-        # Botão de sarcasmo
-        self.sarcasm_button = QPushButton("Sarcasmo: ON")
-        self.sarcasm_button.setCheckable(True)
-        self.sarcasm_button.setChecked(True)
-        self.sarcasm_button.setFixedWidth(100)
-        
-        controls_layout.addWidget(intensity_label)
-        controls_layout.addWidget(self.intensity_slider)
-        controls_layout.addWidget(self.mode_combo)
-        controls_layout.addWidget(self.sarcasm_button)
+        preset_label = QLabel("Preset:")
+        self.preset_combo = QComboBox()
+        self.preset_combo.setObjectName("glados_mode_selector")
+        self.preset_combo.addItems(["Rápido", "Balanceado", "Qualidade"])
+        self.preset_combo.setCurrentText("Balanceado")
+        self.preset_combo.setFixedWidth(140)
+
+        controls_layout.addWidget(preset_label)
+        controls_layout.addWidget(self.preset_combo)
         controls_layout.addStretch()
         
         # Menu de sistema
@@ -258,27 +244,15 @@ class GladosCard(PhilosophyCard):
         self.input_field.setMaximumHeight(70)
         self.input_field.setPlaceholderText("Pergunte a GLaDOS...")
         
-        # Botões de envio
-        button_widget = QWidget()
-        button_layout = QVBoxLayout(button_widget)
-        button_layout.setSpacing(5)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        
+        # Botão de envio
         self.send_button = QPushButton("Enviar")
         self.send_button.setObjectName("primary_button")
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_button.setFixedWidth(80)
-        
-        self.clear_button = QPushButton("Limpar")
-        self.clear_button.setObjectName("secondary_button")
-        self.clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clear_button.setFixedWidth(80)
-        
-        button_layout.addWidget(self.send_button)
-        button_layout.addWidget(self.clear_button)
+        self.send_button.setFixedHeight(70)
         
         input_layout.addWidget(self.input_field, 1)
-        input_layout.addWidget(button_widget)
+        input_layout.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignTop)
         
         parent_layout.addWidget(input_widget)
 
@@ -348,10 +322,7 @@ class GladosCard(PhilosophyCard):
         """Conectar sinais da controladora"""
         # Conexões UI básicas
         self.send_button.clicked.connect(self.send_message)
-        self.clear_button.clicked.connect(self.clear_chat)
-        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
-        self.intensity_slider.valueChanged.connect(self.on_intensity_changed)
-        self.sarcasm_button.toggled.connect(self.on_sarcasm_toggled)
+        self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
         
         # Conexões do controller (se existir)
         if self.controller:
@@ -392,7 +363,9 @@ class GladosCard(PhilosophyCard):
             ))
         else:
             # Usar controller real
-            self.controller.ask_glados(message, self.auto_search_enabled, "Helio")
+            message_with_context = self._compose_message_with_notes_context(message)
+            use_semantic = self.auto_search_enabled and not bool(self.current_context_payload.get("notes"))
+            self.controller.ask_glados(message_with_context, use_semantic, "Helio")
             
     @pyqtSlot(str)
     def on_quick_action(self, action_id):
@@ -401,19 +374,15 @@ class GladosCard(PhilosophyCard):
         self.execute_context_action(action_id)
         
     @pyqtSlot(str)
-    def on_mode_changed(self, mode):
-        """Mudar modo de operação"""
-        self.mode_label.setText(f"Modo: {mode}")
-        
-    @pyqtSlot(int)
-    def on_intensity_changed(self, value):
-        """Atualizar intensidade da personalidade"""
-        pass  # Implementar se necessário
-        
-    @pyqtSlot(bool)
-    def on_sarcasm_toggled(self, checked):
-        """Atualizar estado do sarcasmo"""
-        self.sarcasm_button.setText(f"Sarcasmo: {'ON' if checked else 'OFF'}")
+    def on_preset_changed(self, preset_label: str):
+        """Aplica preset de geração no backend."""
+        self.mode_label.setText(f"Preset: {preset_label}")
+        if not self.controller:
+            return
+
+        if hasattr(self.controller, "set_generation_preset"):
+            result = self.controller.set_generation_preset(preset_label)
+            self.status_label.setText(f"Preset: {result.get('preset', preset_label)}")
         
     @pyqtSlot()
     def on_analyze_brain(self):
@@ -553,6 +522,8 @@ class GladosCard(PhilosophyCard):
         
     def load_initial_state(self):
         """Carregar estado inicial"""
+        if self.preset_combo:
+            self.on_preset_changed(self.preset_combo.currentText())
         self.add_message_to_chat("GLaDOS inicializada. Como posso ajudar?", "assistant")
         self.add_message_to_chat("Selecione notas no card do Vault para habilitar ações contextuais.", "system")
 
@@ -561,6 +532,7 @@ class GladosCard(PhilosophyCard):
         """Recebe contexto selecionado no card do vault e comenta brevemente."""
         notes = payload.get("notes", [])
         self.current_context_payload = payload
+        self.current_notes_context_text = ""
 
         if not notes:
             self._set_context_actions_enabled(False)
@@ -570,27 +542,12 @@ class GladosCard(PhilosophyCard):
 
         self._set_context_actions_enabled(True)
         self.stats_label.setText(f"Contexto: {len(notes)} nota(s)")
-        titles = [note.get("title", "Sem título") for note in notes[:6]]
-        notes_preview = "\n".join([f"- {title}" for title in titles])
+        self.current_notes_context_text = self._build_notes_context_text(notes)
 
         self.add_message_to_chat(
-            f"Contexto recebido do vault ({len(notes)} nota(s)).",
+            f"Contexto recebido do vault ({len(notes)} nota(s)). Vou usar o conteúdo dessas notas nas próximas respostas.",
             "system"
         )
-
-        prompt = (
-            "Faça um comentário breve (máximo 2 frases) sobre o contexto abaixo. "
-            "Seja útil e direto.\n\n"
-            f"{notes_preview}"
-        )
-
-        if self.controller and hasattr(self.controller, "ask_glados"):
-            self.controller.ask_glados(prompt, False, "Helio")
-        else:
-            self.add_message_to_chat(
-                "Contexto assimilado. Escolha a próxima ação para continuar.",
-                "assistant",
-            )
 
     @pyqtSlot(str)
     def execute_context_action(self, action_id):
@@ -602,12 +559,13 @@ class GladosCard(PhilosophyCard):
         self.context_action_requested.emit(action_id, self.current_context_payload)
 
         notes = self.current_context_payload.get("notes", [])
+        context_text = self.current_notes_context_text or self._build_notes_context_text(notes)
         query_base = ", ".join([n.get("title", "") for n in notes[:4]])
 
         if action_id == "semantic_search":
             self.add_message_to_chat("Iniciando pesquisa semântica com o contexto selecionado...", "system")
             if self.controller and hasattr(self.controller, "get_semantic_context"):
-                self.controller.get_semantic_context(query_base, max_notes=min(5, max(1, len(notes))))
+                self.controller.get_semantic_context(context_text[:800], max_notes=min(5, max(1, len(notes))))
 
         elif action_id == "template_text":
             prompt = (
@@ -616,13 +574,113 @@ class GladosCard(PhilosophyCard):
             )
             self.add_message_to_chat("Gerando proposta de texto com base em template...", "system")
             if self.controller and hasattr(self.controller, "ask_glados"):
-                self.controller.ask_glados(f"{prompt}\n\nContexto: {query_base}", False, "Helio")
+                self.controller.ask_glados(
+                    f"{prompt}\n\nContexto das notas selecionadas:\n{context_text}",
+                    False,
+                    "Helio"
+                )
 
         else:
             self.add_message_to_chat(
                 "Chat contextualizado ativado. Faça sua pergunta e vou considerar o contexto selecionado.",
                 "system",
             )
+
+    def _build_notes_context_text(self, notes):
+        """Monta contexto textual completo a partir das notas selecionadas."""
+        blocks = []
+
+        for note in notes:
+            title = note.get("title", "Sem título")
+            path = note.get("path", "")
+            tags = note.get("tags") or []
+            content = (note.get("content") or note.get("content_preview") or "").strip()
+            if not content:
+                content = "(sem conteúdo disponível)"
+
+            tags_text = ", ".join([str(tag) for tag in tags[:8]]) if tags else "sem tags"
+            block = (
+                f"Título: {title}\n"
+                f"Caminho: {path}\n"
+                f"Tags: {tags_text}\n"
+                f"Conteúdo completo:\n{content}"
+            )
+
+            blocks.append(block)
+
+        if not blocks:
+            return "Sem contexto de notas disponível."
+
+        return "\n\n".join(blocks)
+
+    def _compose_message_with_notes_context(self, message: str) -> str:
+        """Acopla contexto de notas à mensagem do chat quando disponível."""
+        notes = self.current_context_payload.get("notes", [])
+        if not notes:
+            return message
+
+        context_text = self.current_notes_context_text or self._build_notes_context_text(notes)
+        compact_context = self._compress_context_for_query(context_text, message, max_chars=3500)
+        return (
+            "### INICIO_CONTEXTO_NOTAS ###\n"
+            f"{compact_context}\n"
+            "### FIM_CONTEXTO_NOTAS ###\n\n"
+            "### PERGUNTA_USUARIO ###\n"
+            f"{message}"
+        )
+
+    def _compress_context_for_query(self, context_text: str, query: str, max_chars: int = 3500) -> str:
+        """
+        Reduz contexto para caber no modelo fraco:
+        1) prioriza blocos com maior sobreposição lexical com a pergunta;
+        2) mantém no máximo alguns blocos;
+        3) trunca cada bloco para evitar estouro.
+        """
+        text = (context_text or "").strip()
+        if len(text) <= max_chars:
+            return text
+
+        blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+        if not blocks:
+            return text[:max_chars]
+
+        query_terms = self._tokenize_for_match(query)
+
+        def score_block(block: str) -> int:
+            block_terms = self._tokenize_for_match(block)
+            overlap = len(query_terms.intersection(block_terms))
+            # Peso adicional para título/cabeçalho da nota
+            header_bonus = 2 if ("Título:" in block or "CAPÍTULO" in block.upper()) else 0
+            return overlap + header_bonus
+
+        ranked = sorted(blocks, key=score_block, reverse=True)
+
+        selected = []
+        used = 0
+        max_block_chars = 1200
+        for block in ranked:
+            block_text = block[:max_block_chars].rstrip()
+            if used + len(block_text) + 2 > max_chars:
+                continue
+            selected.append(block_text)
+            used += len(block_text) + 2
+            if len(selected) >= 4:
+                break
+
+        if not selected:
+            selected = [text[:max_chars].rstrip()]
+
+        return "\n\n".join(selected)
+
+    def _tokenize_for_match(self, text: str) -> set[str]:
+        """Tokenização simples para ranquear relevância lexical."""
+        tokens = re.findall(r"[a-zA-ZÀ-ÿ0-9]{4,}", (text or "").lower())
+        stop = {
+            "sobre", "texto", "capitulo", "capítulo", "conteudo", "conteúdo",
+            "pergunta", "usuario", "usuário", "notas", "dessa", "desse",
+            "como", "para", "isso", "essa", "este", "aqui"
+        }
+        return {t for t in tokens if t not in stop}
 
     def _set_context_actions_enabled(self, enabled: bool):
         """Habilita ou desabilita botões de ação contextual."""

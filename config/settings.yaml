@@ -13,14 +13,14 @@ database:
   url: sqlite:///data/database/philosophy.db
   echo: false
 llm:
-  model_name: TinyLlama-1.1B-Chat-v1.0
-  model_path: ./data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+  model_name: Mistral-7B-GGUF-Q4K
+  model_path: ./data/models/mistral-7b-GGUF-Q4K.gguf
   n_ctx: 2048
   n_gpu_layers: 0
-  temperature: 0.7
-  top_p: 0.95
-  repeat_penalty: 1.1
-  max_tokens: 2500
+  temperature: 0.35
+  top_p: 0.9
+  repeat_penalty: 1.12
+  max_tokens: 772
   cpu:
     threads: 4
     batch_size: 128
@@ -32,7 +32,25 @@ llm:
     personality_intensity: 0.7
     enable_sarcasm: true
     enable_brain_metaphor: true
-    area_behavior: {}
+    area_behavior:
+      meta:
+        sarcasm_level: 0.5
+        formality: 0.8
+      leituras:
+        sarcasm_level: 0.5
+        formality: 0.8
+      conceitos:
+        sarcasm_level: 0.5
+        formality: 0.8
+      disciplinas:
+        sarcasm_level: 0.5
+        formality: 0.8
+      pessoal:
+        sarcasm_level: 0.5
+        formality: 0.8
+      geral:
+        sarcasm_level: 0.5
+        formality: 0.8
     response:
       include_intro_comment: true
       include_signature: true

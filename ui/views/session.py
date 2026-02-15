@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -148,9 +149,10 @@ class SessionView(QWidget):
         self.source_label = QLabel("Fonte: nota não carregada")  # mantido para estado interno
 
         # Pomodoro minimalista no header
-        self.pomodoro_timer_label = QLabel("25:00")
+        self.pomodoro_timer_label = QPushButton("25:00")
         self.pomodoro_timer_label.setObjectName("session_pomodoro_timer")
-        self.pomodoro_timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pomodoro_timer_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pomodoro_timer_label.setToolTip("Clique para iniciar/pausar Pomodoro")
         self.pomodoro_timer_label.setFixedHeight(32)
         self.pomodoro_timer_label.setFixedWidth(110)
         self.pomodoro_timer_label.setStyleSheet(
@@ -229,9 +231,17 @@ class SessionView(QWidget):
         self.assistant_tabs = QTabWidget()
         self.assistant_tabs.setObjectName("session_assistant_tabs")
         self.assistant_tabs.setVisible(False)
-        self.assistant_hide_button = QPushButton("Ocultar")
-        self.assistant_hide_button.setObjectName("secondary_button")
+        self.assistant_hide_button = QToolButton()
+        self.assistant_hide_button.setText("Ocultar")
+        self.assistant_hide_button.setObjectName("session_tab_corner_button")
+        self.assistant_hide_button.setAutoRaise(True)
         self.assistant_hide_button.setFixedHeight(22)
+        self.assistant_hide_button.setStyleSheet(
+            "QToolButton#session_tab_corner_button {"
+            "padding: 2px 8px; border: 1px solid #4A5263; border-bottom: none; "
+            "border-top-left-radius: 4px; border-top-right-radius: 4px;"
+            "}"
+        )
         self.assistant_tabs.setCornerWidget(self.assistant_hide_button, Qt.Corner.TopRightCorner)
 
         self.chat_panel = QFrame()
@@ -299,6 +309,7 @@ class SessionView(QWidget):
 
     def _setup_connections(self):
         self.note_button.clicked.connect(self._open_note_tab)
+        self.pomodoro_timer_label.clicked.connect(self._toggle_pomodoro_from_timer)
         self.controls_menu_button.clicked.connect(self._open_controls_menu)
         self.action_back_dashboard.triggered.connect(self._on_back_clicked)
         self.action_end_session.triggered.connect(self._on_end_session_clicked)
@@ -717,6 +728,15 @@ class SessionView(QWidget):
 
     def _hide_assistant_panels(self):
         self._toggle_chat(False)
+
+    def _toggle_pomodoro_from_timer(self):
+        if not self.pomodoro:
+            self.chat_status_label.setText("Pomodoro indisponível")
+            return
+        if self.pomodoro.is_running and not self.pomodoro.is_paused:
+            self._pause_pomodoro()
+        else:
+            self._start_pomodoro()
 
     def _open_controls_menu(self):
         pos = self.controls_menu_button.mapToGlobal(self.controls_menu_button.rect().bottomLeft())

@@ -50,14 +50,14 @@ class GladosPersonalityConfig(BaseModel):
     response: GladosResponseConfig = GladosResponseConfig()
 
 class LlmConfig(BaseModel):
-    model_name: str = "TinyLlama-1.1B-Chat-v1.0"
-    model_path: str = "./data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+    model_name: str = "Mistral-7B-GGUF-Q4K"
+    model_path: str = "./data/models/mistral-7b-GGUF-Q4K.gguf"
     n_ctx: int = 2048
     n_gpu_layers: int = 0
-    temperature: float = 0.8
+    temperature: float = 0.35
     top_p: float = 0.9
-    repeat_penalty: float = 1.1
-    max_tokens: int = 512
+    repeat_penalty: float = 1.12
+    max_tokens: int = 384
     cpu: CpuConfig = CpuConfig()
     glados: GladosPersonalityConfig = GladosPersonalityConfig()
 

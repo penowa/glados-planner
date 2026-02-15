@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 import hashlib
 import pickle
 from datetime import datetime
+import re
 
 # Adiciona o diretório raiz do projeto ao path para importar módulos
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -54,6 +55,7 @@ class LocalLLM:
         
         try:
             # Configuração do modelo
+            cpu_threads = max(1, min(int(settings.llm.cpu.threads), 4))
             config = LlamaConfig(
                 model_path=str(model_path),
                 n_ctx=settings.llm.n_ctx,
@@ -62,7 +64,9 @@ class LocalLLM:
                 top_p=settings.llm.top_p,
                 repeat_penalty=settings.llm.repeat_penalty,
                 max_tokens=settings.llm.max_tokens,
-                n_threads=settings.llm.cpu.threads,
+                n_threads=cpu_threads,
+                n_batch=settings.llm.cpu.batch_size,
+                use_mlock=settings.llm.cpu.use_mlock,
                 verbose=False
             )
             
@@ -142,6 +146,64 @@ class LocalLLM:
                 pickle.dump(self.response_cache, f)
         except Exception as e:
             print(f"⚠️  Erro salvando cache: {e}")
+
+    def _sanitize_response_text(self, text: str) -> str:
+        """Limpa vazamentos evidentes de prompt quando vindos do cache/geração."""
+        value = (text or "").strip()
+        if not value:
+            return value
+
+        for marker in (
+            "Responda como GLaDOS:",
+            "Sinta as notas acima do vault e responda:",
+            "Responda no estilo GLaDOS:",
+            "[CONSULTA AO CÉREBRO DE GLaDOS",
+            "[FIM DA CONSULTA AO CÉREBRO]",
+        ):
+            if marker in value:
+                before, _after = value.split(marker, 1)
+                if len(before.strip()) >= 40:
+                    value = before.strip()
+                break
+
+        lines = []
+        for line in value.splitlines():
+            if re.match(r"^\s*\d+\.\s*(Seja útil academicamente|Use tom sarcástico.*|Baseie-se no contexto acima|Seja conciso.*|Assine como GLaDOS)\s*$", line, flags=re.IGNORECASE):
+                continue
+            lines.append(line)
+
+        value = "\n".join(lines).strip()
+        value = re.sub(r"\n{3,}", "\n\n", value)
+        return value
+
+    def set_generation_params(
+        self,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        repeat_penalty: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Atualiza parâmetros de geração no modelo ativo."""
+        if self.model is None or not hasattr(self.model, "config"):
+            return {"updated": False, "reason": "model_not_loaded"}
+
+        cfg = self.model.config
+        if temperature is not None:
+            cfg.temperature = float(max(0.0, min(temperature, 1.2)))
+        if top_p is not None:
+            cfg.top_p = float(max(0.1, min(top_p, 1.0)))
+        if repeat_penalty is not None:
+            cfg.repeat_penalty = float(max(1.0, min(repeat_penalty, 1.3)))
+        if max_tokens is not None:
+            cfg.max_tokens = int(max(64, min(max_tokens, 700)))
+
+        return {
+            "updated": True,
+            "temperature": cfg.temperature,
+            "top_p": cfg.top_p,
+            "repeat_penalty": cfg.repeat_penalty,
+            "max_tokens": cfg.max_tokens,
+        }
     
     def generate(self, query: str, user_name: str = None, use_semantic: bool = True) -> Dict[str, Any]:
         """Gera resposta para uma consulta com contexto semântico"""
@@ -152,6 +214,8 @@ class LocalLLM:
             cached_time, response = self.response_cache[cache_key]
             if (datetime.now().timestamp() - cached_time) < 3600:  # 1 hora
                 print("⚡ Resposta do cache")
+                response = dict(response)
+                response["text"] = self._sanitize_response_text(response.get("text", ""))
                 return {
                     **response,
                     "cached": True,
@@ -181,20 +245,12 @@ class LocalLLM:
             except Exception as e:
                 print(f"⚠️  Erro obtendo contexto semântico: {e}")
         
-        # Adicionar contexto ao prompt se disponível
-        enhanced_query = query
-        if semantic_context:
-            enhanced_query = f"""
-CONTEXTO DO VAULT:
-{semantic_context}
-
-PERGUNTA: {query}
-
-Por favor, use o contexto acima para responder. Se não houver informações suficientes no contexto, indique isso.
-"""
-        
         try:
-            response = self.model.generate_response(enhanced_query, user_name)
+            response = self.model.generate_response(
+                query,
+                user_name,
+                extra_context=semantic_context,
+            )
             
             # Registrar no histórico
             self.query_history.append({
@@ -210,7 +266,7 @@ Por favor, use o contexto acima para responder. Se não houver informações suf
             
             # Salvar no cache
             result = {
-                "text": response,
+                "text": self._sanitize_response_text(response),
                 "model": "TinyLlama-1.1B",
                 "status": "success",
                 "semantic_context_used": use_semantic and bool(semantic_context),

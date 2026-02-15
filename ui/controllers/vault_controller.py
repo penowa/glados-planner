@@ -434,6 +434,7 @@ class VaultController(QObject):
         return {
             'path': str(note.path),
             'title': note.frontmatter.get('title', note.path.stem),
+            'content': note.content,
             'content_preview': note.content[:200] + '...' if len(note.content) > 200 else note.content,
             'tags': list(note.tags),
             'frontmatter': note.frontmatter,

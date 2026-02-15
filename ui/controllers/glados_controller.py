@@ -548,6 +548,45 @@ class GladosController(QObject):
             self.update_personality(0.6, False)
         elif mode == "casual":
             self.update_personality(0.4, True)
+
+    @pyqtSlot(str)
+    def set_generation_preset(self, preset_label: str) -> Dict[str, Any]:
+        """Aplica preset de geração no backend LLM em runtime."""
+        preset_map = {
+            "Rápido": {
+                "temperature": 0.25,
+                "top_p": 0.85,
+                "repeat_penalty": 1.15,
+                "max_tokens": 220,
+            },
+            "Balanceado": {
+                "temperature": 0.35,
+                "top_p": 0.90,
+                "repeat_penalty": 1.12,
+                "max_tokens": 384,
+            },
+            "Qualidade": {
+                "temperature": 0.45,
+                "top_p": 0.92,
+                "repeat_penalty": 1.08,
+                "max_tokens": 512,
+            },
+        }
+
+        selected_label = preset_label if preset_label in preset_map else "Balanceado"
+        params = preset_map[selected_label]
+
+        applied = {"preset": selected_label, **params}
+        try:
+            if hasattr(self.backend, "set_generation_params"):
+                backend_result = self.backend.set_generation_params(**params)
+                applied.update(backend_result)
+            logger.info("Preset de geração aplicado: %s", selected_label)
+        except Exception as e:
+            logger.error("Falha ao aplicar preset de geração: %s", e)
+            self.error_occurred.emit("PresetError", str(e), "set_generation_preset")
+
+        return applied
     
     def _add_to_conversation(self, role: str, content: str):
         """Adiciona mensagem ao histórico"""
