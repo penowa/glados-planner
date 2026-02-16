@@ -55,12 +55,20 @@ class LoadingSplash(QWidget):
         self.title_label.setFont(title_font)
         self.title_label.setStyleSheet("color: #F5F5DC;")
         layout.addWidget(self.title_label)
-        
+
         # Separador
         separator = QWidget()
         separator.setFixedHeight(2)
         separator.setStyleSheet("background-color: #8B7355;")
         layout.addWidget(separator)
+
+        self.welcome_label = QLabel(
+            "Bem-vindo ao seu planner diario. A GLaDOS esta preparando seu dia."
+        )
+        self.welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.welcome_label.setWordWrap(True)
+        self.welcome_label.setStyleSheet("color: #D8CBB5; font-size: 12px;")
+        layout.addWidget(self.welcome_label)
         
         # Texto de carregamento
         self.loading_label = QLabel()
@@ -186,6 +194,15 @@ class LoadingSplash(QWidget):
         self.update_loading_text()
         self.progress_label.setText(message.strip())
         logger.debug(f"Splash message: {message}")
+
+    def set_identity(self, user_name: str, assistant_name: str):
+        """Atualiza identidade visual e texto de boas-vindas."""
+        user = (user_name or "").strip() or "Usuario"
+        assistant = (assistant_name or "").strip() or "GLaDOS"
+        self.title_label.setText(f"{assistant} Philosophy Planner")
+        self.welcome_label.setText(
+            f"Bem-vindo, {user}. {assistant} esta organizando seu planner diario."
+        )
     
     def show(self):
         """Mostra a splash screen com animação de fade in"""

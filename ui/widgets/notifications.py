@@ -124,8 +124,14 @@ class NotificationToast(QWidget):
     
     def __init__(self, notif_type, title, message, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("notification_toast")
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         
         # Configurar baseado no tipo
         colors = {
@@ -136,9 +142,9 @@ class NotificationToast(QWidget):
         }
         
         self.setStyleSheet(f"""
-            NotificationToast {{
+            QWidget#notification_toast {{
                 background-color: {colors.get(notif_type, '#2D2D2D')};
-                border: 2px solid #3A2C1F;
+                border: none;
                 border-radius: 8px;
                 padding: 10px;
             }}

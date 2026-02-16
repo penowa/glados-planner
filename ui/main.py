@@ -142,8 +142,32 @@ class PhilosophyPlannerApp:
     
     def show_splash_screen(self):
         """Exibe tela de carregamento"""
+        user_name, assistant_name = self._resolve_custom_identity()
         self.splash = LoadingSplash()
+        self.splash.set_identity(user_name, assistant_name)
+        self.splash.show_message(
+            f"Bem-vindo, {user_name}. {assistant_name} esta preparando seu planner diario."
+        )
         self.splash.show()
+
+    def _resolve_custom_identity(self) -> tuple[str, str]:
+        """Obtém nomes customizados (usuário/assistente) do YAML de configuração."""
+        user_name = "Usuario"
+        assistant_name = "GLaDOS"
+        try:
+            from core.config.settings import Settings
+
+            current_settings = Settings.from_yaml()
+            yaml_user = str(current_settings.llm.glados.user_name or "").strip()
+            yaml_assistant = str(current_settings.llm.glados.glados_name or "").strip()
+
+            if yaml_user:
+                user_name = yaml_user
+            if yaml_assistant:
+                assistant_name = yaml_assistant
+        except Exception:
+            pass
+        return user_name, assistant_name
     
 # No main.py, atualize o método init_core_systems para:
 
@@ -258,17 +282,19 @@ class PhilosophyPlannerApp:
         
         # Usar fade_out_and_close em vez de finish
         if self.splash:
+            QApplication.processEvents()
+            time.sleep(2)
             self.splash.fade_out_and_close()
         
         self.window.show()
         self.restore_window_state()
         
         self.logger.info("Interface principal criada com sucesso")
-        self.event_bus.notification.emit(
-            "success", 
-            "Bem-vindo ao seu Planner",
-            "Sistema inicializado com sucesso"
-        )
+        if self.window and self.window.statusBar():
+            self.window.statusBar().showMessage(
+                "Bem-vindo ao seu Planner. Sistema inicializado com sucesso.",
+                6000
+            )
     
     def restore_window_state(self):
         """Restaura estado anterior da janela"""
