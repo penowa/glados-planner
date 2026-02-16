@@ -10,8 +10,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QDateTime, pyqtSlot
 from PyQt6.QtGui import QFont
 import logging
 
-from ui.widgets.cards.add_book_card import AddBookCard
 from ui.widgets.cards.agenda_card import AgendaCard
+from ui.widgets.cards.upcoming_commitments_card import UpcomingCommitmentsCard
 from ui.widgets.cards.event_creation_card import EventCreationDialog
 from ui.widgets.dialogs.weekly_event_editor_dialog import WeeklyEventEditorDialog
 
@@ -35,7 +35,7 @@ class DashboardView(QWidget):
         self.agenda_backend = self._resolve_agenda_backend()
         
         # Cards
-        self.add_book_card = None
+        self.upcoming_commitments_card = None
         self.agenda_card = None
         self.event_creation_card = None
         self.event_creation_dialog = None
@@ -120,7 +120,7 @@ class DashboardView(QWidget):
         header = self.create_minimal_header()
         content_layout.addWidget(header)
         
-        # ============ LINHA 1: Agenda + EventCreation + AddBook (40-30-30) ============
+        # ============ LINHA 1: Agenda + Próximos compromissos ============
         row1_layout = QHBoxLayout()
         row1_layout.setSpacing(12)
         
@@ -157,12 +157,16 @@ class DashboardView(QWidget):
         #    placeholder.setMinimumHeight(400)
          #   row1_layout.addWidget(placeholder, 30)
         
-        # 3. AddBookCard (30%)
-        self.add_book_card = AddBookCard(book_controller=self.book_controller)
-        self.add_book_card.setObjectName("dashboard_card")
-        self.add_book_card.setMinimumHeight(400)
-        self.add_book_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        row1_layout.addWidget(self.add_book_card, 20)  # 30% da largura
+        # 2. Próximos compromissos (sem ícones, com tipos por cor)
+        self.upcoming_commitments_card = UpcomingCommitmentsCard(
+            agenda_backend=self.agenda_backend,
+            max_items=5,
+        )
+        self.upcoming_commitments_card.setObjectName("dashboard_card")
+        self.upcoming_commitments_card.setMinimumHeight(320)
+        self.upcoming_commitments_card.setMaximumHeight(320)
+        self.upcoming_commitments_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row1_layout.addWidget(self.upcoming_commitments_card, 20)
         
         content_layout.addLayout(row1_layout)
         
@@ -237,9 +241,6 @@ class DashboardView(QWidget):
     def setup_connections(self):
         """Configura conexões com controllers e cards"""
         # Conectar sinais dos cards
-        if self.add_book_card:
-            self.add_book_card.import_config_requested.connect(self.show_import_dialog)
-        
         if self.agenda_card:
             self.agenda_card.navigate_to_detailed_view.connect(
                 self.open_week_event_editor_dialog
@@ -284,9 +285,7 @@ class DashboardView(QWidget):
         )
 
         # Adicionar conexão para resetar o card se o diálogo for cancelado
-        dialog.import_cancelled.connect(
-            lambda: self.add_book_card.reset_to_idle() if self.add_book_card else None
-        )
+        dialog.import_cancelled.connect(lambda: None)
 
         dialog.exec()
     
@@ -347,21 +346,14 @@ class DashboardView(QWidget):
     
     def on_book_processing_started(self, pipeline_id, file_name, settings):
         """Atualizar UI quando processamento inicia"""
-        if self.add_book_card:
-            if "file_path" not in settings:
-                settings = {**settings, "file_path": file_name}
-            self.add_book_card.on_processing_started(pipeline_id, settings)
+        return
     
     def on_book_processing_progress(self, pipeline_id, stage, percent, message):
         """Atualizar progresso do processamento"""
-        if self.add_book_card:
-            self.add_book_card.on_processing_progress(pipeline_id, stage, percent, message)
+        return
     
     def on_book_processing_completed(self, pipeline_id, result):
         """Finalizar processamento com sucesso"""
-        if self.add_book_card:
-            self.add_book_card.on_processing_completed(pipeline_id, result)
-        
         # Mostrar notificação
         title = result.get("title", "Livro")
         self.show_notification(f"✓ '{title}' processado com sucesso!", "success")
@@ -375,9 +367,6 @@ class DashboardView(QWidget):
     
     def on_book_processing_failed(self, pipeline_id, error):
         """Tratar falha no processamento"""
-        if self.add_book_card:
-            self.add_book_card.on_processing_failed(pipeline_id, error)
-        
         self.show_notification(f"✗ Erro no processamento: {error[:100]}...", "error")
 
     @pyqtSlot(str, dict)
@@ -410,6 +399,11 @@ class DashboardView(QWidget):
                 self.agenda_card.refresh()
             except Exception as e:
                 logger.error(f"Erro ao carregar agenda semanal: {e}")
+        if self.upcoming_commitments_card and hasattr(self.upcoming_commitments_card, 'refresh'):
+            try:
+                self.upcoming_commitments_card.refresh()
+            except Exception as e:
+                logger.error(f"Erro ao carregar próximos compromissos: {e}")
         
         # Carregar estatísticas para referência
         if self.reading_controller and hasattr(self.reading_controller, 'reading_controller.stats'):
@@ -605,6 +599,8 @@ class DashboardView(QWidget):
         self.today_agenda = agenda_data
         if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
             self.agenda_card.refresh()
+        if self.upcoming_commitments_card and hasattr(self.upcoming_commitments_card, 'refresh'):
+            self.upcoming_commitments_card.refresh()
     
     @pyqtSlot(dict)
     def update_stats_data(self, stats_data):
@@ -633,8 +629,6 @@ class DashboardView(QWidget):
             self.vault_timer.stop()
         
         # Limpar recursos dos cards
-        if self.add_book_card and hasattr(self.add_book_card, 'cleanup'):
-            self.add_book_card.cleanup()
         if self.agenda_card and hasattr(self.agenda_card, 'cleanup'):
             self.agenda_card.cleanup()
         if self.event_creation_card and hasattr(self.event_creation_card, 'cleanup'):

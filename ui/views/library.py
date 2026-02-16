@@ -36,6 +36,11 @@ from ui.widgets.cards.add_book_card import AddBookCard
 
 logger = logging.getLogger("GLaDOS.UI.LibraryView")
 
+try:
+    from core.config.settings import settings as core_settings
+except Exception:
+    core_settings = None
+
 
 class MetadataEditDialog(QDialog):
     """Diálogo simples para editar metadados de livro."""
@@ -343,7 +348,7 @@ class LibraryView(QWidget):
         self.books_grid.setVerticalSpacing(10)
         self.books_scroll.setWidget(books_widget)
 
-        self.empty_label = QLabel("Nenhum livro encontrado em `01-LEITURAS`.")
+        self.empty_label = QLabel("Nenhum livro encontrado em `01-LEITURAS` ou `01- LEITURAS`.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("color: #8A94A6;")
 
@@ -380,11 +385,58 @@ class LibraryView(QWidget):
         self.refresh_books()
 
     def _books_root(self) -> Optional[Path]:
+        candidates = self._books_roots()
+        if not candidates:
+            return None
+
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_dir():
+                return candidate
+
+        # Fallback para manter comportamento previsível quando a pasta ainda não existe.
+        return candidates[0]
+
+    def _books_roots(self) -> list[Path]:
+        roots: list[Path] = []
+        roots_seen: set[Path] = set()
+        vault_paths: list[Path] = []
+
         if self.reading_controller and getattr(self.reading_controller, "reading_manager", None):
-            return Path(self.reading_controller.reading_manager.vault_path) / "01-LEITURAS"
+            vault_paths.append(Path(self.reading_controller.reading_manager.vault_path))
         if self.book_controller and getattr(self.book_controller, "vault_manager", None):
-            return Path(self.book_controller.vault_manager.vault_path) / "01-LEITURAS"
-        return None
+            vault_paths.append(Path(self.book_controller.vault_manager.vault_path))
+        if core_settings:
+            settings_vault = str(getattr(getattr(core_settings, "paths", None), "vault", "") or "").strip()
+            if settings_vault:
+                vault_paths.append(Path(settings_vault).expanduser())
+        vault_paths.append(Path.home() / "Documentos" / "Obsidian" / "Philosophy_Vault")
+        vault_paths.append(Path.home() / "Documents" / "Obsidian" / "Philosophy_Vault")
+        vault_paths.append(Path.home() / "Obsidian" / "Philosophy_Vault")
+
+        unique_vault_paths: list[Path] = []
+        seen_vaults: set[Path] = set()
+        for vault_path in vault_paths:
+            resolved = Path(vault_path).expanduser().resolve(strict=False)
+            if resolved not in seen_vaults:
+                seen_vaults.add(resolved)
+                unique_vault_paths.append(resolved)
+
+        folder_candidates = ("01-LEITURAS", "01- LEITURAS")
+        for vault_path in unique_vault_paths:
+            existing_roots: list[Path] = []
+            for folder_name in folder_candidates:
+                candidate = (vault_path / folder_name).resolve(strict=False)
+                if candidate.exists() and candidate.is_dir():
+                    existing_roots.append(candidate)
+
+            if not existing_roots:
+                existing_roots = [(vault_path / "01-LEITURAS").resolve(strict=False)]
+
+            for candidate in existing_roots:
+                if candidate not in roots_seen:
+                    roots_seen.add(candidate)
+                    roots.append(candidate)
+        return roots
 
     def _vault_root(self) -> Optional[Path]:
         books_root = self._books_root()
@@ -528,26 +580,58 @@ class LibraryView(QWidget):
                 logger.debug("Falha ao atualizar metadados da nota %s: %s", note_path, exc)
 
     def refresh_books(self):
-        root = self._books_root()
         books = []
-        if root and root.exists():
+        seen_book_dirs: set[Path] = set()
+        checked_roots: list[str] = []
+        logger.info("Library refresh iniciado")
+        for root in self._books_roots():
+            checked_roots.append(str(root))
+            if not root.exists() or not root.is_dir():
+                logger.debug("Library root ignorado (inexistente ou não-diretório): %s", root)
+                continue
             try:
+                authors_count = 0
+                books_before = len(books)
                 for author_dir in sorted(root.iterdir(), key=lambda p: p.name.lower()):
                     if not author_dir.is_dir():
                         continue
+                    authors_count += 1
                     for book_dir in sorted(author_dir.iterdir(), key=lambda p: p.name.lower()):
-                        if book_dir.is_dir():
-                            books.append(
-                                {
-                                    "title": str(book_dir.name),
-                                    "author": str(author_dir.name),
-                                    "book_dir": book_dir,
-                                    "cover_path": self._find_cover_file(book_dir),
-                                }
-                            )
+                        canonical_book_dir = book_dir.resolve(strict=False)
+                        if not book_dir.is_dir() or canonical_book_dir in seen_book_dirs:
+                            continue
+                        seen_book_dirs.add(canonical_book_dir)
+                        books.append(
+                            {
+                                "title": str(book_dir.name),
+                                "author": str(author_dir.name),
+                                "book_dir": book_dir,
+                                "cover_path": self._find_cover_file(book_dir),
+                            }
+                        )
+                logger.info(
+                    "Library root processado: %s | autores=%d | livros_novos=%d",
+                    root,
+                    authors_count,
+                    len(books) - books_before,
+                )
             except Exception as exc:
-                logger.error("Falha ao carregar biblioteca: %s", exc)
+                logger.error("Falha ao carregar biblioteca em %s: %s", root, exc)
         self._books_cache = books
+        logger.info("Library refresh concluído | livros_total=%d | roots=%s", len(books), checked_roots)
+        if self.empty_label:
+            if books:
+                self.empty_label.setText("Nenhum livro encontrado em `01-LEITURAS` ou `01- LEITURAS`.")
+                self.empty_label.setToolTip("")
+                self.empty_label.hide()
+            else:
+                roots_text = " | ".join(checked_roots) if checked_roots else "nenhum root detectado"
+                self.empty_label.setText(
+                    "Nenhum livro encontrado.\n"
+                    f"Roots verificados: {roots_text}"
+                )
+                self.empty_label.setToolTip(roots_text)
+                self.empty_label.show()
         self._render_books_grid()
 
     def _render_books_grid(self):
@@ -559,7 +643,17 @@ class LibraryView(QWidget):
             if widget:
                 widget.deleteLater()
 
-        self.empty_label.setVisible(len(self._books_cache) == 0)
+        has_books = len(self._books_cache) > 0
+        if self.empty_label:
+            self.empty_label.setVisible(not has_books)
+        if self.books_scroll:
+            self.books_scroll.setVisible(True)
+        logger.info(
+            "Render books grid | has_books=%s | total=%d | viewport_width=%d",
+            has_books,
+            len(self._books_cache),
+            self.books_scroll.viewport().width() if self.books_scroll else -1,
+        )
 
         viewport_width = self.books_scroll.viewport().width() if self.books_scroll else 900
         tile_width = 210

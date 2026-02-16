@@ -45,7 +45,7 @@ class LLMPDFProcessor:
         if self.llm is None:
             try:
                 # Importação ABSOLUTA da LLM do GLaDOS
-                from src.core.llm.local_llm import llm as glados_llm
+                from core.llm.local_llm import llm as glados_llm
                 self.llm = glados_llm
                 logger.info("✅ LLM do GLaDOS carregada com sucesso")
             except ImportError as e:

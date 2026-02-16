@@ -14,8 +14,8 @@ from enum import Enum
 
 # CORREÇÃO: Importação mais flexível
 try:
-    # Tenta importação absoluta primeiro
-    from src.core.config.settings import settings
+    # Namespace padrão da aplicação (evita duplicar módulos via src.core.*)
+    from core.config.settings import settings
 except ImportError:
     try:
         # Tenta importação relativa

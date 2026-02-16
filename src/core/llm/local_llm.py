@@ -10,13 +10,10 @@ import pickle
 from datetime import datetime
 import re
 
-# Adiciona o diretório raiz do projeto ao path para importar módulos
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-
-from src.core.config.settings import settings
-from src.core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados, LlamaConfig
-from src.core.llm.glados.brain.vault_connector import VaultStructure
-from src.core.llm.glados.personality.glados_voice import GladosVoice
+from core.config.settings import settings
+from core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados, LlamaConfig
+from core.llm.glados.brain.vault_connector import VaultStructure
+from core.llm.glados.personality.glados_voice import GladosVoice
 
 class LocalLLM:
     """Gerenciador do LLM local com busca semântica integrada"""
@@ -104,7 +101,7 @@ class LocalLLM:
     def _init_sembrain(self):
         """Inicializa o sistema de busca semântica"""
         try:
-            from src.core.llm.glados.brain.sembrain import Sembrain
+            from core.llm.glados.brain.semantic_search import Sembrain
             
             # CORREÇÃO: usar get_all_notes() que agora existe
             notes = self.vault_structure.get_all_notes()
@@ -435,6 +432,13 @@ class LocalLLM:
             print("💾 Estado do LLM salvo")
         except Exception as e:
             print(f"⚠️  Erro salvando estado: {e}")
+
+# Evita duplicação de módulo por imports mistos (core.* vs src.core.*),
+# que podem levar ao carregamento duplicado do modelo em RAM.
+if __name__ == "core.llm.local_llm":
+    sys.modules.setdefault("src.core.llm.local_llm", sys.modules[__name__])
+elif __name__ == "src.core.llm.local_llm":
+    sys.modules.setdefault("core.llm.local_llm", sys.modules[__name__])
 
 # Instância global
 llm = LocalLLM()
