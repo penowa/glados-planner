@@ -10,6 +10,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
 
 from core.config.settings import Settings, reload_settings
+from ui.utils.config_manager import ConfigManager
 
 
 class SettingsDialog(QDialog):
@@ -21,6 +22,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.settings_path = settings_path
         self.settings_model = Settings.from_yaml(settings_path)
+        self.config_manager = ConfigManager.instance()
 
         self.setWindowTitle("Configurações do Sistema")
         self.setMinimumSize(760, 560)
@@ -45,12 +47,20 @@ class SettingsDialog(QDialog):
         self._setup_obsidian_tab()
         self._setup_features_tab()
 
+        footer_layout = QHBoxLayout()
+
+        self.open_onboarding_now_button = QPushButton("Abrir boas-vindas agora")
+        self.open_onboarding_now_button.clicked.connect(self._open_onboarding_now)
+        footer_layout.addWidget(self.open_onboarding_now_button)
+        footer_layout.addStretch()
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self._save_settings)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        footer_layout.addWidget(buttons)
+        layout.addLayout(footer_layout)
 
     def _setup_app_tab(self):
         tab = QWidget()
@@ -59,6 +69,7 @@ class SettingsDialog(QDialog):
         self.app_name_input = QLineEdit()
         self.app_version_input = QLineEdit()
         self.app_debug_check = QCheckBox("Ativar modo debug")
+        self.show_onboarding_check = QCheckBox("Exibir diálogo de boas-vindas ao iniciar")
         self.app_log_level_combo = QComboBox()
         self.app_log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
 
@@ -66,6 +77,7 @@ class SettingsDialog(QDialog):
         form.addRow("Versão:", self.app_version_input)
         form.addRow("Nível de log:", self.app_log_level_combo)
         form.addRow("", self.app_debug_check)
+        form.addRow("", self.show_onboarding_check)
 
         self.tabs.addTab(tab, "App")
 
@@ -180,6 +192,9 @@ class SettingsDialog(QDialog):
         self.app_version_input.setText(app.version)
         self.app_debug_check.setChecked(app.debug)
         self.app_log_level_combo.setCurrentText(app.log_level)
+        self.show_onboarding_check.setChecked(
+            self._as_bool(self.config_manager.get("ui/show_onboarding_dialog", True), True)
+        )
 
         self.vault_path_input.setText(paths.vault)
         self.data_dir_input.setText(paths.data_dir)
@@ -241,10 +256,18 @@ class SettingsDialog(QDialog):
             self.settings_model.features.enable_translation = self.feature_translation.isChecked()
             self.settings_model.features.enable_glados_personality = self.feature_glados_personality.isChecked()
             self.settings_model.features.enable_vault_as_brain = self.feature_vault_brain.isChecked()
+            self.config_manager.set(
+                "ui/show_onboarding_dialog",
+                self.show_onboarding_check.isChecked()
+            )
 
             self.settings_model.save_yaml(self.settings_path)
             updated = reload_settings(self.settings_path)
-            self.settings_saved.emit(updated.model_dump())
+            payload = updated.model_dump()
+            payload["ui"] = {
+                "show_onboarding_dialog": self.show_onboarding_check.isChecked()
+            }
+            self.settings_saved.emit(payload)
             self.accept()
         except Exception as e:
             QMessageBox.critical(
@@ -252,6 +275,19 @@ class SettingsDialog(QDialog):
                 "Erro ao salvar configurações",
                 f"Não foi possível salvar as configurações:\n{e}"
             )
+
+    @staticmethod
+    def _as_bool(value, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
 
     def _select_vault_path(self):
         selected = QFileDialog.getExistingDirectory(self, "Selecionar pasta do Vault")
@@ -267,3 +303,21 @@ class SettingsDialog(QDialog):
         )
         if selected:
             self.llm_model_path_input.setText(selected)
+
+    def _open_onboarding_now(self):
+        parent = self.parent()
+        if parent and hasattr(parent, "show_onboarding_dialog"):
+            parent.show_onboarding_dialog(force=True)
+            return
+
+        try:
+            from ui.widgets.dialogs.onboarding_dialog import OnboardingDialog
+
+            dialog = OnboardingDialog(self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Não foi possível abrir",
+                f"Falha ao abrir onboarding:\n{e}"
+            )

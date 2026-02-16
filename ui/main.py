@@ -295,6 +295,8 @@ class PhilosophyPlannerApp:
                 "Bem-vindo ao seu Planner. Sistema inicializado com sucesso.",
                 6000
             )
+        if self.window:
+            QTimer.singleShot(350, self.window.show_onboarding_dialog)
     
     def restore_window_state(self):
         """Restaura estado anterior da janela"""

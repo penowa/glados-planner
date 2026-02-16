@@ -22,6 +22,7 @@ from ui.utils.theme_manager import ThemeManager
 from ui.utils.shortcut_manager import ShortcutManager
 from ui.utils.responsive import ResponsiveManager
 from ui.utils.animation import FadeAnimation, SlideAnimation
+from ui.utils.config_manager import ConfigManager
 
 # Views
 from ui.views.dashboard import DashboardView
@@ -134,6 +135,7 @@ class MainWindow(QMainWindow):
         self.recovery_manager = recovery_manager
         self.backend_modules = backend_modules
         self.config = config
+        self.config_manager = ConfigManager.instance()
         self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(config)
         
         # Estado interno
@@ -712,6 +714,55 @@ class MainWindow(QMainWindow):
             "Configurações salvas",
             "As configurações foram atualizadas com sucesso."
         )
+
+    @staticmethod
+    def _as_bool(value, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def should_show_onboarding_dialog(self) -> bool:
+        """Verifica preferencia persistida para exibicao do onboarding."""
+        return self._as_bool(
+            self.config_manager.get("ui/show_onboarding_dialog", True),
+            True
+        )
+
+    def show_onboarding_dialog(self, force: bool = False):
+        """Exibe o dialogo inicial de boas-vindas e configuracoes."""
+        if not force and not self.should_show_onboarding_dialog():
+            return
+
+        from ui.widgets.dialogs.onboarding_dialog import OnboardingDialog
+
+        dialog = OnboardingDialog(self)
+        dialog.onboarding_preferences_saved.connect(self._on_onboarding_preferences_saved)
+        dialog.exec()
+
+    @pyqtSlot(dict)
+    def _on_onboarding_preferences_saved(self, payload: dict):
+        """Aplica alteracoes vindas do onboarding sem reiniciar a aplicacao."""
+        if isinstance(payload, dict):
+            self.config.update(payload)
+
+        self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(payload)
+        self._apply_custom_identity_to_ui()
+
+        selected_theme = str((payload or {}).get("theme", "")).strip()
+        if selected_theme and selected_theme != self.current_theme:
+            ThemeManager.instance().load_theme(selected_theme)
+            self.current_theme = selected_theme
+            if hasattr(self, "theme_button"):
+                self.theme_button.setText(self.get_theme_icon())
+                self.theme_button.setToolTip(f"Tema: {self.get_theme_name(selected_theme)}")
+            self.theme_changed.emit(selected_theme)
 
     def _resolve_custom_identity(self, source: Dict[str, Any] | None = None) -> tuple[str, str]:
         """Obtém nomes customizados (usuário/assistente) de config local ou YAML."""
