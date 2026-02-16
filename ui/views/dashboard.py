@@ -164,8 +164,7 @@ class DashboardView(QWidget):
         )
         self.upcoming_commitments_card.setObjectName("dashboard_card")
         self.upcoming_commitments_card.setMinimumHeight(320)
-        self.upcoming_commitments_card.setMaximumHeight(320)
-        self.upcoming_commitments_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.upcoming_commitments_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         row1_layout.addWidget(self.upcoming_commitments_card, 20)
         
         content_layout.addLayout(row1_layout)

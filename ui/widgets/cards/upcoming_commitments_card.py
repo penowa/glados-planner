@@ -39,8 +39,10 @@ class UpcomingCommitmentsCard(QFrame):
     ):
         super().__init__(parent)
         self.agenda_backend = agenda_backend
-        self.max_items = max(1, int(max_items))
+        self._max_items_cap = max(1, int(max_items))
+        self.max_items = self._max_items_cap
         self.setObjectName("upcoming_commitments_card")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -60,13 +62,38 @@ class UpcomingCommitmentsCard(QFrame):
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 6, 0, 0)
         self.list_layout.setSpacing(8)
-        layout.addWidget(self.list_container)
+        self.list_layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetMinimumSize)
+        self.list_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        layout.addStretch()
+        layout.addWidget(self.list_container, 1)
 
     def refresh(self) -> None:
+        self._update_max_items_for_available_height()
         events = self._collect_upcoming_events()
         self._render_events(events)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._update_max_items_for_available_height():
+            self.refresh()
+
+    def _update_max_items_for_available_height(self) -> bool:
+        available_height = max(0, self.list_container.height() - self.list_layout.contentsMargins().top())
+        item_height = self._estimate_item_height()
+        per_item = max(1, item_height + self.list_layout.spacing())
+        calculated = max(1, available_height // per_item) if available_height > 0 else 1
+        new_max_items = min(self._max_items_cap, int(calculated))
+        if new_max_items != self.max_items:
+            self.max_items = new_max_items
+            return True
+        return False
+
+    def _estimate_item_height(self) -> int:
+        title_height = self.fontMetrics().height() + 8
+        meta_height = self.fontMetrics().height() + 6
+        item_margins = 20  # 10px top + 10px bottom
+        item_inner_spacing = 6
+        return title_height + meta_height + item_margins + item_inner_spacing
 
     def _collect_upcoming_events(self) -> List[Dict[str, Any]]:
         now = datetime.now()
@@ -184,6 +211,7 @@ class UpcomingCommitmentsCard(QFrame):
 
             meta = QLabel(f"{self._format_date_time(event.get('start'))}  •  {self._humanize_type(event_type)}")
             meta.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            meta.setWordWrap(True)
             meta.setStyleSheet(f"font-size: 12px; color: {color};")
             meta.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             meta.setMinimumHeight(meta.fontMetrics().height() + 2)
