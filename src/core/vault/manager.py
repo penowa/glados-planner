@@ -84,20 +84,19 @@ class VaultManager:
     def _create_readmes(self):
         """Cria arquivos README explicativos"""
         descriptions = {
-            "Meta": "Metacognição - Pensar sobre pensar.",
-            "Leituras": "Anotações de leitura e resumos.",
-            "Conceitos": "Conceitos filosóficos fundamentais.",
-            "Disciplinas": "Notas por disciplina/cursos.",
-            "Projetos": "Projetos acadêmicos e de pesquisa.",
-            "Pessoal": "Reflexões pessoais e diário."
+            "00-META": "Metadados, índices e organização do sistema.",
+            "01-LEITURAS": "Obras por autor e progresso de leitura.",
+            "02-ANOTAÇÕES": "Anotações do usuário durante estudo/leitura.",
+            "03-REVISÃO": "Materiais de revisão gerados com LLM.",
+            "04-MAPAS MENTAIS": "Mapas mentais e estruturas visuais (Canva).",
+            "06-RECURSOS": "Recursos de apoio, caches e registros."
         }
         
         for directory in self.structure:
-            base_name = directory.split(" - ")[-1] if " - " in directory else directory
-            if base_name in descriptions:
+            if directory in descriptions:
                 dir_path = self.vault_path / directory
                 readme_path = dir_path / "README.md"
-                content = f"# {base_name}\n\n{descriptions[base_name]}\n\n*Gerenciado por GLaDOS*"
+                content = f"# {directory}\n\n{descriptions[directory]}\n\n*Gerenciado por GLaDOS*"
                 readme_path.write_text(content, encoding="utf-8")
     
     def _create_obsidian_config(self):
@@ -120,7 +119,7 @@ class VaultManager:
         config_file.write_text(json.dumps(core_plugins, indent=2), encoding="utf-8")
         
         templates_config = {
-            "folder": "06 - Templates",
+            "folder": "06-RECURSOS/templates",
             "dateFormat": "YYYY-MM-DD"
         }
         
@@ -135,17 +134,12 @@ class VaultManager:
 Bem-vindo ao seu vault gerenciado pelo **GLaDOS**.
 
 ## Estrutura
-- **00 - Meta**: Metacognição e reflexões sobre aprendizado
-- **01 - Leituras**: Anotações de leitura
-- **02 - Conceitos**: Conceitos filosóficos
-- **03 - Disciplinas**: Organizado por matéria
-- **04 - Projetos**: Projetos acadêmicos
-- **05 - Pessoal**: Reflexões pessoais
-- **06 - Templates**: Templates de notas
-- **07 - Arquivos**: Arquivos diversos
-- **08 - Referências**: Referências bibliográficas
-- **09 - Excalidraw**: Desenhos e diagramas
-- **10 - Mapas Mentais**: Mapas conceituais
+- **00-META**: Metadados e organização
+- **01-LEITURAS**: Obras por autor e sessão de leitura
+- **02-ANOTAÇÕES**: Notas do usuário
+- **03-REVISÃO**: Resumos, flashcards e perguntas de revisão
+- **04-MAPAS MENTAIS**: Materiais visuais (Canva)
+- **06-RECURSOS**: Arquivos de suporte e registros
 
 ## Como Usar
 1. Use `[[links]]` para conectar ideias

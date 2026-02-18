@@ -41,17 +41,12 @@ class VaultStructure:
     
     # Estrutura REAL baseada na sua pasta
     STRUCTURE = {
-        "00 - Meta": "Sistema e metadados",
-        "01 - Leituras": "Gestão de leituras por autor",
-        "02 - Conceitos": "Conceitos filosóficos organizados",
-        "03 - Disciplinas": "Organização por áreas da filosofia",
-        "04 - Projetos": "Produção acadêmica do usuário",
-        "05 - Pessoal": "Conteúdo pessoal e reflexões",
-        "06 - Templates": "Templates de notas",
-        "07 - Arquivos": "Arquivos diversos",
-        "08 - Referências": "Referências bibliográficas",
-        "09 - Excalidraw": "Desenhos e diagramas",
-        "10 - Mapas Mentais": "Mapas conceituais"
+        "00-META": "Sistema e metadados",
+        "01-LEITURAS": "Gestão de leituras por autor/obra",
+        "02-ANOTAÇÕES": "Anotações do usuário",
+        "03-REVISÃO": "Materiais de revisão gerados",
+        "04-MAPAS MENTAIS": "Mapas mentais (ex: Canva)",
+        "06-RECURSOS": "Recursos, registros e dados auxiliares"
     }
     
     def __init__(self, vault_path: str):
@@ -207,15 +202,24 @@ class VaultStructure:
         return notes
     
     def get_concept_notes(self) -> List[VaultNote]:
-        """Retorna notas de conceitos da pasta 02 - Conceitos"""
+        """Retorna notas de estudo/conceitos."""
+        notes = self.get_notes_by_folder("02-ANOTAÇÕES")
+        if notes:
+            return notes
         return self.get_notes_by_folder("02 - Conceitos")
     
     def get_reading_notes(self) -> List[VaultNote]:
-        """Retorna notas de leituras da pasta 01 - Leituras"""
+        """Retorna notas de leituras."""
+        notes = self.get_notes_by_folder("01-LEITURAS")
+        if notes:
+            return notes
         return self.get_notes_by_folder("01 - Leituras")
     
     def get_discipline_notes(self) -> List[VaultNote]:
-        """Retorna notas de disciplinas da pasta 03 - Disciplinas"""
+        """Retorna materiais de revisão estruturados."""
+        notes = self.get_notes_by_folder("03-REVISÃO")
+        if notes:
+            return notes
         return self.get_notes_by_folder("03 - Disciplinas")
     
     # ADICIONADO: Método para compatibilidade com local_llm.py

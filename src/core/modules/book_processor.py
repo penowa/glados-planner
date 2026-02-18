@@ -24,7 +24,14 @@ except ImportError:
         # Configuração padrão para testes
         class Settings:
             class ObsidianConfig:
-                vault_structure = ["01-LEITURAS", "02-CONCEITOS", "06-RECURSOS"]
+                vault_structure = [
+                    "00-META",
+                    "01-LEITURAS",
+                    "02-ANOTAÇÕES",
+                    "03-REVISÃO",
+                    "04-MAPAS MENTAIS",
+                    "06-RECURSOS",
+                ]
                 brain_regions = ["MEMÓRIA", "ANÁLISE"]
             obsidian = ObsidianConfig()
             vault_path = None

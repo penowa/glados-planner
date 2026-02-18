@@ -14,13 +14,13 @@ database:
   echo: false
 llm:
   model_name: Mistral-7B-GGUF-Q4K
-  model_path: /home/penowa/Glados/data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
-  n_ctx: 2048
-  n_gpu_layers: 0
+  model_path: /home/penowa/Glados/data/models/Qwen3-4B-UD-Q4_K_XL.gguf
+  n_ctx: 4000
+  n_gpu_layers: 18
   temperature: 0.35
   top_p: 0.9
   repeat_penalty: 1.12
-  max_tokens: 772
+  max_tokens: 900
   cpu:
     threads: 4
     batch_size: 128
@@ -59,8 +59,20 @@ obsidian:
   templates_dir: ./config/templates
   auto_sync: true
   sync_interval: 300
-  vault_structure: []
-  brain_regions: {}
+  vault_structure:
+  - 00-META
+  - 01-LEITURAS
+  - 02-ANOTAÇÕES
+  - 03-REVISÃO
+  - 04-MAPAS MENTAIS
+  - 06-RECURSOS
+  brain_regions:
+    00-META: Sistema e metadados
+    01-LEITURAS: Leituras por autor e obra
+    02-ANOTAÇÕES: Notas do usuário
+    03-REVISÃO: Materiais de revisão LLM
+    04-MAPAS MENTAIS: Estruturas visuais e Canva
+    06-RECURSOS: Recursos e registros auxiliares
 pomodoro:
   work_duration: 25
   short_break: 5
