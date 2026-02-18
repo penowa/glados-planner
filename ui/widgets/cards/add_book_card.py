@@ -610,8 +610,11 @@ class AddBookCard(PhilosophyCard):
             
         return metadata
     
-    def start_processing(self, pipeline_id, settings):
+    def start_processing(self, pipeline_id, settings, file_name=None):
         """Iniciar monitoramento do processamento"""
+        if not isinstance(settings, dict):
+            settings = {}
+
         self.current_pipeline_id = pipeline_id
         self.set_state("processing")
         
@@ -623,8 +626,8 @@ class AddBookCard(PhilosophyCard):
         }
         
         # Atualizar UI
-        file_name = os.path.basename(settings.get("file_path", "arquivo"))
-        self.status_label.setText(f"Processando: {file_name}")
+        display_name = file_name or os.path.basename(settings.get("file_path", "arquivo"))
+        self.status_label.setText(f"Processando: {display_name}")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.eta_label.setVisible(True)
@@ -717,9 +720,13 @@ class AddBookCard(PhilosophyCard):
             total_remaining = sum(list(stage_times.values())[current_index:])
             self.eta_label.setText(f"Tempo estimado: ~{total_remaining}s restantes")
 
-    def on_processing_started(self, pipeline_id, settings):
+    def on_processing_started(self, pipeline_id, file_name=None, settings=None):
         """Método para ser chamado quando o processamento inicia"""
-        self.start_processing(pipeline_id, settings)
+        # Compatibilidade com chamadas antigas: (pipeline_id, settings)
+        if isinstance(file_name, dict) and settings is None:
+            settings = file_name
+            file_name = None
+        self.start_processing(pipeline_id, settings or {}, file_name)
     
     def on_processing_progress(self, pipeline_id, stage, percent, message):
         """Atualizar progresso quando receber sinal do controller"""

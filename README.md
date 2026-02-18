@@ -55,3 +55,16 @@ cp .env.example .env
 
 # Inicialize o banco de dados
 python -m src.cli.init_db
+```
+
+## Build de Release (PyInstaller)
+
+```bash
+# Instale dependências para empacotamento
+pip install -r requirements-release.txt
+
+# Gere o executável (formato onedir)
+./scripts/build_release.sh
+```
+
+Artefato de saída: `dist/glados-planner/`

@@ -2,6 +2,8 @@
 -r requirements.txt
 
 # Additional dev tools
+pyinstaller>=6.12.0
+pyinstaller-hooks-contrib>=2025.1
 jupyter==1.0.0
 ipython==8.18.1
 ipdb==0.13.13

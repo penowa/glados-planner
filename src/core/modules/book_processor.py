@@ -352,29 +352,51 @@ class BookProcessor:
             processor = PDFProcessor(quality=quality)
             result = processor.process(filepath, output_dir, metadata)
 
+            chapters = self._normalize_chapters(result.get('chapters', []))
+            warnings = result.get('warnings', [])
+
             if not result.get('success', True):
-                warning = "; ".join(result.get('warnings', [])) or "Falha no processamento OCR do PDF"
+                # Degradação graciosa: mantém processamento quando há conteúdo parcial utilizável.
+                missing_text_warning = any(
+                    "sem texto extraído após OCR" in str(w).lower()
+                    for w in warnings
+                )
+                if chapters and missing_text_warning:
+                    warnings = [
+                        *warnings,
+                        "Processamento parcial concluído: algumas páginas ficaram sem texto após OCR."
+                    ]
+                    chapter_warning = self._build_chapter_detection_warning(metadata, chapters)
+                    if chapter_warning:
+                        warnings = [*warnings, chapter_warning]
+                    return ProcessingResult(
+                        status=ProcessingStatus.COMPLETED,
+                        metadata=metadata,
+                        output_dir=output_dir,
+                        processed_chapters=chapters,
+                        warnings=warnings
+                    )
+
+                warning = "; ".join(warnings) or "Falha no processamento OCR do PDF"
                 return ProcessingResult(
                     status=ProcessingStatus.FAILED,
                     metadata=metadata,
                     output_dir=output_dir,
-                    processed_chapters=result.get('chapters', []),
-                    warnings=result.get('warnings', []),
+                    processed_chapters=chapters,
+                    warnings=warnings,
                     error=warning
                 )
 
-            chapters = self._normalize_chapters(result.get('chapters', []))
             if not chapters:
                 return ProcessingResult(
                     status=ProcessingStatus.FAILED,
                     metadata=metadata,
                     output_dir=output_dir,
                     processed_chapters=[],
-                    warnings=result.get('warnings', []),
+                    warnings=warnings,
                     error="Nenhum conteúdo foi extraído do PDF"
                 )
-            
-            warnings = result.get('warnings', [])
+
             chapter_warning = self._build_chapter_detection_warning(metadata, chapters)
             if chapter_warning:
                 warnings = [*warnings, chapter_warning]

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import yaml
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QAction, QColor, QFont, QLinearGradient, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QColor, QFont, QLinearGradient, QPainter, QPixmap, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -148,6 +148,10 @@ class LibraryBookTile(QFrame):
         title: str,
         author: str,
         cover_path: Optional[Path],
+        progress_percent: float = 0.0,
+        completed: bool = False,
+        progress_current: int = 0,
+        progress_total: int = 0,
         badge_text: Optional[str] = None,
         parent=None
     ):
@@ -156,12 +160,16 @@ class LibraryBookTile(QFrame):
         self.title = title
         self.author = author
         self.cover_path = cover_path
+        self.progress_percent = max(0.0, min(100.0, float(progress_percent or 0.0)))
+        self.completed = bool(completed)
+        self.progress_current = max(0, int(progress_current or 0))
+        self.progress_total = max(0, int(progress_total or 0))
         self.badge_text = badge_text
         self._setup_ui()
 
     def _setup_ui(self):
         self.setObjectName("library_book_tile")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setFixedWidth(190)
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
@@ -172,7 +180,9 @@ class LibraryBookTile(QFrame):
         self.cover_label = QLabel()
         self.cover_label.setFixedSize(170, 230)
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cover_label.setStyleSheet("border: 1px solid #2E3440; border-radius: 8px;")
+        self.cover_label.mousePressEvent = self._on_cover_clicked
         self._render_cover()
         layout.addWidget(self.cover_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -196,11 +206,27 @@ class LibraryBookTile(QFrame):
             self.badge_label.adjustSize()
             self.badge_label.setVisible(True)
 
+        self.progress_label = QLabel(self.cover_label)
+        self.progress_label.setFixedSize(36, 36)
+        self.progress_label.setFrameShape(QFrame.Shape.NoFrame)
+        self.progress_label.setStyleSheet("background: transparent; border: none;")
+        self._render_progress_indicator()
+
         title_label = QLabel(self.title)
         title_label.setWordWrap(True)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("font-weight: 700;")
         layout.addWidget(title_label)
+
+        progress_text = (
+            f"{self.progress_current}/{self.progress_total} páginas"
+            if self.progress_total > 0
+            else "0/? páginas"
+        )
+        progress_info_label = QLabel(progress_text)
+        progress_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_info_label.setStyleSheet("color: #A7B1C2; font-size: 10px;")
+        layout.addWidget(progress_info_label)
 
         author_label = QLabel(self.author)
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -253,16 +279,49 @@ class LibraryBookTile(QFrame):
         self.cover_label.setPixmap(self._placeholder_cover())
         self.cover_label.setText("")
 
+    def _render_progress_indicator(self):
+        size = self.progress_label.size()
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = pixmap.rect().adjusted(2, 2, -2, -2)
+        painter.setBrush(QColor(15, 23, 32, 220))
+        painter.setPen(QPen(QColor("#6B7280"), 1))
+        painter.drawEllipse(rect)
+
+        if self.completed:
+            painter.setBrush(QColor("#2E7D32"))
+            painter.setPen(QPen(QColor("#A5D6A7"), 1))
+            painter.drawEllipse(rect.adjusted(2, 2, -2, -2))
+            painter.setPen(QPen(QColor("#ECFDF3"), 2))
+            painter.drawLine(13, 18, 17, 22)
+            painter.drawLine(17, 22, 24, 14)
+        else:
+            progress_rect = rect.adjusted(4, 4, -4, -4)
+            painter.setPen(QPen(QColor("#4A90E2"), 4))
+            span = int(360 * 16 * (self.progress_percent / 100.0))
+            painter.drawArc(progress_rect, 90 * 16, -span)
+            painter.setPen(QColor("#ECEFF4"))
+            painter.setFont(QFont("Sans Serif", 7, QFont.Weight.Bold))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{int(self.progress_percent)}%")
+
+        painter.end()
+        self.progress_label.setPixmap(pixmap)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         x = self.cover_label.width() - self.options_button.width() - 6
         self.options_button.move(max(0, x), 6)
         self.badge_label.move(6, 6)
+        self.progress_label.move(self.cover_label.width() - self.progress_label.width() - 6, self.cover_label.height() - self.progress_label.height() - 6)
 
-    def mousePressEvent(self, event):
+    def _on_cover_clicked(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.open_requested.emit(self.book_dir)
-        super().mousePressEvent(event)
+        event.accept()
 
 
 class LibraryView(QWidget):
@@ -278,11 +337,16 @@ class LibraryView(QWidget):
         self.reading_controller = self.controllers.get("reading")
         self.agenda_controller = self.controllers.get("agenda")
         self.add_book_card: Optional[AddBookCard] = None
-        self.books_grid: Optional[QGridLayout] = None
+        self.books_container: Optional[QWidget] = None
+        self.books_panel_layout: Optional[QVBoxLayout] = None
+        self.books_shelves_layout: Optional[QVBoxLayout] = None
         self.books_scroll: Optional[QScrollArea] = None
         self.empty_label: Optional[QLabel] = None
         self._books_cache: list[Dict[str, Any]] = []
         self._schedule_feedback: Dict[str, Dict[str, Any]] = {}
+        self.sort_mode = "recent"
+        self.sort_toggle_button: Optional[QPushButton] = None
+        self._render_retry_count = 0
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.timeout.connect(self._render_books_grid)
@@ -324,8 +388,13 @@ class LibraryView(QWidget):
         refresh_button.setFixedSize(32, 32)
         refresh_button.setToolTip("Atualizar biblioteca")
         refresh_button.clicked.connect(self.refresh_books)
+        self.sort_toggle_button = QPushButton(self._sort_button_text())
+        self.sort_toggle_button.setToolTip("Alternar organização das prateleiras")
+        self.sort_toggle_button.clicked.connect(self._cycle_sort_mode)
+        self.sort_toggle_button.setMinimumHeight(32)
         header_layout.addLayout(left)
         header_layout.addStretch()
+        header_layout.addWidget(self.sort_toggle_button)
         header_layout.addWidget(refresh_button)
         content_layout.addWidget(header)
 
@@ -335,6 +404,7 @@ class LibraryView(QWidget):
         books_panel = QFrame()
         books_panel.setObjectName("dashboard_card")
         books_panel_layout = QVBoxLayout(books_panel)
+        self.books_panel_layout = books_panel_layout
         books_panel_layout.setContentsMargins(12, 12, 12, 12)
         books_panel_layout.setSpacing(10)
 
@@ -342,10 +412,10 @@ class LibraryView(QWidget):
         self.books_scroll.setWidgetResizable(True)
         self.books_scroll.setFrameShape(QFrame.Shape.NoFrame)
         books_widget = QWidget()
-        self.books_grid = QGridLayout(books_widget)
-        self.books_grid.setContentsMargins(0, 0, 0, 0)
-        self.books_grid.setHorizontalSpacing(10)
-        self.books_grid.setVerticalSpacing(10)
+        self.books_container = books_widget
+        self.books_shelves_layout = QVBoxLayout(books_widget)
+        self.books_shelves_layout.setContentsMargins(0, 0, 0, 0)
+        self.books_shelves_layout.setSpacing(12)
         self.books_scroll.setWidget(books_widget)
 
         self.empty_label = QLabel("Nenhum livro encontrado em `01-LEITURAS` ou `01- LEITURAS`.")
@@ -457,6 +527,42 @@ class LibraryView(QWidget):
             path = book_dir / filename
             if path.exists() and path.is_file():
                 return path
+        return None
+
+    def _create_blank_cover(self, cover_path: Path, title: str):
+        pixmap = QPixmap(680, 920)
+        pixmap.fill(QColor("#FFFFFF"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        frame_rect = pixmap.rect().adjusted(18, 18, -18, -18)
+        painter.setPen(QColor("#C6CDD6"))
+        painter.drawRoundedRect(frame_rect, 20, 20)
+
+        title_rect = frame_rect.adjusted(50, 80, -50, -80)
+        painter.setPen(QColor("#1F2933"))
+        painter.setFont(QFont("Georgia", 44, QFont.Weight.Bold))
+        text_flags = int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap)
+        painter.drawText(
+            title_rect,
+            text_flags,
+            str(title or "Livro"),
+        )
+        painter.end()
+        pixmap.save(str(cover_path), "PNG")
+
+    def _ensure_cover_file(self, book_dir: Path, title: str) -> Optional[Path]:
+        cover_path = self._find_cover_file(book_dir)
+        if cover_path:
+            return cover_path
+
+        generated_cover = book_dir / "cover.png"
+        try:
+            self._create_blank_cover(generated_cover, title)
+            if generated_cover.exists() and generated_cover.is_file():
+                return generated_cover
+        except Exception as exc:
+            logger.warning("Falha ao gerar capa placeholder para %s: %s", book_dir, exc)
         return None
 
     def _find_index_note(self, book_dir: Path) -> Optional[Path]:
@@ -579,6 +685,62 @@ class LibraryView(QWidget):
             except Exception as exc:
                 logger.debug("Falha ao atualizar metadados da nota %s: %s", note_path, exc)
 
+    def _sort_button_text(self) -> str:
+        labels = {
+            "author": "Organizar: Autor",
+            "alphabetical": "Organizar: A-Z",
+            "recent": "Organizar: Recentes",
+        }
+        return labels.get(self.sort_mode, "Organizar")
+
+    def _cycle_sort_mode(self):
+        modes = ["author", "alphabetical", "recent"]
+        current_idx = modes.index(self.sort_mode) if self.sort_mode in modes else 0
+        self.sort_mode = modes[(current_idx + 1) % len(modes)]
+        if self.sort_toggle_button:
+            self.sort_toggle_button.setText(self._sort_button_text())
+        self._render_books_grid()
+
+    def _parse_iso_datetime(self, value: str) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return None
+
+    def _reading_progress_for_book(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        progress_data = {
+            "percent": 0.0,
+            "completed": False,
+            "current_page": 0,
+            "total_pages": 0,
+            "last_activity": None,
+            "registered_at": None,
+        }
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return progress_data
+
+        manager = self.reading_controller.reading_manager
+        book_id = metadata.get("book_id")
+        if not book_id:
+            return progress_data
+
+        entry = manager.readings.get(str(book_id))
+        if not entry:
+            return progress_data
+
+        total_pages = max(int(getattr(entry, "total_pages", 0) or 0), 1)
+        current_page = max(int(getattr(entry, "current_page", 0) or 0), 0)
+        percent = max(0.0, min(100.0, (current_page / total_pages) * 100.0))
+        progress_data["percent"] = percent
+        progress_data["completed"] = current_page >= total_pages and total_pages > 0
+        progress_data["current_page"] = current_page
+        progress_data["total_pages"] = total_pages
+        progress_data["last_activity"] = self._parse_iso_datetime(getattr(entry, "last_read", "") or "")
+        progress_data["registered_at"] = self._parse_iso_datetime(getattr(entry, "start_date", "") or "")
+        return progress_data
+
     def refresh_books(self):
         books = []
         seen_book_dirs: set[Path] = set()
@@ -606,7 +768,7 @@ class LibraryView(QWidget):
                                 "title": str(book_dir.name),
                                 "author": str(author_dir.name),
                                 "book_dir": book_dir,
-                                "cover_path": self._find_cover_file(book_dir),
+                                "cover_path": self._ensure_cover_file(book_dir, str(book_dir.name)),
                             }
                         )
                 logger.info(
@@ -634,58 +796,205 @@ class LibraryView(QWidget):
                 self.empty_label.show()
         self._render_books_grid()
 
-    def _render_books_grid(self):
-        if not self.books_grid:
-            return
-        while self.books_grid.count():
-            item = self.books_grid.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
-        has_books = len(self._books_cache) > 0
-        if self.empty_label:
-            self.empty_label.setVisible(not has_books)
-        if self.books_scroll:
-            self.books_scroll.setVisible(True)
-        logger.info(
-            "Render books grid | has_books=%s | total=%d | viewport_width=%d",
-            has_books,
-            len(self._books_cache),
-            self.books_scroll.viewport().width() if self.books_scroll else -1,
-        )
-
-        viewport_width = self.books_scroll.viewport().width() if self.books_scroll else 900
-        tile_width = 210
-        columns = max(1, viewport_width // tile_width)
-
-        for idx, book in enumerate(self._books_cache):
-            row = idx // columns
-            col = idx % columns
-            badge_text = None
-            feedback = self._schedule_feedback.get(str(book["book_dir"]))
-            if feedback:
-                expires_at = feedback.get("expires_at")
-                if isinstance(expires_at, datetime) and expires_at > datetime.now():
-                    badge_text = str(feedback.get("text") or "")
-                else:
-                    self._schedule_feedback.pop(str(book["book_dir"]), None)
-
-            tile = LibraryBookTile(
-                book_dir=book["book_dir"],
-                title=book["title"],
-                author=book["author"],
-                cover_path=book["cover_path"],
-                badge_text=badge_text,
+    def _sorted_books(self) -> list[Dict[str, Any]]:
+        books: list[Dict[str, Any]] = []
+        for book in self._books_cache:
+            metadata = self._load_book_metadata(book["book_dir"])
+            progress = self._reading_progress_for_book(metadata)
+            books.append(
+                {
+                    **book,
+                    "book_id": metadata.get("book_id"),
+                    "progress_percent": progress["percent"],
+                    "progress_completed": progress["completed"],
+                    "progress_current": progress["current_page"],
+                    "progress_total": progress["total_pages"],
+                    "last_activity": progress["last_activity"],
+                    "registered_at": progress["registered_at"],
+                }
             )
-            tile.open_requested.connect(self.open_book_requested.emit)
-            tile.metadata_requested.connect(self._open_metadata_editor)
-            tile.schedule_requested.connect(self._open_schedule_dialog)
-            self.books_grid.addWidget(tile, row, col)
 
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.books_grid.addWidget(spacer, max(len(self._books_cache) // max(columns, 1), 1), columns + 1)
+        if self.sort_mode == "alphabetical":
+            return sorted(books, key=lambda b: str(b["title"]).lower())
+        if self.sort_mode == "recent":
+            def recent_key(item: Dict[str, Any]):
+                activity = item.get("last_activity") or item.get("registered_at") or datetime.min
+                return (activity, str(item["title"]).lower())
+            return sorted(books, key=recent_key, reverse=True)
+        return sorted(books, key=lambda b: (str(b["author"]).lower(), str(b["title"]).lower()))
+
+    def _render_books_grid(self):
+        try:
+            shelves_layout = self._ensure_books_shelves_layout()
+            if shelves_layout is None:
+                self._render_retry_count += 1
+                logger.warning(
+                    "Render prateleiras adiado: layout indisponível (tentativa=%d, books_scroll=%s, panel_layout=%s)",
+                    self._render_retry_count,
+                    self.books_scroll is not None,
+                    self.books_panel_layout is not None,
+                )
+                if self._render_retry_count <= 8:
+                    QTimer.singleShot(120, self._render_books_grid)
+                return
+            self._render_retry_count = 0
+            while shelves_layout.count():
+                item = shelves_layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+
+            has_books = len(self._books_cache) > 0
+            if self.empty_label:
+                self.empty_label.setVisible(not has_books)
+            if self.books_scroll:
+                self.books_scroll.setVisible(True)
+            logger.info("Render prateleiras | has_books=%s | total=%d", has_books, len(self._books_cache))
+
+            sorted_books = self._sorted_books()
+
+            if self.sort_mode == "author":
+                grouped: Dict[str, list[Dict[str, Any]]] = {}
+                for book in sorted_books:
+                    grouped.setdefault(str(book["author"]), []).append(book)
+                groups = list(grouped.items())
+            else:
+                title = "Ordem alfabética" if self.sort_mode == "alphabetical" else "Últimas leituras e registros"
+                groups = [(title, sorted_books)]
+
+            for author, author_books in groups:
+                shelf = QFrame()
+                shelf_layout = QVBoxLayout(shelf)
+                shelf_layout.setContentsMargins(0, 0, 0, 0)
+                shelf_layout.setSpacing(8)
+
+                author_label = QLabel(author)
+                author_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #D8DEE9;")
+                shelf_layout.addWidget(author_label)
+
+                if self.sort_mode == "author":
+                    shelf_scroll = QScrollArea()
+                    shelf_scroll.setWidgetResizable(False)
+                    shelf_scroll.setFrameShape(QFrame.Shape.NoFrame)
+                    shelf_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                    shelf_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                    shelf_scroll.setFixedHeight(305)
+                    shelf_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+                    books_row = QWidget()
+                    books_row_layout = QHBoxLayout(books_row)
+                    books_row_layout.setContentsMargins(0, 0, 0, 0)
+                    books_row_layout.setSpacing(10)
+                    rows_to_render = [books_row_layout]
+                else:
+                    wrap_widget = QWidget()
+                    wrap_grid = QGridLayout(wrap_widget)
+                    wrap_grid.setContentsMargins(0, 0, 0, 0)
+                    wrap_grid.setHorizontalSpacing(10)
+                    wrap_grid.setVerticalSpacing(12)
+                    viewport_width = self.books_scroll.viewport().width() if self.books_scroll else 900
+                    columns = max(1, viewport_width // 220)
+                    rows_to_render = [wrap_grid, columns]
+
+                for idx, book in enumerate(author_books):
+                    badge_text = None
+                    feedback = self._schedule_feedback.get(str(book["book_dir"]))
+                    if feedback:
+                        expires_at = feedback.get("expires_at")
+                        if isinstance(expires_at, datetime) and expires_at > datetime.now():
+                            badge_text = str(feedback.get("text") or "")
+                        else:
+                            self._schedule_feedback.pop(str(book["book_dir"]), None)
+
+                    tile = LibraryBookTile(
+                        book_dir=book["book_dir"],
+                        title=book["title"],
+                        author=book["author"],
+                        cover_path=book["cover_path"],
+                        progress_percent=float(book.get("progress_percent", 0.0) or 0.0),
+                        completed=bool(book.get("progress_completed", False)),
+                        progress_current=int(book.get("progress_current", 0) or 0),
+                        progress_total=int(book.get("progress_total", 0) or 0),
+                        badge_text=badge_text,
+                    )
+                    tile.open_requested.connect(self._open_book_from_tile)
+                    tile.metadata_requested.connect(self._open_metadata_editor)
+                    tile.schedule_requested.connect(self._open_schedule_dialog)
+
+                    if self.sort_mode == "author":
+                        rows_to_render[0].addWidget(tile)
+                    else:
+                        columns = rows_to_render[1]
+                        row = idx // columns
+                        col = idx % columns
+                        rows_to_render[0].addWidget(tile, row, col)
+
+                if self.sort_mode == "author":
+                    row_width = (200 * len(author_books)) + (10 * max(0, len(author_books) - 1)) + 20
+                    books_row.setFixedSize(max(row_width, 220), 285)
+                    shelf_scroll.setWidget(books_row)
+                    shelf_layout.addWidget(shelf_scroll)
+                else:
+                    shelf_layout.addWidget(wrap_widget)
+
+                shelf_line = QFrame()
+                shelf_line.setFixedHeight(8)
+                shelf_line.setStyleSheet(
+                    "background-color: #2B3341; border: 1px solid #4A90E2; border-radius: 4px;"
+                )
+                shelf_layout.addWidget(shelf_line)
+
+                shelves_layout.addWidget(shelf)
+
+            spacer = QWidget()
+            spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            shelves_layout.addWidget(spacer)
+
+            if self.books_scroll and self.books_scroll.widget():
+                self.books_scroll.widget().adjustSize()
+                self.books_scroll.viewport().update()
+        except Exception as exc:
+            logger.exception("Falha ao renderizar prateleiras: %s", exc)
+
+    def _ensure_books_shelves_layout(self) -> Optional[QVBoxLayout]:
+        """Recupera/cria layout de prateleiras de forma robusta no container do scroll."""
+        if self.books_scroll is None:
+            if self.books_panel_layout is None:
+                return None
+            self.books_scroll = QScrollArea()
+            self.books_scroll.setWidgetResizable(True)
+            self.books_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self.books_panel_layout.addWidget(self.books_scroll, 1)
+
+        container = self.books_scroll.widget()
+        if container is None:
+            container = QWidget()
+            self.books_scroll.setWidget(container)
+            self.books_container = container
+        else:
+            self.books_container = container
+
+        existing_layout = container.layout()
+        if isinstance(existing_layout, QVBoxLayout):
+            self.books_shelves_layout = existing_layout
+            return existing_layout
+
+        shelves_layout = QVBoxLayout(container)
+        shelves_layout.setContentsMargins(0, 0, 0, 0)
+        shelves_layout.setSpacing(12)
+        self.books_shelves_layout = shelves_layout
+        return shelves_layout
+
+    def _open_book_from_tile(self, book_dir: Path):
+        metadata = self._load_book_metadata(book_dir)
+        if self.reading_controller and getattr(self.reading_controller, "reading_manager", None):
+            try:
+                book_id = metadata.get("book_id")
+                if not book_id:
+                    metadata["book_id"] = self._ensure_book_in_reading_manager(metadata)
+            except Exception as exc:
+                logger.warning("Falha ao registrar livro no ReadingManager (%s): %s", book_dir, exc)
+        self.open_book_requested.emit(book_dir)
 
     def _open_metadata_editor(self, book_dir: Path):
         metadata = self._load_book_metadata(book_dir)
@@ -768,6 +1077,8 @@ class LibraryView(QWidget):
 
     def start_book_processing(self, config):
         if not self.book_controller:
+            if self.add_book_card:
+                self.add_book_card.show_error("BookController não disponível")
             return
         quality_map = {
             "Rápido (Rascunho)": "draft",
@@ -775,31 +1086,52 @@ class LibraryView(QWidget):
             "Alta Qualidade": "high",
             "Acadêmico": "academic",
         }
+        file_path = str(config.get("file_path") or "").strip()
+        if not file_path:
+            if self.add_book_card:
+                self.add_book_card.show_error("Arquivo inválido para importação")
+            return
+
         settings = {
-            "file_path": config["file_path"],
-            "quality": quality_map.get(config["quality"], "standard"),
-            "use_llm": config["use_llm"],
-            "auto_schedule": config["auto_schedule"],
+            "file_path": file_path,
+            "quality": quality_map.get(config.get("quality"), "standard"),
+            "use_llm": bool(config.get("use_llm", True)),
+            "auto_schedule": bool(config.get("auto_schedule", True)),
             "metadata": {
-                "title": config["title"],
-                "author": config["author"],
-                "year": config["year"],
-                "publisher": config["publisher"],
-                "isbn": config["isbn"],
-                "language": config["language"],
-                "genre": config["genre"],
-                "tags": config["tags"],
+                "title": config.get("title", ""),
+                "author": config.get("author", ""),
+                "year": config.get("year", ""),
+                "publisher": config.get("publisher", ""),
+                "isbn": config.get("isbn", ""),
+                "language": config.get("language", ""),
+                "genre": config.get("genre", ""),
+                "tags": config.get("tags", []),
             },
             "notes_config": {
-                "structure": config["note_structure"],
-                "template": config["note_template"],
-                "vault_location": config["vault_location"],
+                "structure": config.get("note_structure", ""),
+                "template": config.get("note_template", ""),
+                "vault_location": config.get("vault_location", ""),
             },
             "scheduling_config": {
-                "pages_per_day": config["pages_per_day"],
-                "start_date": config["start_date"],
-                "preferred_time": config["preferred_time"],
-                "strategy": config["strategy"],
+                "pages_per_day": config.get("pages_per_day", 20),
+                "start_date": config.get("start_date", ""),
+                "preferred_time": config.get("preferred_time", ""),
+                "strategy": config.get("strategy", ""),
             },
         }
-        self.book_controller.process_book_with_config(settings)
+        try:
+            pipeline_id = self.book_controller.process_book_with_config(settings)
+            if self.add_book_card and pipeline_id and self.add_book_card.current_state != "processing":
+                self.add_book_card.start_processing(
+                    pipeline_id,
+                    {"file_path": file_path, "quality": settings["quality"]},
+                )
+        except Exception as exc:
+            logger.error("Falha ao iniciar processamento do livro '%s': %s", file_path, exc)
+            if self.add_book_card:
+                self.add_book_card.show_error(f"Falha ao iniciar importação: {exc}")
+            QMessageBox.warning(
+                self,
+                "Importação",
+                f"Não foi possível iniciar o processamento.\n\nErro: {exc}",
+            )

@@ -323,7 +323,39 @@ class BookProcessingPipeline(QThread):
         )
         
         if result.status.value == "failed":
-            raise Exception(result.error or "Erro no processamento")
+            warnings = list(result.warnings or [])
+            error_message = str(result.error or "Erro no processamento")
+            missing_text_issue = (
+                "sem texto extraído após ocr" in error_message.lower()
+                or any("sem texto extraído após ocr" in str(w).lower() for w in warnings)
+            )
+
+            partial_chapters = list(result.processed_chapters or [])
+            if missing_text_issue and not partial_chapters:
+                partial_chapters = self._build_fallback_chapters_from_pdf()
+
+            if missing_text_issue and partial_chapters:
+                warnings.append(
+                    "Extração parcial: algumas páginas ficaram sem texto após OCR, mas o processamento seguiu."
+                )
+                logger.warning(
+                    "Pipeline %s: continuando com extração parcial (%d capítulo(s)).",
+                    self.pipeline_id,
+                    len(partial_chapters),
+                )
+                self.processing_result = result
+                self.extracted_content = partial_chapters
+                self.stage_progress.emit(self.pipeline_id, "extraction", 100, "Extração parcial concluída")
+                return {
+                    "chapters_extracted": len(partial_chapters),
+                    "total_pages": result.metadata.total_pages,
+                    "requires_ocr": result.metadata.requires_ocr,
+                    "extraction_method": "partial_fallback",
+                    "warnings": warnings,
+                    "partial_extraction": True,
+                }
+
+            raise Exception(error_message)
         if result.status.value == "scheduled":
             raise Exception("Processamento foi agendado, mas esta operação requer execução imediata")
         
@@ -343,6 +375,57 @@ class BookProcessingPipeline(QThread):
             "extraction_method": "standard" + ("+llm" if self.use_llm else ""),
             "warnings": result.warnings or []
         }
+
+    def _build_fallback_chapters_from_pdf(self) -> List[Dict[str, Any]]:
+        """Fallback: gera capítulo único com texto bruto extraído diretamente do PDF."""
+        try:
+            import fitz  # PyMuPDF
+
+            page_blocks: List[str] = []
+            with fitz.open(str(self.file_path)) as doc:
+                total_pages = len(doc)
+                for idx in range(total_pages):
+                    page_text = (doc[idx].get_text("text") or "").strip()
+                    if not page_text:
+                        continue
+                    page_blocks.append(f"--- Página {idx + 1} ---\n{page_text}")
+
+            if not page_blocks:
+                placeholder_title = "Conteúdo Indisponível (OCR)"
+                return [
+                    {
+                        "number": 1,
+                        "chapter_num": 1,
+                        "title": placeholder_title,
+                        "chapter_title": placeholder_title,
+                        "start_page": 1,
+                        "end_page": max(int(self.metadata.total_pages or 0), 1) if self.metadata else 1,
+                        "pages": f"1-{max(int(self.metadata.total_pages or 0), 1) if self.metadata else 1}",
+                        "content": (
+                            "Não foi possível extrair texto legível automaticamente deste PDF.\n\n"
+                            "Sugestão: reprocessar com qualidade acadêmica, verificar idioma OCR "
+                            "ou fornecer versão digital com texto selecionável."
+                        ),
+                    }
+                ]
+
+            content = "\n\n".join(page_blocks)
+            title = "Conteúdo Extraído (Fallback)"
+            return [
+                {
+                    "number": 1,
+                    "chapter_num": 1,
+                    "title": title,
+                    "chapter_title": title,
+                    "start_page": 1,
+                    "end_page": max(int(self.metadata.total_pages or 0), 1) if self.metadata else 1,
+                    "pages": f"1-{max(int(self.metadata.total_pages or 0), 1) if self.metadata else 1}",
+                    "content": content,
+                }
+            ]
+        except Exception as exc:
+            logger.warning("Fallback de extração PDF falhou (%s): %s", self.pipeline_id, exc)
+            return []
     
     def _structure_content(self) -> Dict:
         """Etapa 3: Estruturação do conteúdo"""
