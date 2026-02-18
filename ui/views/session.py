@@ -10,7 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -117,6 +118,13 @@ class SessionView(QWidget):
         self._manual_book_id: Optional[str] = None
         self._selected_excerpt_for_note: str = ""
         self._selected_excerpt_chapter_path: Optional[Path] = None
+        self._fullscreen_mode = False
+        self._window_was_fullscreen = False
+        self._window_was_maximized = False
+        self._assistant_visible_before_fullscreen = False
+        self._assistant_expanded_in_fullscreen = False
+        self._assistant_should_hide_after_animation = False
+        self._pomodoro_overlay_visible = False
 
         self.pomodoro = self._create_pomodoro()
         self.ui_timer = QTimer(self)
@@ -140,8 +148,10 @@ class SessionView(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        header = QHBoxLayout()
+        self.header_widget = QWidget()
+        header = QHBoxLayout(self.header_widget)
         header.setContentsMargins(6, 4, 6, 2)
         header.setSpacing(4)
         self.title_label = QLabel("Sessão de leitura")  # mantido para estado interno
@@ -180,11 +190,11 @@ class SessionView(QWidget):
         header.addWidget(self.pomodoro_timer_label, alignment=Qt.AlignmentFlag.AlignHCenter)
         header.addStretch()
         header.addWidget(self.controls_menu_button)
-        root.addLayout(header)
+        root.addWidget(self.header_widget)
 
-        reading_panel = QFrame()
-        reading_panel.setObjectName("session_reading_panel")
-        reading_layout = QVBoxLayout(reading_panel)
+        self.reading_panel = QFrame()
+        self.reading_panel.setObjectName("session_reading_panel")
+        reading_layout = QVBoxLayout(self.reading_panel)
         reading_layout.setContentsMargins(2, 1, 2, 1)
         reading_layout.setSpacing(2)
 
@@ -216,7 +226,22 @@ class SessionView(QWidget):
         pages_grid.addWidget(self.right_page_text, 1, 1)
         reading_layout.addLayout(pages_grid)
 
-        nav = QHBoxLayout()
+        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
+        self.fullscreen_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fullscreen_button.setFixedSize(36, 36)
+        self.fullscreen_button.setStyleSheet(
+            "QPushButton {"
+            "background-color: rgba(35, 39, 51, 0.9); color: #FFFFFF; "
+            "border: 1px solid #4A5263; border-radius: 18px; font-size: 17px;"
+            "}"
+            "QPushButton:hover { background-color: rgba(53, 60, 77, 0.95); }"
+        )
+        self.fullscreen_button.setParent(self.left_page_text.viewport())
+        self.fullscreen_button.raise_()
+
+        self.nav_widget = QWidget()
+        nav = QHBoxLayout(self.nav_widget)
         nav.setContentsMargins(0, 0, 0, 0)
         nav.setSpacing(4)
         self.prev_pages_button = QPushButton("◀ Páginas anteriores")
@@ -226,7 +251,7 @@ class SessionView(QWidget):
         nav.addWidget(self.prev_pages_button)
         nav.addWidget(self.page_pair_label, 1)
         nav.addWidget(self.next_pages_button)
-        reading_layout.addLayout(nav)
+        reading_layout.addWidget(self.nav_widget)
 
         self.assistant_tabs = QTabWidget()
         self.assistant_tabs.setObjectName("session_assistant_tabs")
@@ -292,7 +317,7 @@ class SessionView(QWidget):
         self.assistant_tabs.addTab(self.note_panel, "Anotação")
         reading_layout.addWidget(self.assistant_tabs)
 
-        root.addWidget(reading_panel, 1)
+        root.addWidget(self.reading_panel, 1)
 
         # Menu único com os controles não relacionados à navegação de páginas.
         self.controls_menu = QMenu(self)
@@ -307,8 +332,54 @@ class SessionView(QWidget):
         self.action_chat_toggle = self.controls_menu.addAction("LLM: Mostrar Chat")
         self.action_chat_toggle.setCheckable(True)
 
+        self.pomodoro_overlay = QFrame(self.reading_panel)
+        self.pomodoro_overlay.setStyleSheet("background-color: rgba(10, 12, 18, 160);")
+        self.pomodoro_overlay.hide()
+        self.pomodoro_overlay.mousePressEvent = self._on_pomodoro_overlay_mouse_press
+
+        self.pomodoro_overlay_card = QFrame(self.pomodoro_overlay)
+        self.pomodoro_overlay_card.setStyleSheet(
+            "background-color: #202430; border: 1px solid #4A5263; border-radius: 10px;"
+        )
+        overlay_row = QHBoxLayout(self.pomodoro_overlay_card)
+        overlay_row.setContentsMargins(12, 10, 12, 10)
+        overlay_row.setSpacing(8)
+        self.pomodoro_overlay_toggle_button = QPushButton("▶")
+        self.pomodoro_overlay_toggle_button.setFixedWidth(48)
+        self.pomodoro_overlay_timer_label = QLabel("25:00")
+        self.pomodoro_overlay_timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pomodoro_overlay_timer_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #E8ECF5;")
+        self.pomodoro_overlay_config_button = QPushButton("Configurações")
+        overlay_row.addWidget(self.pomodoro_overlay_toggle_button)
+        overlay_row.addWidget(self.pomodoro_overlay_timer_label, 1)
+        overlay_row.addWidget(self.pomodoro_overlay_config_button)
+
+        self.pomodoro_overlay_animation = QPropertyAnimation(self.pomodoro_overlay_card, b"pos", self)
+        self.pomodoro_overlay_animation.setDuration(220)
+        self.pomodoro_overlay_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self.assistant_slide_animation = QPropertyAnimation(self.assistant_tabs, b"maximumHeight", self)
+        self.assistant_slide_animation.setDuration(230)
+        self.assistant_slide_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.assistant_slide_animation.finished.connect(self._on_assistant_slide_finished)
+
+        self.shortcut_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        self.shortcut_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+        self.shortcut_up = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
+        self.shortcut_down = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
+        self.shortcut_esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        for shortcut in (
+            self.shortcut_left,
+            self.shortcut_right,
+            self.shortcut_up,
+            self.shortcut_down,
+            self.shortcut_esc,
+        ):
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
     def _setup_connections(self):
         self.note_button.clicked.connect(self._open_note_tab)
+        self.fullscreen_button.clicked.connect(self._toggle_fullscreen_mode)
         self.pomodoro_timer_label.clicked.connect(self._toggle_pomodoro_from_timer)
         self.controls_menu_button.clicked.connect(self._open_controls_menu)
         self.action_back_dashboard.triggered.connect(self._on_back_clicked)
@@ -325,6 +396,14 @@ class SessionView(QWidget):
         self.chat_input.returnPressed.connect(self._send_chat_message)
         self.note_save_button.clicked.connect(self._save_note_from_tab)
         self.assistant_hide_button.clicked.connect(self._hide_assistant_panels)
+        self.pomodoro_overlay_toggle_button.clicked.connect(self._toggle_pomodoro_from_timer)
+        self.pomodoro_overlay_config_button.clicked.connect(self._open_pomodoro_config_dialog)
+
+        self.shortcut_left.activated.connect(self._on_fullscreen_left)
+        self.shortcut_right.activated.connect(self._on_fullscreen_right)
+        self.shortcut_up.activated.connect(self._on_fullscreen_up)
+        self.shortcut_down.activated.connect(self._on_fullscreen_down)
+        self.shortcut_esc.activated.connect(self._on_fullscreen_escape)
 
         if self.glados_controller:
             self.glados_controller.response_ready.connect(self._on_llm_response)
@@ -336,6 +415,8 @@ class SessionView(QWidget):
         self._session_closed = False
         self.refresh_reading_context()
         self._tick_ui()
+        self._position_fullscreen_button()
+        self._sync_fullscreen_overlays_geometry()
 
     def start_ad_hoc_reading(self, book_dir: Path):
         """Inicia leitura avulsa a partir de um diretório de livro do vault."""
@@ -471,6 +552,38 @@ class SessionView(QWidget):
             self.next_pages_button.setEnabled(right < self.total_pages)
         else:
             self.next_pages_button.setEnabled(True)
+        self._position_fullscreen_button()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_fullscreen_button()
+        self._sync_fullscreen_overlays_geometry()
+
+    def _position_fullscreen_button(self):
+        viewport = self.left_page_text.viewport()
+        if not viewport:
+            return
+        margin = 10
+        x = margin
+        y = max(margin, viewport.height() - self.fullscreen_button.height() - margin)
+        self.fullscreen_button.move(x, y)
+        self.fullscreen_button.raise_()
+
+    def _sync_fullscreen_overlays_geometry(self):
+        if not hasattr(self, "reading_panel"):
+            return
+        panel_rect = self.reading_panel.rect()
+        self.pomodoro_overlay.setGeometry(panel_rect)
+
+        card_width = min(560, max(320, panel_rect.width() - 100))
+        card_height = 64
+        x = max(8, (panel_rect.width() - card_width) // 2)
+        if self.pomodoro_overlay_card.width() != card_width or self.pomodoro_overlay_card.height() != card_height:
+            self.pomodoro_overlay_card.resize(card_width, card_height)
+        if not self._pomodoro_overlay_visible:
+            self.pomodoro_overlay_card.move(x, -card_height)
+        else:
+            self.pomodoro_overlay_card.move(x, 16)
 
     def _build_page_content(self, page_number: int) -> str:
         if self.total_pages > 0 and page_number > self.total_pages:
@@ -718,15 +831,190 @@ class SessionView(QWidget):
         self._refresh_pages()
         self._sync_progress_realtime()
 
+    def _on_fullscreen_left(self):
+        if not self._fullscreen_mode:
+            return
+        self._go_prev_pages()
+
+    def _on_fullscreen_right(self):
+        if not self._fullscreen_mode:
+            return
+        self._go_next_pages()
+
+    def _on_fullscreen_up(self):
+        if not self._fullscreen_mode:
+            return
+        self._toggle_fullscreen_assistant_panel()
+
+    def _on_fullscreen_down(self):
+        if not self._fullscreen_mode:
+            return
+        self._open_pomodoro_dropdown()
+
+    def _on_fullscreen_escape(self):
+        if not self._fullscreen_mode:
+            return
+        self._set_fullscreen_mode(False)
+
+    def _toggle_fullscreen_mode(self):
+        self._set_fullscreen_mode(not self._fullscreen_mode)
+
+    def _set_fullscreen_mode(self, enabled: bool):
+        main_window = self.window()
+        if enabled and self._fullscreen_mode:
+            return
+        if not enabled and not self._fullscreen_mode:
+            return
+
+        if enabled:
+            self._assistant_visible_before_fullscreen = self.assistant_tabs.isVisible()
+            self._window_was_fullscreen = bool(getattr(main_window, "isFullScreen", lambda: False)())
+            self._window_was_maximized = bool(getattr(main_window, "isMaximized", lambda: False)())
+            self._fullscreen_mode = True
+            self.header_widget.setVisible(False)
+            self.nav_widget.setVisible(False)
+            self._assistant_expanded_in_fullscreen = False
+            self.assistant_tabs.setMaximumHeight(0)
+            self.assistant_tabs.setVisible(False)
+            self.fullscreen_button.setText("🡽")
+            self.fullscreen_button.setToolTip("Sair do fullscreen (ESC)")
+            self._toggle_main_window_chrome(hidden=True)
+            if hasattr(main_window, "showFullScreen") and not self._window_was_fullscreen:
+                main_window.showFullScreen()
+        else:
+            self._hide_fullscreen_pomodoro_overlay(immediate=True)
+            self._set_fullscreen_assistant_visible(False, animate=False)
+            self._fullscreen_mode = False
+            self.header_widget.setVisible(True)
+            self.nav_widget.setVisible(True)
+            self.assistant_tabs.setMaximumHeight(16777215)
+            self.fullscreen_button.setText("⛶")
+            self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
+            self._toggle_main_window_chrome(hidden=False)
+            if self._assistant_visible_before_fullscreen:
+                self.assistant_tabs.setVisible(True)
+            if not self._window_was_fullscreen:
+                if self._window_was_maximized and hasattr(main_window, "showMaximized"):
+                    main_window.showMaximized()
+                elif hasattr(main_window, "showNormal"):
+                    main_window.showNormal()
+            self._window_was_fullscreen = False
+            self._window_was_maximized = False
+
+        self._position_fullscreen_button()
+        self._sync_fullscreen_overlays_geometry()
+
+    def _toggle_main_window_chrome(self, hidden: bool):
+        main_window = self.window()
+        if hasattr(main_window, "title_bar"):
+            main_window.title_bar.setVisible(not hidden)
+        separator = main_window.findChild(QFrame, "title_separator") if hasattr(main_window, "findChild") else None
+        if separator:
+            separator.setVisible(not hidden)
+        if hasattr(main_window, "statusBar") and main_window.statusBar():
+            main_window.statusBar().setVisible(not hidden)
+
+    def _open_pomodoro_dropdown(self):
+        if not self._fullscreen_mode:
+            return
+        if self._pomodoro_overlay_visible:
+            self._hide_fullscreen_pomodoro_overlay()
+            return
+        self._show_fullscreen_pomodoro_overlay()
+
+    def _show_fullscreen_pomodoro_overlay(self):
+        self._pomodoro_overlay_visible = True
+        self.pomodoro_overlay.show()
+        self.pomodoro_overlay.raise_()
+        self._sync_fullscreen_overlays_geometry()
+
+        start_pos = self.pomodoro_overlay_card.pos()
+        end_pos = QPoint(start_pos.x(), 16)
+        self.pomodoro_overlay_animation.stop()
+        self.pomodoro_overlay_animation.setStartValue(start_pos)
+        self.pomodoro_overlay_animation.setEndValue(end_pos)
+        self.pomodoro_overlay_animation.start()
+
+    def _hide_fullscreen_pomodoro_overlay(self, immediate: bool = False):
+        if not self._pomodoro_overlay_visible and not self.pomodoro_overlay.isVisible():
+            return
+        self._pomodoro_overlay_visible = False
+        self.pomodoro_overlay_animation.stop()
+
+        if immediate:
+            self.pomodoro_overlay.hide()
+            self._sync_fullscreen_overlays_geometry()
+            return
+
+        start_pos = self.pomodoro_overlay_card.pos()
+        end_pos = QPoint(start_pos.x(), -self.pomodoro_overlay_card.height())
+        self.pomodoro_overlay_animation.setStartValue(start_pos)
+        self.pomodoro_overlay_animation.setEndValue(end_pos)
+        self.pomodoro_overlay_animation.start()
+        QTimer.singleShot(self.pomodoro_overlay_animation.duration(), self.pomodoro_overlay.hide)
+
+    def _on_pomodoro_overlay_mouse_press(self, event):
+        if self.pomodoro_overlay_card.geometry().contains(event.pos()):
+            event.ignore()
+            return
+        self._hide_fullscreen_pomodoro_overlay()
+        event.accept()
+
+    def _toggle_fullscreen_assistant_panel(self):
+        if not self._fullscreen_mode:
+            return
+        self._set_fullscreen_assistant_visible(not self._assistant_expanded_in_fullscreen, animate=True)
+
+    def _set_fullscreen_assistant_visible(self, visible: bool, animate: bool = True):
+        if not self._fullscreen_mode:
+            self.assistant_tabs.setVisible(visible)
+            return
+
+        target_height = 0 if not visible else self._assistant_target_height()
+        self._assistant_expanded_in_fullscreen = visible
+        if visible:
+            self.assistant_tabs.setVisible(True)
+
+        self.assistant_slide_animation.stop()
+        self._assistant_should_hide_after_animation = not visible
+        if animate:
+            self.assistant_slide_animation.setStartValue(self.assistant_tabs.maximumHeight())
+            self.assistant_slide_animation.setEndValue(target_height)
+            self.assistant_slide_animation.start()
+        else:
+            self.assistant_tabs.setMaximumHeight(target_height)
+            if not visible:
+                self.assistant_tabs.setVisible(False)
+            self._assistant_should_hide_after_animation = False
+
+    def _assistant_target_height(self) -> int:
+        panel_height = max(0, self.reading_panel.height())
+        return max(180, min(420, int(panel_height * 0.38)))
+
+    def _on_assistant_slide_finished(self):
+        if self._assistant_should_hide_after_animation and self.assistant_tabs.maximumHeight() <= 0:
+            self.assistant_tabs.setVisible(False)
+        self._assistant_should_hide_after_animation = False
+
     def _toggle_chat(self, checked: bool):
-        self.assistant_tabs.setVisible(checked)
-        if checked:
-            self.assistant_tabs.setCurrentWidget(self.chat_panel)
+        if self._fullscreen_mode:
+            if checked:
+                self.assistant_tabs.setCurrentWidget(self.chat_panel)
+            self._set_fullscreen_assistant_visible(checked, animate=True)
+        else:
+            self.assistant_tabs.setVisible(checked)
+            if checked:
+                self.assistant_tabs.setCurrentWidget(self.chat_panel)
         self.action_chat_toggle.setText("LLM: Ocultar Chat" if checked else "LLM: Mostrar Chat")
         if self.action_chat_toggle.isChecked() != checked:
             self.action_chat_toggle.setChecked(checked)
 
     def _hide_assistant_panels(self):
+        if self._fullscreen_mode:
+            self._set_fullscreen_assistant_visible(False, animate=True)
+            if self.action_chat_toggle.isChecked():
+                self.action_chat_toggle.setChecked(False)
+            return
         self._toggle_chat(False)
 
     def _toggle_pomodoro_from_timer(self):
@@ -824,8 +1112,12 @@ class SessionView(QWidget):
             self._create_template_note("conversation.md", "conversation_template")
 
     def _open_note_tab(self):
-        self.action_chat_toggle.setChecked(True)
-        self.assistant_tabs.setVisible(True)
+        if not self.action_chat_toggle.isChecked():
+            self.action_chat_toggle.setChecked(True)
+        if self._fullscreen_mode:
+            self._set_fullscreen_assistant_visible(True, animate=True)
+        else:
+            self.assistant_tabs.setVisible(True)
         self.assistant_tabs.setCurrentWidget(self.note_panel)
 
         if not self.note_title_input.text().strip():
@@ -833,6 +1125,15 @@ class SessionView(QWidget):
 
         self.note_editor.setPlainText("Gerando template com contexto da sessão...")
         self._request_note_draft_from_llm()
+
+    def _open_chat_tab(self):
+        if not self.action_chat_toggle.isChecked():
+            self.action_chat_toggle.setChecked(True)
+        if self._fullscreen_mode:
+            self._set_fullscreen_assistant_visible(True, animate=True)
+        else:
+            self._toggle_chat(True)
+        self.assistant_tabs.setCurrentWidget(self.chat_panel)
 
     def _request_note_draft_from_llm(self):
         context = self._build_chapter_context()
@@ -1237,11 +1538,16 @@ class SessionView(QWidget):
 
         if not self.pomodoro:
             self.pomodoro_timer_label.setText("--:--")
+            self.pomodoro_overlay_timer_label.setText("--:--")
+            self.pomodoro_overlay_toggle_button.setText("▶")
             return
 
         if not self.pomodoro.is_running or not self.pomodoro.start_time:
             total_seconds = self.pomodoro._get_duration_for_type("work")
-            self.pomodoro_timer_label.setText(self._format_mmss(total_seconds))
+            timer_text = self._format_mmss(total_seconds)
+            self.pomodoro_timer_label.setText(timer_text)
+            self.pomodoro_overlay_timer_label.setText(timer_text)
+            self.pomodoro_overlay_toggle_button.setText("▶")
             return
 
         now = time.time()
@@ -1249,17 +1555,22 @@ class SessionView(QWidget):
         total_seconds = self.pomodoro._get_duration_for_type(self.pomodoro.current_session_type)
         remaining = max(int(total_seconds - elapsed), 0)
 
-        self.pomodoro_timer_label.setText(self._format_mmss(remaining))
+        timer_text = self._format_mmss(remaining)
+        self.pomodoro_timer_label.setText(timer_text)
+        self.pomodoro_overlay_timer_label.setText(timer_text)
+        self.pomodoro_overlay_toggle_button.setText("▶" if self.pomodoro.is_paused else "⏸")
 
     def _format_mmss(self, seconds: int) -> str:
         minutes, sec = divmod(max(seconds, 0), 60)
         return f"{minutes:02d}:{sec:02d}"
 
     def _on_back_clicked(self):
+        self._set_fullscreen_mode(False)
         self._finalize_session()
         self.navigate_to.emit("dashboard")
 
     def _on_end_session_clicked(self):
+        self._set_fullscreen_mode(False)
         self._finalize_session()
         self.navigate_to.emit("dashboard")
 
@@ -1318,6 +1629,7 @@ class SessionView(QWidget):
             logger.warning("Falha ao sincronizar progresso (%s): %s", page, exc)
 
     def cleanup(self):
+        self._set_fullscreen_mode(False)
         self._finalize_session()
 
         if self.ui_timer.isActive():
