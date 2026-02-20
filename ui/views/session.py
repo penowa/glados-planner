@@ -8,11 +8,12 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,18 +24,27 @@ from PyQt6.QtWidgets import (
     QMenu,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QProgressBar,
     QSpinBox,
+    QScrollArea,
     QTabWidget,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from core.modules.mindmap_review_module import (
+    MindmapReviewModule,
+)
 from core.modules.pomodoro_timer import PomodoroTimer
+from core.modules.review_system import ReviewSystem
 
 logger = logging.getLogger("GLaDOS.UI.SessionView")
 
@@ -90,6 +100,335 @@ class PomodoroConfigDialog(QDialog):
         }
 
 
+class ReviewGenerationDialog(QDialog):
+    """Configura geração de revisão com seleção de contexto."""
+
+    def __init__(
+        self,
+        chapter_name: str,
+        default_difficulty: int,
+        default_notes: list[Dict[str, str]],
+        base_context_chars: int,
+        max_context_chars: int,
+        search_callback: Callable[[str], list[Dict[str, str]]],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Configurar geração de revisão")
+        self.setModal(True)
+        self.resize(860, 640)
+
+        self._search_callback = search_callback
+        self._base_context_chars = max(0, int(base_context_chars))
+        self._max_context_chars = max(1200, int(max_context_chars))
+        self._note_keys: set[str] = set()
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        intro = QLabel(
+            f"Capítulo: {chapter_name}\n"
+            "Ajuste a revisão, confira o contexto e adicione notas extras antes de gerar."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.difficulty_combo = QComboBox()
+        self.difficulty_combo.addItem("1 - Muito fácil", 1)
+        self.difficulty_combo.addItem("2 - Fácil", 2)
+        self.difficulty_combo.addItem("3 - Médio", 3)
+        self.difficulty_combo.addItem("4 - Difícil", 4)
+        self.difficulty_combo.addItem("5 - Muito difícil", 5)
+        self.difficulty_combo.setCurrentIndex(max(0, min(int(default_difficulty) - 1, 4)))
+
+        form.addRow("Material:", QLabel("Resumo de revisão"))
+        form.addRow("Dificuldade do capítulo:", self.difficulty_combo)
+        layout.addLayout(form)
+
+        meter_row = QHBoxLayout()
+        self.context_meter_label = QLabel("Contexto estimado: 0 chars")
+        self.context_meter_bar = QProgressBar()
+        self.context_meter_bar.setRange(0, 100)
+        self.context_meter_bar.setValue(0)
+        meter_row.addWidget(self.context_meter_label, 1)
+        meter_row.addWidget(self.context_meter_bar, 1)
+        layout.addLayout(meter_row)
+
+        capacity_tokens = int(self._max_context_chars / 4)
+        self.context_capacity_label = QLabel(
+            f"Janela estimada da LLM: ~{self._max_context_chars} chars (~{capacity_tokens} tokens)."
+        )
+        layout.addWidget(self.context_capacity_label)
+
+        self.context_tree = QTreeWidget()
+        self.context_tree.setHeaderLabels(["Notas usadas como contexto"])
+        self.context_tree.setRootIsDecorated(False)
+        self.context_tree.setAlternatingRowColors(True)
+        self.context_tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.context_tree.itemChanged.connect(self._on_context_item_changed)
+        layout.addWidget(self.context_tree, 2)
+
+        search_row = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Pesquisar notas no vault...")
+        self.search_input.returnPressed.connect(self._search_notes)
+        self.search_button = QPushButton("Buscar")
+        self.search_button.clicked.connect(self._search_notes)
+        search_row.addWidget(self.search_input, 1)
+        search_row.addWidget(self.search_button)
+        layout.addLayout(search_row)
+
+        self.search_results = QListWidget()
+        self.search_results.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        layout.addWidget(self.search_results, 1)
+
+        add_row = QHBoxLayout()
+        self.search_status_label = QLabel("Notas relacionadas sugeridas carregadas.")
+        self.add_selected_button = QPushButton("Adicionar seleção ao contexto")
+        self.add_selected_button.clicked.connect(self._add_selected_search_results)
+        add_row.addWidget(self.search_status_label, 1)
+        add_row.addWidget(self.add_selected_button)
+        layout.addLayout(add_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        for note in default_notes:
+            self._add_context_note(note, checked=True)
+        self._update_context_meter()
+
+    def _note_key(self, note: Dict[str, str]) -> str:
+        path = (note.get("path") or "").strip()
+        if path:
+            return path
+        return f"title::{(note.get('title') or '').strip().lower()}"
+
+    def _add_context_note(self, note: Dict[str, str], checked: bool):
+        key = self._note_key(note)
+        if key in self._note_keys:
+            return
+        self._note_keys.add(key)
+
+        title = (note.get("title") or "Sem título").strip()
+        source = (note.get("source") or "Selecionada").strip()
+        display_path = (note.get("display_path") or note.get("path") or "").strip()
+        text = f"{title} [{source}]"
+        if display_path:
+            text = f"{text} — {display_path}"
+
+        item = QTreeWidgetItem([text])
+        item.setData(0, Qt.ItemDataRole.UserRole, note)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        snippet = (note.get("content") or "").strip()
+        if snippet:
+            item.setToolTip(0, snippet[:500])
+        self.context_tree.addTopLevelItem(item)
+
+    def _search_notes(self):
+        query = self.search_input.text().strip()
+        if not query:
+            self.search_status_label.setText("Digite um termo para buscar notas.")
+            return
+
+        try:
+            results = self._search_callback(query)
+        except Exception as exc:
+            self.search_results.clear()
+            self.search_status_label.setText(f"Erro na busca: {exc}")
+            return
+
+        self.search_results.clear()
+        for note in results:
+            title = (note.get("title") or "Sem título").strip()
+            display_path = (note.get("display_path") or note.get("path") or "").strip()
+            item = QListWidgetItem(f"{title} — {display_path}" if display_path else title)
+            item.setData(Qt.ItemDataRole.UserRole, note)
+            snippet = (note.get("content") or "").strip()
+            if snippet:
+                item.setToolTip(snippet[:500])
+            self.search_results.addItem(item)
+
+        self.search_status_label.setText(
+            f"{self.search_results.count()} nota(s) encontrada(s). Selecione e adicione ao contexto."
+        )
+
+    def _add_selected_search_results(self):
+        selected_items = self.search_results.selectedItems()
+        if not selected_items:
+            self.search_status_label.setText("Selecione pelo menos uma nota da busca.")
+            return
+
+        added = 0
+        for item in selected_items:
+            note = item.data(Qt.ItemDataRole.UserRole) or {}
+            before = len(self._note_keys)
+            self._add_context_note(note, checked=True)
+            if len(self._note_keys) > before:
+                added += 1
+
+        self._update_context_meter()
+        self.search_status_label.setText(f"{added} nota(s) adicionada(s) ao contexto.")
+
+    def _on_context_item_changed(self, _item: QTreeWidgetItem, _column: int):
+        self._update_context_meter()
+
+    def _selected_notes(self) -> list[Dict[str, str]]:
+        selected: list[Dict[str, str]] = []
+        for idx in range(self.context_tree.topLevelItemCount()):
+            item = self.context_tree.topLevelItem(idx)
+            if item.checkState(0) != Qt.CheckState.Checked:
+                continue
+            note = item.data(0, Qt.ItemDataRole.UserRole) or {}
+            if isinstance(note, dict):
+                selected.append(note)
+        return selected
+
+    def _update_context_meter(self):
+        selected = self._selected_notes()
+        dynamic_chars = 0
+        for note in selected:
+            estimate = int(note.get("estimated_chars") or 0)
+            if estimate <= 0:
+                estimate = len((note.get("title") or "")) + len((note.get("content") or "")) + 48
+            dynamic_chars += estimate
+
+        used_chars = self._base_context_chars + dynamic_chars
+        used_tokens = int(used_chars / 4)
+        capacity_tokens = int(self._max_context_chars / 4)
+        ratio = int((used_chars / max(self._max_context_chars, 1)) * 100)
+        bounded_ratio = max(0, min(100, ratio))
+
+        self.context_meter_bar.setValue(bounded_ratio)
+        self.context_meter_label.setText(
+            f"Contexto estimado: {used_chars}/{self._max_context_chars} chars "
+            f"(~{used_tokens}/{capacity_tokens} tokens)"
+        )
+
+        if ratio >= 95:
+            self.context_meter_bar.setStyleSheet("QProgressBar::chunk { background-color: #B03030; }")
+        elif ratio >= 80:
+            self.context_meter_bar.setStyleSheet("QProgressBar::chunk { background-color: #B8882A; }")
+        else:
+            self.context_meter_bar.setStyleSheet("")
+
+    def get_values(self) -> Dict[str, Any]:
+        difficulty = int(self.difficulty_combo.currentData() or 3)
+        return {
+            "chapter_difficulty": max(1, min(difficulty, 5)),
+            "selected_notes": self._selected_notes(),
+        }
+
+
+class ManualQuestionsDialog(QDialog):
+    """Diálogo para criação manual de perguntas e respostas."""
+
+    def __init__(self, chapter_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Criar perguntas manualmente")
+        self.setModal(True)
+        self.resize(760, 560)
+        self._rows: list[Dict[str, Any]] = []
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            f"Capítulo: {chapter_name}\n"
+            "Adicione pares de pergunta e resposta. Você pode criar quantos quiser."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.rows_layout = QVBoxLayout(self.scroll_content)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(8)
+        self.scroll.setWidget(self.scroll_content)
+        layout.addWidget(self.scroll, 1)
+
+        add_row = QHBoxLayout()
+        self.add_button = QPushButton("Adicionar pergunta")
+        self.add_button.clicked.connect(lambda: self._add_row())
+        add_row.addWidget(self.add_button)
+        add_row.addStretch(1)
+        layout.addLayout(add_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._add_row()
+
+    def _add_row(self, question: str = "", answer: str = ""):
+        card = QFrame()
+        card.setObjectName("manual_question_card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 8, 8, 8)
+        card_layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        index_label = QLabel(f"Item {len(self._rows) + 1}")
+        remove_btn = QPushButton("Remover")
+        remove_btn.setFixedWidth(90)
+        header.addWidget(index_label)
+        header.addStretch(1)
+        header.addWidget(remove_btn)
+        card_layout.addLayout(header)
+
+        q_input = QLineEdit()
+        q_input.setPlaceholderText("Pergunta")
+        q_input.setText(question)
+        card_layout.addWidget(q_input)
+
+        a_input = QLineEdit()
+        a_input.setPlaceholderText("Resposta")
+        a_input.setText(answer)
+        card_layout.addWidget(a_input)
+
+        row = {
+            "card": card,
+            "index_label": index_label,
+            "question_input": q_input,
+            "answer_input": a_input,
+            "remove_button": remove_btn,
+        }
+        remove_btn.clicked.connect(lambda _checked=False, r=row: self._remove_row(r))
+        self._rows.append(row)
+        self.rows_layout.addWidget(card)
+        self._refresh_labels()
+
+    def _remove_row(self, row: Dict[str, Any]):
+        if len(self._rows) <= 1:
+            return
+        self._rows.remove(row)
+        row["card"].setParent(None)
+        row["card"].deleteLater()
+        self._refresh_labels()
+
+    def _refresh_labels(self):
+        for idx, row in enumerate(self._rows, start=1):
+            row["index_label"].setText(f"Item {idx}")
+
+    def get_values(self) -> list[Dict[str, str]]:
+        values: list[Dict[str, str]] = []
+        for row in self._rows:
+            question = row["question_input"].text().strip()
+            answer = row["answer_input"].text().strip()
+            if not question or not answer:
+                continue
+            values.append({"question": question, "answer": answer})
+        return values
+
+
 class SessionView(QWidget):
     """Tela de sessão com leitura em dupla página, Pomodoro e chat LLM."""
 
@@ -102,6 +441,7 @@ class SessionView(QWidget):
         super().__init__(parent)
         self.controllers = controllers or {}
         self.reading_controller = self.controllers.get("reading")
+        self.agenda_controller = self.controllers.get("agenda")
         self.glados_controller = self.controllers.get("glados")
 
         self.current_book_id: Optional[str] = None
@@ -123,6 +463,7 @@ class SessionView(QWidget):
         self._manual_book_id: Optional[str] = None
         self._selected_excerpt_for_note: str = ""
         self._selected_excerpt_chapter_path: Optional[Path] = None
+        self._excerpt_note_capture_mode = False
         self._fullscreen_mode = False
         self._window_was_fullscreen = False
         self._window_was_maximized = False
@@ -131,12 +472,20 @@ class SessionView(QWidget):
         self._assistant_should_hide_after_animation = False
         self._pomodoro_overlay_visible = False
         self._review_generation_active = False
-        self._review_queue: list[Dict[str, str]] = []
+        self._review_queue: list[Dict[str, Any]] = []
         self._review_current_task_index = 0
         self._review_context_payload = ""
-        self._review_inflight_task: Optional[Dict[str, str]] = None
+        self._review_inflight_task: Optional[Dict[str, Any]] = None
         self._review_waiting_cache_clear = False
         self._review_llm_inflight = False
+        self._review_started_monotonic: Optional[float] = None
+        self._review_retry_max_attempts = 2
+        self._review_chapter_difficulty = 3
+        self._review_context_note_selection: list[Dict[str, str]] = []
+        self._review_backend_metadata: Dict[str, Any] = {}
+        self._review_summary_saved_in_run = False
+        self.mindmap_review_module = MindmapReviewModule()
+        self.review_system = self._resolve_review_system()
 
         self.pomodoro = self._create_pomodoro()
         self.ui_timer = QTimer(self)
@@ -155,6 +504,88 @@ class SessionView(QWidget):
         except Exception as exc:
             logger.warning("Falha ao inicializar Pomodoro com reading_manager: %s", exc)
         return None
+
+    def _resolve_review_system(self) -> Optional[ReviewSystem]:
+        try:
+            if self.agenda_controller and getattr(self.agenda_controller, "agenda_manager", None):
+                manager = self.agenda_controller.agenda_manager
+                if getattr(manager, "review_system", None):
+                    return manager.review_system
+        except Exception:
+            pass
+
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return None
+
+        try:
+            return ReviewSystem(str(self.reading_controller.reading_manager.vault_path))
+        except Exception as exc:
+            logger.warning("Falha ao resolver ReviewSystem na SessionView: %s", exc)
+            return None
+
+    def _current_chapter_key_for_review(self) -> str:
+        chapter_path = self._resolve_active_chapter_path()
+        if chapter_path and chapter_path.exists():
+            return chapter_path.stem
+        chapter_number = self._current_chapter_number()
+        if chapter_number > 0:
+            return f"capitulo-{chapter_number:02d}"
+        return "capitulo-geral"
+
+    def _current_chapter_title_for_review(self) -> str:
+        chapter_path = self._resolve_active_chapter_path()
+        if chapter_path and chapter_path.exists():
+            return chapter_path.stem
+        chapter_number = self._current_chapter_number()
+        if chapter_number > 0:
+            return f"Capítulo {chapter_number}"
+        return "Capítulo atual"
+
+    def _register_chapter_difficulty(self, source_note_path: Optional[Path] = None):
+        if not self.review_system or not hasattr(self.review_system, "upsert_chapter_difficulty"):
+            return
+
+        book_id = str(self.current_book_id or self._manual_book_id or "").strip()
+        if not book_id:
+            return
+
+        try:
+            self.review_system.upsert_chapter_difficulty(
+                book_id=book_id,
+                chapter_key=self._current_chapter_key_for_review(),
+                chapter_title=self._current_chapter_title_for_review(),
+                difficulty=int(self._review_chapter_difficulty or 3),
+                source_path=str(source_note_path) if source_note_path else "",
+            )
+        except Exception as exc:
+            logger.debug("Falha ao registrar dificuldade do capítulo: %s", exc)
+
+    def _register_manual_questions_with_review_system(
+        self,
+        entries: list[Dict[str, str]],
+        note_path: Optional[Path] = None,
+    ):
+        if not entries:
+            return
+        if not self.review_system or not hasattr(self.review_system, "register_manual_questions"):
+            return
+
+        book_id = str(self.current_book_id or self._manual_book_id or "").strip()
+        if not book_id:
+            return
+
+        try:
+            self.review_system.register_manual_questions(
+                book_id=book_id,
+                chapter_key=self._current_chapter_key_for_review(),
+                chapter_title=self._current_chapter_title_for_review(),
+                difficulty=int(self._review_chapter_difficulty or 3),
+                source_path=str(note_path) if note_path else "",
+                questions=entries,
+                tags=["manual", "session"],
+            )
+        except Exception as exc:
+            logger.debug("Falha ao registrar perguntas manuais: %s", exc)
 
     def _setup_ui(self):
         root = QVBoxLayout(self)
@@ -295,6 +726,8 @@ class SessionView(QWidget):
         self.chat_preset_combo.addItems(["Rápido", "Balanceado", "Qualidade"])
         self.chat_preset_combo.setCurrentText("Balanceado")
         self.chat_preset_combo.setFixedWidth(130)
+        self.chat_mindmap_button = QPushButton("Mapa mental")
+        self.chat_mindmap_button.setToolTip("Criar/atualizar mapa mental da obra")
         self.chat_mark_review_button = QPushButton("Marcar para revisão")
         self.chat_send_button = QPushButton("Enviar")
         self.chat_status_label = QLabel("LLM pronta")
@@ -312,6 +745,7 @@ class SessionView(QWidget):
         input_row = QHBoxLayout()
         input_row.addWidget(self.chat_input, 1)
         input_row.addWidget(self.chat_preset_combo)
+        input_row.addWidget(self.chat_mindmap_button)
         input_row.addWidget(self.chat_mark_review_button)
         input_row.addWidget(self.chat_send_button)
 
@@ -335,6 +769,10 @@ class SessionView(QWidget):
         note_header.addWidget(self.note_title_input, 1)
         note_header.addWidget(self.note_save_button)
 
+        self.note_capture_hint = QLabel("")
+        self.note_capture_hint.setWordWrap(True)
+        self.note_capture_hint.setVisible(False)
+
         self.note_editor = QTextEdit()
         self.note_editor.setPlaceholderText("Escreva sua anotação aqui...")
         self.note_editor.setStyleSheet(
@@ -343,6 +781,7 @@ class SessionView(QWidget):
         )
 
         note_layout.addLayout(note_header)
+        note_layout.addWidget(self.note_capture_hint)
         note_layout.addWidget(self.note_editor, 1)
 
         self.assistant_tabs.addTab(self.chat_panel, "Chat")
@@ -437,6 +876,7 @@ class SessionView(QWidget):
         self.prev_pages_button.clicked.connect(self._go_prev_pages)
         self.next_pages_button.clicked.connect(self._go_next_pages)
         self.chat_send_button.clicked.connect(self._send_chat_message)
+        self.chat_mindmap_button.clicked.connect(self._handle_mindmap_button_clicked)
         self.chat_mark_review_button.clicked.connect(self._start_review_generation)
         self.chat_preset_combo.currentTextChanged.connect(self._apply_chat_preset)
         self.chat_input.returnPressed.connect(self._send_chat_message)
@@ -464,6 +904,7 @@ class SessionView(QWidget):
         self._tick_ui()
         self._position_fullscreen_button()
         self._sync_fullscreen_overlays_geometry()
+        self._set_fullscreen_mode(True)
 
     def start_ad_hoc_reading(self, book_dir: Path):
         """Inicia leitura avulsa a partir de um diretório de livro do vault."""
@@ -582,8 +1023,8 @@ class SessionView(QWidget):
 
         self.left_page_title.setText(f"Página {left}")
         self.right_page_title.setText(f"Página {right}")
-        self.left_page_text.setPlainText(self._build_page_content(left))
-        self.right_page_text.setPlainText(self._build_page_content(right))
+        self.left_page_text.setPlainText(self._sanitize_page_display_text(self._build_page_content(left)))
+        self.right_page_text.setPlainText(self._sanitize_page_display_text(self._build_page_content(right)))
 
         self.page_pair_label.setText(f"{left}-{right}")
         total_text = "?" if self.total_pages <= 0 else str(self.total_pages)
@@ -655,6 +1096,13 @@ class SessionView(QWidget):
             return "[Página não encontrada na nota do livro]"
 
         return "[Conteúdo do livro indisponível]"
+
+    def _sanitize_page_display_text(self, text: str) -> str:
+        # Mantém só o rótulo do link na sessão para evitar poluição visual com caminho.
+        clean = text or ""
+        clean = re.sub(r"\[([^\]]+)\]\(\s*<[^>]+>\s*\)", r"[\1]", clean)
+        clean = re.sub(r"\[([^\]]+)\]\(\s*[^)]+\s*\)", r"[\1]", clean)
+        return clean
 
     def _load_book_pages(self, progress: Dict[str, Any]):
         self.page_contents = {}
@@ -1100,8 +1548,257 @@ class SessionView(QWidget):
     def _set_chat_locked(self, locked: bool):
         self.chat_input.setEnabled(not locked)
         self.chat_send_button.setEnabled(not locked)
+        self.chat_mindmap_button.setEnabled(not locked)
         self.chat_mark_review_button.setEnabled(not locked)
         self.chat_preset_combo.setEnabled(not locked)
+
+    def _handle_mindmap_button_clicked(self):
+        if self._review_generation_active:
+            QMessageBox.information(self, "Processamento em andamento", "Aguarde a geração atual terminar.")
+            return
+
+        canvas_path = self._review_target_path("mapa-mental-canva", self.MINDMAPS_DIR)
+        if not canvas_path:
+            QMessageBox.warning(self, "Vault indisponível", "Não foi possível localizar o diretório do vault.")
+            return
+
+        if not canvas_path.exists():
+            self._create_base_mindmap_canvas(canvas_path)
+            return
+
+        self._start_mindmap_incremental_generation(canvas_path)
+
+    def _create_base_mindmap_canvas(self, canvas_path: Path):
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            QMessageBox.warning(self, "Sessão sem livro", "Não foi possível identificar o livro atual.")
+            return
+
+        progress = self._get_progress(self.current_book_id) if self.current_book_id else {}
+        book_dir = self._find_book_directory(progress)
+        preferred_book_note = self._find_primary_book_note(progress) if progress else None
+        sources = self.mindmap_review_module.find_base_sources(
+            book_dir=book_dir,
+            preferred_book_note=preferred_book_note,
+        )
+
+        info_note_status = "OK" if sources.book_note else "FALTANDO"
+        pretext_status = "OK" if sources.pretext_note else "FALTANDO"
+        details = [
+            "Ainda não existe canvas base para esta obra.",
+            "",
+            f"Destino: {self._display_relative_path(canvas_path)}",
+            "",
+            "Arquivos para criação do canvas base:",
+            f"- Nota principal do livro: {info_note_status}",
+            f"- Nota de pré-texto: {pretext_status}",
+            "",
+            "Deseja criar o canvas base agora?",
+        ]
+        if sources.book_note:
+            details.extend(["  arquivo nota do livro:", f"  {self._display_relative_path(sources.book_note)}"])
+        if sources.pretext_note:
+            details.extend(["  arquivo pré-texto:", f"  {self._display_relative_path(sources.pretext_note)}"])
+
+        confirm = QMessageBox.question(
+            self,
+            "Canvas base não encontrado",
+            "\n".join(details),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        if not sources.book_note and not sources.pretext_note:
+            QMessageBox.warning(
+                self,
+                "Arquivos ausentes",
+                "Não encontrei nota do livro nem nota de pré-texto para criar o canvas base.",
+            )
+            return
+
+        vault_root = Path(self.reading_controller.reading_manager.vault_path)
+        canvas_payload = self.mindmap_review_module.build_base_canvas(
+            vault_root=vault_root,
+            book_title=self.current_book_title,
+            book_note=sources.book_note,
+            pretext_note=sources.pretext_note,
+        )
+        filename = self._build_review_filename("mapa-mental-canva", self.MINDMAPS_DIR)
+        note_path = self._write_note_to_personal(
+            self.mindmap_review_module.dump_canvas_json(canvas_payload) + "\n",
+            "mapa-mental-base",
+            target_dir=self.MINDMAPS_DIR,
+            filename_override=filename,
+            overwrite_existing=True,
+        )
+        if not note_path:
+            QMessageBox.warning(
+                self,
+                "Erro ao criar canvas",
+                "Não foi possível salvar o canvas base no diretório de mapas mentais.",
+            )
+            return
+
+        self.chat_history.append(f"Sistema: canvas base criado em {note_path.name}.")
+        QMessageBox.information(
+            self,
+            "Canvas base criado",
+            f"Canvas salvo em {self.MINDMAPS_DIR}/{note_path.name}.",
+        )
+
+    def _start_mindmap_incremental_generation(self, canvas_path: Path):
+        active_chapter_path = self._resolve_active_chapter_path()
+        user_notes = self._collect_chapter_user_notes(active_chapter_path, max_items=4, max_chars=320)
+        summary_path, _summary_text = self._load_summary_note_for_current_chapter(max_chars=900)
+
+        chapter_exists = bool(active_chapter_path and active_chapter_path.exists())
+        user_notes_exists = bool(user_notes)
+        summary_exists = bool(summary_path and summary_path.exists())
+        missing_items: list[str] = []
+        status_lines = [
+            "Arquivos usados para adicionar conteúdo ao mapa mental:",
+            f"- Capítulo atual: {'OK' if chapter_exists else 'FALTANDO'}",
+            f"- Notas do usuário do capítulo: {'OK' if user_notes_exists else 'FALTANDO'}",
+            f"- Resumo LLM do capítulo: {'OK' if summary_exists else 'FALTANDO'}",
+        ]
+        if chapter_exists and active_chapter_path:
+            status_lines.append(f"  arquivo capítulo: {self._display_relative_path(active_chapter_path)}")
+        else:
+            missing_items.append("capítulo atual")
+        if user_notes_exists:
+            status_lines.append(f"  notas encontradas: {len(user_notes)}")
+        else:
+            missing_items.append("notas do usuário")
+        if summary_exists and summary_path:
+            status_lines.append(f"  arquivo resumo: {self._display_relative_path(summary_path)}")
+        else:
+            missing_items.append("resumo LLM")
+        status_lines.append("")
+        if missing_items:
+            status_lines.append("Faltando: " + ", ".join(missing_items) + ".")
+            status_lines.append("")
+        status_lines.append("Deseja continuar com a atualização do mapa mental?")
+
+        confirm = QMessageBox.question(
+            self,
+            "Atualizar mapa mental da obra",
+            "\n".join(status_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        if not chapter_exists and not user_notes_exists and not summary_exists:
+            QMessageBox.warning(
+                self,
+                "Sem conteúdo novo",
+                "Nenhum dos arquivos necessários foi encontrado para atualizar o mapa mental.",
+            )
+            return
+
+        self.chat_status_label.setText("Atualizando mapa mental localmente...")
+        self.chat_history.append("Sistema: atualização de mapa mental iniciada (modo local, sem LLM).")
+
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            QMessageBox.warning(self, "Vault indisponível", "Não foi possível localizar o diretório do vault.")
+            self.chat_status_label.setText("Falha ao atualizar mapa mental")
+            return
+
+        vault_root = Path(self.reading_controller.reading_manager.vault_path)
+        existing_payload = self.mindmap_review_module.load_canvas_payload(canvas_path)
+        merge_result = self.mindmap_review_module.merge_incremental_canvas(
+            payload=existing_payload,
+            vault_root=vault_root,
+            book_title=self.current_book_title,
+            chapter_path=active_chapter_path if chapter_exists else None,
+            user_notes=user_notes,
+            summary_path=summary_path if summary_exists else None,
+        )
+        serialized = self.mindmap_review_module.dump_canvas_json(merge_result.payload) + "\n"
+        saved_path = self._write_note_to_personal(
+            serialized,
+            "mapa-mental-incremental",
+            target_dir=self.MINDMAPS_DIR,
+            filename_override=canvas_path.name,
+            overwrite_existing=True,
+        )
+        if not saved_path:
+            QMessageBox.warning(
+                self,
+                "Erro ao atualizar canvas",
+                "Não foi possível salvar a atualização local do mapa mental.",
+            )
+            self.chat_status_label.setText("Falha ao atualizar mapa mental")
+            return
+
+        self.chat_history.append(
+            "Sistema: mapa mental atualizado localmente "
+            f"(+{merge_result.added_nodes} nó(s), +{merge_result.added_edges} conexão(ões))."
+        )
+        self.chat_status_label.setText("Mapa mental atualizado")
+
+    def _collect_chapter_user_notes(
+        self,
+        chapter_path: Optional[Path],
+        max_items: int = 6,
+        max_chars: int = 320,
+    ) -> list[Dict[str, str]]:
+        if not chapter_path or not chapter_path.exists():
+            return []
+
+        chapter_text = chapter_path.read_text(encoding="utf-8", errors="ignore")
+        links = re.findall(r"\[\[([^\]\|#]+)(?:\|[^\]]+)?(?:#[^\]]+)?\]\]", chapter_text)
+        if not links:
+            return []
+
+        user_notes: list[Dict[str, str]] = []
+        seen = set()
+        for target in links:
+            note_path = self._resolve_wikilink_to_path(target.strip())
+            if not note_path or not note_path.exists() or not note_path.is_file():
+                continue
+            display_path = self._display_relative_path(note_path)
+            if not display_path.startswith(f"{self.USER_NOTES_DIR}/") and display_path != self.USER_NOTES_DIR:
+                continue
+            key = str(note_path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                content = note_path.read_text(encoding="utf-8", errors="ignore").strip()
+            except Exception:
+                continue
+            snippet = self._truncate_text(content, max_chars)
+            user_notes.append(
+                {
+                    "title": note_path.stem,
+                    "path": str(note_path),
+                    "display_path": display_path,
+                    "content": snippet,
+                }
+            )
+            if len(user_notes) >= max_items:
+                break
+        return user_notes
+
+    def _load_summary_note_for_current_chapter(self, max_chars: int = 900) -> tuple[Optional[Path], str]:
+        summary_path = self._review_target_path("resumo", self.REVIEW_DIR)
+        if not summary_path or not summary_path.exists():
+            return None, ""
+        try:
+            content = summary_path.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            return None, ""
+        if not content:
+            return summary_path, ""
+        material = content
+        marker = "## Material"
+        marker_idx = content.find(marker)
+        if marker_idx >= 0:
+            material = content[marker_idx + len(marker) :].strip()
+        return summary_path, self._truncate_text(material, max_chars)
 
     def _start_review_generation(self):
         if self._review_generation_active:
@@ -1111,24 +1808,49 @@ class SessionView(QWidget):
             return
 
         self._hide_review_done_toast()
-        review_context = self._build_review_generation_context()
+        review_plan = self._open_review_generation_dialog()
+        if not review_plan:
+            return
+
+        self._review_chapter_difficulty = int(review_plan.get("chapter_difficulty", 3))
+        self._review_context_note_selection = list(review_plan.get("selected_notes", []))
+        review_context = self._build_review_generation_context(
+            selected_note_entries=self._review_context_note_selection,
+            chapter_difficulty=self._review_chapter_difficulty,
+        )
         if not review_context:
             self.chat_history.append("Sistema: Contexto insuficiente para revisão.")
             return
 
         selected_preset = self.chat_preset_combo.currentText()
         self._apply_chat_preset(selected_preset)
+        self._review_backend_metadata = {
+            "workflow": "review_generation",
+            "book_title": self.current_book_title,
+            "chapter_path": str(self.current_chapter_path) if self.current_chapter_path else "",
+            "chapter_difficulty": self._review_chapter_difficulty,
+            "selected_context_count": len(self._review_context_note_selection),
+            "selected_context_paths": [
+                n.get("path", "")
+                for n in self._review_context_note_selection
+                if isinstance(n, dict) and n.get("path")
+            ],
+            "estimated_context_chars": len(review_context),
+        }
         self._review_context_payload = review_context
         self._review_queue = [
             {"slug": "resumo", "title": "Resumo", "instruction": self._review_instruction_summary()},
-            {"slug": "mapa-mental-canva", "title": "Mapa mental (Canva)", "instruction": self._review_instruction_mindmap()},
-            {"slug": "flashcards", "title": "Flashcards", "instruction": self._review_instruction_flashcards()},
-            {"slug": "perguntas-10", "title": "10 perguntas", "instruction": self._review_instruction_questions()},
         ]
+        self.chat_status_label.setText("Revisão em processamento...")
+        self.chat_history.append(
+            f"Sistema: revisão iniciada com preset '{selected_preset}' (material: resumo)."
+        )
         self._review_current_task_index = 0
         self._review_inflight_task = None
         self._review_waiting_cache_clear = False
         self._review_llm_inflight = False
+        self._review_started_monotonic = time.monotonic()
+        self._review_summary_saved_in_run = False
         self._review_generation_active = True
         self._set_chat_locked(True)
         self.review_step_label.setVisible(True)
@@ -1136,8 +1858,6 @@ class SessionView(QWidget):
         self.review_item_progress.setVisible(True)
         self.review_overall_progress.setValue(0)
         self.review_item_progress.setValue(0)
-        self.chat_status_label.setText("Revisão em processamento...")
-        self.chat_history.append(f"Sistema: revisão iniciada com preset '{selected_preset}'.")
         self._run_next_review_task()
 
     def _run_next_review_task(self):
@@ -1149,6 +1869,8 @@ class SessionView(QWidget):
             return
 
         task = self._review_queue[self._review_current_task_index]
+        if "retry_count" not in task:
+            task["retry_count"] = 0
         self._review_inflight_task = task
         self.review_step_label.setText(
             f"Processando {self._review_current_task_index + 1}/{len(self._review_queue)}: {task['title']}"
@@ -1170,37 +1892,523 @@ class SessionView(QWidget):
         self._review_llm_inflight = True
         self.review_item_progress.setRange(0, 100)
         self.review_item_progress.setValue(30)
+        self._tune_generation_for_review_task(task)
 
-        prompt = (
-            f"{task['instruction']}\n\n"
-            f"Contexto consolidado:\n{self._review_context_payload}\n\n"
-            "Responda apenas com o material solicitado, em markdown limpo."
-        )
-        prompt = self._trim_prompt_for_context_window(prompt, hard_limit_chars=1700)
+        prompt = self._build_review_prompt(task)
         # Sem contexto semântico adicional para não estourar n_ctx.
-        self.glados_controller.ask_glados(prompt, False, "Helio")
+        self.glados_controller.ask_glados(
+            prompt,
+            False,
+            "Helio",
+            request_metadata=self._build_review_task_backend_metadata(task),
+        )
 
-    def _finish_review_generation(self):
+    def _tune_generation_for_review_task(self, task: Dict[str, Any]):
+        backend = getattr(self.glados_controller, "backend", None) if self.glados_controller else None
+        if not backend or not hasattr(backend, "set_generation_params"):
+            return
+        slug = str(task.get("slug") or "")
+        try:
+            if slug == "resumo":
+                backend.set_generation_params(
+                    temperature=0.34,
+                    top_p=0.90,
+                    repeat_penalty=1.12,
+                    max_tokens=260,
+                )
+        except Exception:
+            pass
+
+    def _build_review_task_backend_metadata(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(self._review_backend_metadata or {})
+        payload.update(
+            {
+                "task_slug": task.get("slug", ""),
+                "task_title": task.get("title", ""),
+                "retry_count": int(task.get("retry_count", 0)),
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        return payload
+
+    def _open_review_generation_dialog(self) -> Optional[Dict[str, Any]]:
+        chapter_context = self._build_chapter_context(
+            max_current_chars=700,
+            max_prev_chapters=1,
+            max_prev_chars=240,
+        )
+        if not chapter_context:
+            self.chat_history.append(
+                "Sistema: não foi possível montar contexto do capítulo atual para revisão."
+            )
+            self.chat_status_label.setText("Sem contexto de capítulo para revisão")
+            return None
+
+        active_chapter_path = self._resolve_active_chapter_path()
+        chapter_name = active_chapter_path.name if active_chapter_path else "Capítulo atual"
+        related_notes = self._load_related_note_entries_for_current_chapter(max_items=8, max_chars=320)
+        max_context_chars = self._estimate_llm_context_capacity_chars()
+
+        dialog = ReviewGenerationDialog(
+            chapter_name=chapter_name,
+            default_difficulty=self._review_chapter_difficulty,
+            default_notes=related_notes,
+            base_context_chars=len(chapter_context),
+            max_context_chars=max_context_chars,
+            search_callback=self._search_notes_for_review_dialog,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.get_values()
+
+    def _build_contextual_chat_prompt(self, question: str) -> str:
+        chapter_context = self._build_chapter_context(
+            max_current_chars=850,
+            max_prev_chapters=1,
+            max_prev_chars=260,
+        )
+        if not chapter_context:
+            return question
+        prompt = (
+            "Use o contexto de leitura abaixo para responder a pergunta do usuário.\n\n"
+            f"{chapter_context}\n\n"
+            f"Pergunta do usuário: {question}"
+        )
+        return self._trim_prompt_for_context_window(prompt, hard_limit_chars=1800)
+
+    def _resolve_active_chapter_path(self) -> Optional[Path]:
+        if self.current_chapter_path and self.current_chapter_path.exists():
+            return self.current_chapter_path
+
+        candidates = [
+            self.page_chapter_map.get(self.current_page),
+            self.page_chapter_map.get(self.left_page),
+            self.page_chapter_map.get(max(1, self.current_page - 1)),
+            self.page_chapter_map.get(self.current_page + 1),
+        ]
+        for candidate in candidates:
+            if candidate and candidate.exists():
+                return candidate
+
+        for item in self.chapter_notes:
+            start_page = int(item.get("start_page") or 0)
+            end_page = int(item.get("end_page") or 0)
+            if start_page <= self.current_page <= end_page:
+                path = item.get("path")
+                if path and Path(path).exists():
+                    return Path(path)
+
+        return None
+
+    def _estimate_llm_context_capacity_chars(self) -> int:
+        n_ctx = 2048
+        try:
+            backend = getattr(self.glados_controller, "backend", None)
+            model = getattr(backend, "model", None)
+            config = getattr(model, "config", None)
+            if config and getattr(config, "n_ctx", None):
+                n_ctx = int(config.n_ctx)
+        except Exception:
+            n_ctx = 2048
+        return max(2048, int(n_ctx * 4))
+
+    def _search_notes_for_review_dialog(self, query: str, limit: int = 35) -> list[Dict[str, str]]:
+        vault_root = self._get_vault_root()
+        if not vault_root or not vault_root.exists():
+            return []
+
+        term = (query or "").strip().lower()
+        if len(term) < 2:
+            return []
+
+        md_files = [p for p in vault_root.rglob("*.md") if p.is_file()]
+        title_matches: list[tuple[int, Path]] = []
+        content_candidates: list[Path] = []
+        for file_path in md_files:
+            try:
+                relative = str(file_path.relative_to(vault_root)).replace("\\", "/")
+            except Exception:
+                relative = file_path.name
+            rel_lower = relative.lower()
+            title_lower = file_path.stem.lower()
+
+            score = 0
+            if term in title_lower:
+                score += 8
+            if term in rel_lower:
+                score += 4
+
+            if score > 0:
+                title_matches.append((score, file_path))
+            else:
+                content_candidates.append(file_path)
+
+        title_matches.sort(key=lambda item: (-item[0], str(item[1]).lower()))
+        selected_paths = [path for _, path in title_matches[:limit]]
+
+        if len(selected_paths) < limit:
+            for file_path in content_candidates:
+                try:
+                    text = file_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                idx = text.lower().find(term)
+                if idx < 0:
+                    continue
+                selected_paths.append(file_path)
+                if len(selected_paths) >= limit:
+                    break
+
+        results: list[Dict[str, str]] = []
+        seen = set()
+        for file_path in selected_paths:
+            key = str(file_path)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                text = ""
+            snippet = self._build_search_snippet(text, term, max_chars=260)
+            display_path = ""
+            try:
+                display_path = str(file_path.relative_to(vault_root)).replace("\\", "/")
+            except Exception:
+                display_path = file_path.name
+            results.append(
+                {
+                    "path": str(file_path),
+                    "display_path": display_path,
+                    "title": file_path.stem,
+                    "content": snippet,
+                    "source": "Busca manual",
+                    "estimated_chars": len(snippet) + 80,
+                }
+            )
+        return results[:limit]
+
+    def _build_search_snippet(self, text: str, term: str, max_chars: int = 260) -> str:
+        clean = (text or "").strip()
+        if not clean:
+            return ""
+        idx = clean.lower().find(term.lower())
+        if idx < 0:
+            return self._truncate_text(clean, max_chars)
+        start = max(0, idx - int(max_chars * 0.35))
+        end = min(len(clean), idx + int(max_chars * 0.65))
+        snippet = clean[start:end].replace("\n", " ").strip()
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(clean):
+            snippet = snippet + "..."
+        return self._truncate_text(snippet, max_chars)
+
+    def _get_vault_root(self) -> Optional[Path]:
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return None
+        return Path(self.reading_controller.reading_manager.vault_path)
+
+    def _safe_prompt_char_budget(self, reserve_tokens: int = 760) -> int:
+        n_ctx_tokens = 2048
+        try:
+            backend = getattr(self.glados_controller, "backend", None)
+            model = getattr(backend, "model", None)
+            config = getattr(model, "config", None)
+            if config and getattr(config, "n_ctx", None):
+                n_ctx_tokens = int(config.n_ctx)
+        except Exception:
+            n_ctx_tokens = 2048
+
+        available_tokens = max(420, n_ctx_tokens - max(200, reserve_tokens))
+        estimated_chars = int(available_tokens * 3.0)
+        return max(1200, min(estimated_chars, 5200))
+
+    def _is_gpu_only_runtime(self) -> bool:
+        try:
+            backend = getattr(self.glados_controller, "backend", None)
+            if not backend:
+                return False
+            mode = str(getattr(backend, "runtime_info", {}).get("device_mode", "") or "").lower()
+            if mode:
+                return mode == "gpu_only"
+            model = getattr(backend, "model", None)
+            config = getattr(model, "config", None)
+            return str(getattr(config, "device_mode", "") or "").lower() == "gpu_only"
+        except Exception:
+            return False
+
+    def _compact_context_payload(self, max_chars: int) -> str:
+        payload = (self._review_context_payload or "").strip()
+        if not payload:
+            return ""
+        return self._truncate_text(payload, max(500, max_chars))
+
+    def _build_review_prompt(self, task: Dict[str, Any]) -> str:
+        hard_limit = self._safe_prompt_char_budget(reserve_tokens=760)
+        context_budget = max(700, hard_limit - 1050)
+        compact_context = self._compact_context_payload(context_budget)
+        base_lines = [
+            f"{task['instruction']}",
+            "",
+            f"Contexto consolidado:\n{compact_context}",
+            "",
+        ]
+
+        base_lines.append("Responda apenas com o material solicitado, em markdown limpo.")
+        return self._trim_prompt_for_context_window("\n".join(base_lines), hard_limit_chars=hard_limit)
+
+    def _build_review_repair_prompt(self, task: Dict[str, Any], raw_text: str, reason: str) -> str:
+        slug = task.get("slug", "")
+        retry_count = int(task.get("retry_count", 0))
+        retry_limit = int(task.get("retry_limit") or self._review_retry_max_attempts)
+        compact_mode = "context window" in reason.lower() or "janela de contexto" in reason.lower()
+        hard_limit = self._safe_prompt_char_budget(reserve_tokens=860 if compact_mode else 760)
+        compact_context = self._compact_context_payload(750 if compact_mode else max(800, hard_limit - 1200))
+        compact_raw = self._truncate_text((raw_text or "").strip(), 700 if compact_mode else 1000)
+        header = [
+            f"Correção de formato (tentativa {retry_count}/{retry_limit}) para '{task.get('title', 'item')}'.",
+            f"Falha detectada: {reason}",
+            "",
+        ]
+
+        if slug == "flashcards":
+            body = [
+                "Reescreva para o formato EXATO abaixo, com 12 blocos válidos:",
+                "### Flashcard N",
+                "Frente: ...",
+                "Verso: ...",
+                "Não inclua texto antes/depois dos 12 blocos.",
+                "Evite cartões triviais de metadado (título/autor/página/capítulo) e não use placeholders genéricos.",
+                "",
+                f"Contexto consolidado:\n{compact_context}",
+                "",
+                f"Resposta inválida anterior:\n{compact_raw}",
+            ]
+            return self._trim_prompt_for_context_window("\n".join(header + body), hard_limit_chars=hard_limit)
+
+        if slug == "resumo":
+            body = [
+                "Reescreva no formato EXATO abaixo, sem texto extra e sem raciocínio interno:",
+                "## Síntese",
+                "<texto>",
+                "## Conceitos-chave",
+                "- item",
+                "## Ligações entre capítulos",
+                "<texto>",
+                "## Pontos de dúvida",
+                "- item",
+                "",
+                f"Contexto consolidado:\n{compact_context}",
+                "",
+                f"Resposta inválida anterior:\n{compact_raw}",
+            ]
+            return self._trim_prompt_for_context_window("\n".join(header + body), hard_limit_chars=hard_limit)
+
+        body = [
+            "Reescreva somente no formato solicitado inicialmente.",
+            "Sem comentários extras.",
+            "",
+            f"Resposta inválida anterior:\n{compact_raw}",
+        ]
+        return self._trim_prompt_for_context_window("\n".join(header + body), hard_limit_chars=hard_limit)
+
+    def _retry_review_task_with_format_repair(self, task: Dict[str, Any], raw_text: str, reason: str) -> bool:
+        retry_count = int(task.get("retry_count", 0))
+        retry_limit = self._review_retry_max_attempts
+        if retry_count >= retry_limit:
+            return False
+
+        task["retry_count"] = retry_count + 1
+        task["retry_limit"] = retry_limit
+        self._review_waiting_cache_clear = False
+        self._review_llm_inflight = True
+        self.review_item_progress.setRange(0, 100)
+        self.review_item_progress.setValue(max(self.review_item_progress.value(), 45))
+        self.chat_status_label.setText("Corrigindo formato do item...")
+
+        repair_prompt = self._build_review_repair_prompt(task, raw_text, reason)
+        self.chat_history.append(
+            f"Sistema: tentando corrigir formato de '{task.get('title', 'item')}' ({task['retry_count']}/{retry_limit})."
+        )
+        self.glados_controller.ask_glados(
+            repair_prompt,
+            False,
+            "Helio",
+            request_metadata=self._build_review_task_backend_metadata(task),
+        )
+        return True
+
+    def _finish_review_generation(
+        self,
+        clear_context: bool = True,
+    ):
+        elapsed_seconds = 0.0
+        if self._review_started_monotonic is not None:
+            elapsed_seconds = max(0.0, time.monotonic() - self._review_started_monotonic)
+
         self._review_generation_active = False
         self._review_inflight_task = None
         self._review_waiting_cache_clear = False
         self._review_llm_inflight = False
-        self._review_context_payload = ""
         self._set_chat_locked(False)
-        self.review_step_label.setText("Revisão concluída.")
+        self.review_step_label.setText("Etapa concluída.")
         self.review_overall_progress.setRange(0, 100)
         self.review_item_progress.setRange(0, 100)
         self.review_overall_progress.setValue(100)
         self.review_item_progress.setValue(100)
         self.chat_status_label.setText("LLM pronta")
+
         self.chat_history.append("Sistema: materiais de revisão concluídos.")
+        self.chat_history.append(
+            f"Sistema: tempo total de processamento: {self._format_processing_duration(elapsed_seconds)}."
+        )
+
+        if self._review_summary_saved_in_run:
+            should_create_questions = QMessageBox.question(
+                self,
+                "Resumo concluído",
+                "Resumo salvo com sucesso.\nDeseja criar perguntas manuais agora?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if should_create_questions == QMessageBox.StandardButton.Yes:
+                self._open_manual_questions_dialog()
+
+        self._review_started_monotonic = None
+        self._review_context_payload = "" if clear_context else self._review_context_payload
+        self._review_backend_metadata = {}
+        self._review_queue = []
+        self._review_summary_saved_in_run = False
         if self._fullscreen_mode:
             self._show_review_done_toast()
+
+    def _open_manual_questions_dialog(self):
+        chapter_path = self._resolve_active_chapter_path()
+        chapter_name = chapter_path.name if chapter_path else "Capítulo atual"
+        dialog = ManualQuestionsDialog(chapter_name, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        entries = dialog.get_values()
+        if not entries:
+            QMessageBox.information(
+                self,
+                "Sem conteúdo",
+                "Nenhuma pergunta/resposta válida foi informada.",
+            )
+            return
+
+        note_path = self._save_manual_questions_to_vault(entries)
+        if note_path:
+            self._append_note_link_to_current_chapter(note_path)
+            self._register_manual_questions_with_review_system(entries, note_path)
+            self.chat_history.append(f"Sistema: perguntas manuais salvas em {note_path.name}")
+            QMessageBox.information(
+                self,
+                "Perguntas salvas",
+                f"Perguntas manuais salvas em {self.REVIEW_DIR}/{note_path.name}",
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Erro ao salvar",
+                "Não foi possível salvar as perguntas manuais no vault.",
+            )
+
+    def _save_manual_questions_to_vault(self, entries: list[Dict[str, str]]) -> Optional[Path]:
+        chapter_title = self._current_chapter_title_for_review()
+        lines = [
+            f"# Revisão - Perguntas manuais - {self.current_book_title}",
+            "",
+            f"- Data: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"- Livro: {self.current_book_title}",
+            f"- Capítulo: {chapter_title}",
+            f"- Dificuldade do capítulo (1-5): {int(self._review_chapter_difficulty or 3)}",
+            f"- Página atual: {self.current_page}",
+            "- Tipo: Perguntas manuais",
+            "",
+            "## Material",
+            "",
+        ]
+        valid_entries = 0
+        for idx, item in enumerate(entries, start=1):
+            question = item.get("question", "").strip()
+            answer = item.get("answer", "").strip()
+            if not question or not answer:
+                continue
+            valid_entries += 1
+            lines.extend(
+                [
+                    f"### Pergunta {idx}",
+                    f"Pergunta: {question}",
+                    f"Resposta: {answer}",
+                    "",
+                ]
+            )
+
+        if valid_entries <= 0:
+            return None
+
+        filename = self._build_review_filename("perguntas-manual", self.REVIEW_DIR)
+        return self._write_note_to_personal(
+            "\n".join(lines).strip() + "\n",
+            "revisao-perguntas-manual",
+            target_dir=self.REVIEW_DIR,
+            filename_override=filename,
+        )
+
+    def _abort_review_generation(self, reason: str):
+        elapsed_seconds = 0.0
+        if self._review_started_monotonic is not None:
+            elapsed_seconds = max(0.0, time.monotonic() - self._review_started_monotonic)
+
+        self._review_generation_active = False
+        self._review_inflight_task = None
+        self._review_waiting_cache_clear = False
+        self._review_llm_inflight = False
+        self._review_started_monotonic = None
+        self._review_context_payload = ""
+        self._review_backend_metadata = {}
+        self._set_chat_locked(False)
+        self.review_step_label.setText("Revisão interrompida.")
+        self.review_overall_progress.setRange(0, 100)
+        self.review_item_progress.setRange(0, 100)
+        self.review_item_progress.setValue(0)
+        self.chat_status_label.setText("Revisão interrompida")
+        self.chat_history.append(f"Sistema: revisão interrompida ({reason}).")
+        self.chat_history.append(
+            f"Sistema: tempo total de processamento: {self._format_processing_duration(elapsed_seconds)}."
+        )
+
+    def _format_processing_duration(self, elapsed_seconds: float) -> str:
+        total_seconds = max(0, int(round(elapsed_seconds)))
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"{hours}h {minutes:02d}m {seconds:02d}s"
+        if minutes > 0:
+            return f"{minutes}m {seconds:02d}s"
+        return f"{seconds}s"
 
     def _show_review_done_toast(self):
         self.review_done_toast_label.setText("Materiais de revisão prontos")
         self.review_done_toast.show()
         self._position_review_done_toast()
+
+    def _clear_llm_cache_after_material(self, material_label: str):
+        if not self.glados_controller:
+            return
+        try:
+            self.glados_controller.update_memory("clear_all")
+            self.chat_history.append(
+                f"Sistema: cache da LLM limpo após gerar {material_label}."
+            )
+        except Exception as exc:
+            self.chat_history.append(
+                f"Sistema: falha ao limpar cache da LLM após gerar {material_label}: {exc}"
+            )
 
     def _hide_review_done_toast(self):
         if self.review_done_toast.isVisible():
@@ -1221,7 +2429,8 @@ class SessionView(QWidget):
             return
 
         self._apply_chat_preset(self.chat_preset_combo.currentText())
-        self.glados_controller.ask_glados(question, True, "Helio")
+        prompt = self._build_contextual_chat_prompt(question)
+        self.glados_controller.ask_glados(prompt, False, "Helio")
 
     def _initialize_context_chat(self):
         if self._review_generation_active:
@@ -1268,7 +2477,17 @@ class SessionView(QWidget):
         if not task:
             return
 
+        if self._is_backend_unavailable_response(text):
+            self._abort_review_generation("LLM indisponível no backend atual (gpu_only)")
+            return
+
         if self._is_llm_failure_response(text):
+            if self._retry_review_task_with_format_repair(
+                task,
+                text,
+                "LLM retornou erro/falha de geração",
+            ):
+                return
             self.chat_history.append(f"Sistema: resposta inválida para '{task['title']}', item pulado.")
             self.review_item_progress.setRange(0, 100)
             self.review_item_progress.setValue(0)
@@ -1282,30 +2501,111 @@ class SessionView(QWidget):
 
         self.review_item_progress.setRange(0, 100)
         self.review_item_progress.setValue(100)
-        safe_title = f"Revisão - {task['title']} - {self.current_book_title}"
-        note_content = [
-            f"# {safe_title}",
-            "",
-            f"- Data: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            f"- Livro: {self.current_book_title}",
-            f"- Página atual: {self.current_page}",
-            f"- Tipo: {task['title']}",
-            "",
-            "## Material",
-            text.strip(),
-            "",
-        ]
         target_dir = self.MINDMAPS_DIR if "mapa-mental" in task["slug"] else self.REVIEW_DIR
         filename = self._build_review_filename(task["slug"], target_dir)
-        note_path = self._write_note_to_personal(
-            "\n".join(note_content),
-            f"revisao-{task['slug']}",
-            target_dir=target_dir,
-            filename_override=filename,
-        )
+        note_path: Optional[Path]
+        if task["slug"] == "resumo":
+            normalized_summary, reason = self._normalize_summary_response(text)
+            if not normalized_summary:
+                if self._retry_review_task_with_format_repair(task, text, reason):
+                    return
+                self.chat_history.append(
+                    f"Sistema: resumo rejeitado ({reason}). Material não foi salvo no vault."
+                )
+                self.review_item_progress.setValue(0)
+                self._review_current_task_index += 1
+                self._review_inflight_task = None
+                self._review_llm_inflight = False
+                overall = int((self._review_current_task_index / max(len(self._review_queue), 1)) * 100)
+                self.review_overall_progress.setValue(overall)
+                QTimer.singleShot(120, self._run_next_review_task)
+                return
+
+            safe_title = f"Revisão - {task['title']} - {self.current_book_title}"
+            chapter_title = self._current_chapter_title_for_review()
+            note_content = [
+                f"# {safe_title}",
+                "",
+                f"- Data: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                f"- Livro: {self.current_book_title}",
+                f"- Capítulo: {chapter_title}",
+                f"- Dificuldade do capítulo (1-5): {int(self._review_chapter_difficulty or 3)}",
+                f"- Página atual: {self.current_page}",
+                f"- Tipo: {task['title']}",
+                "",
+                "## Material",
+                normalized_summary.strip(),
+                "",
+            ]
+            note_path = self._write_note_to_personal(
+                "\n".join(note_content),
+                f"revisao-{task['slug']}",
+                target_dir=target_dir,
+                filename_override=filename,
+            )
+        elif task["slug"] == "flashcards":
+            normalized_flashcards, reason = self._normalize_flashcards_response(text)
+            if not normalized_flashcards:
+                if self._retry_review_task_with_format_repair(task, text, reason):
+                    return
+                self.chat_history.append(
+                    f"Sistema: flashcards rejeitados ({reason}). Material não foi salvo no vault."
+                )
+                self.review_item_progress.setValue(0)
+                self._review_current_task_index += 1
+                self._review_inflight_task = None
+                self._review_llm_inflight = False
+                overall = int((self._review_current_task_index / max(len(self._review_queue), 1)) * 100)
+                self.review_overall_progress.setValue(overall)
+                QTimer.singleShot(120, self._run_next_review_task)
+                return
+
+            safe_title = f"Revisão - {task['title']} - {self.current_book_title}"
+            note_content = [
+                f"# {safe_title}",
+                "",
+                f"- Data: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                f"- Livro: {self.current_book_title}",
+                f"- Página atual: {self.current_page}",
+                f"- Tipo: {task['title']}",
+                "",
+                "## Material",
+                normalized_flashcards.strip(),
+                "",
+            ]
+            note_path = self._write_note_to_personal(
+                "\n".join(note_content),
+                f"revisao-{task['slug']}",
+                target_dir=target_dir,
+                filename_override=filename,
+            )
+        else:
+            safe_title = f"Revisão - {task['title']} - {self.current_book_title}"
+            note_content = [
+                f"# {safe_title}",
+                "",
+                f"- Data: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                f"- Livro: {self.current_book_title}",
+                f"- Página atual: {self.current_page}",
+                f"- Tipo: {task['title']}",
+                "",
+                "## Material",
+                text.strip(),
+                "",
+            ]
+            note_path = self._write_note_to_personal(
+                "\n".join(note_content),
+                f"revisao-{task['slug']}",
+                target_dir=target_dir,
+                filename_override=filename,
+            )
         if note_path:
             self._append_note_link_to_current_chapter(note_path)
             self.chat_history.append(f"Sistema: {task['title']} salvo em {note_path.name}")
+            if task["slug"] == "resumo":
+                self._review_summary_saved_in_run = True
+                self._register_chapter_difficulty(note_path)
+                self._clear_llm_cache_after_material(task["title"])
         else:
             self.chat_history.append(f"Sistema: falha ao salvar material de {task['title']}.")
 
@@ -1359,6 +2659,25 @@ class SessionView(QWidget):
         self.chat_history.append(f"GLaDOS [{error_type}]: {error_message}")
         self.chat_status_label.setText("Erro na LLM")
         if self._review_generation_active:
+            if self._is_backend_unavailable_response(error_message):
+                self._abort_review_generation("LLM indisponível no backend atual (gpu_only)")
+                self._pending_note_request = None
+                return
+
+            task = self._review_inflight_task
+            message_lower = (error_message or "").lower()
+            if task and (
+                "context window" in message_lower
+                or "requested tokens" in message_lower
+                or "exceed" in message_lower
+            ):
+                if self._retry_review_task_with_format_repair(
+                    task,
+                    "",
+                    "janela de contexto excedida; gere resposta mais curta e estritamente no formato exigido",
+                ):
+                    return
+
             current_title = (
                 self._review_inflight_task["title"] if self._review_inflight_task else "item atual"
             )
@@ -1378,7 +2697,6 @@ class SessionView(QWidget):
     def _show_notes_menu(self):
         menu = QMenu(self)
         action_summary = menu.addAction("Gerar resumo da sessão (LLM)")
-        action_questions = menu.addAction("Gerar perguntas da sessão (LLM)")
         menu.addSeparator()
         action_tpl_reading = menu.addAction("Nova nota com template: Reading")
         action_tpl_concept = menu.addAction("Nova nota com template: Concept")
@@ -1387,8 +2705,6 @@ class SessionView(QWidget):
         selected = menu.exec(self.controls_menu_button.mapToGlobal(self.controls_menu_button.rect().bottomLeft()))
         if selected == action_summary:
             self._request_llm_generated_note("resumo")
-        elif selected == action_questions:
-            self._request_llm_generated_note("perguntas")
         elif selected == action_tpl_reading:
             self._create_template_note("reading_note.md", "reading_template")
         elif selected == action_tpl_concept:
@@ -1396,7 +2712,23 @@ class SessionView(QWidget):
         elif selected == action_tpl_conversation:
             self._create_template_note("conversation.md", "conversation_template")
 
-    def _open_note_tab(self):
+    def _set_excerpt_note_capture_mode(self, enabled: bool):
+        self._excerpt_note_capture_mode = enabled
+        self.note_title_input.setVisible(not enabled)
+        if enabled:
+            excerpt = self._selected_excerpt_for_note.strip()
+            excerpt_preview = self._truncate_text(excerpt, max_len=180) if excerpt else ""
+            self.note_capture_hint.setText(
+                "Anotação rápida do trecho selecionado.\n"
+                f"Trecho: {excerpt_preview}"
+            )
+            self.note_capture_hint.setVisible(True)
+            self.note_editor.setPlaceholderText("Escreva apenas sua anotação sobre o trecho...")
+        else:
+            self.note_capture_hint.setVisible(False)
+            self.note_editor.setPlaceholderText("Escreva sua anotação aqui...")
+
+    def _open_note_tab(self, excerpt_capture_mode: bool = False):
         if not self.action_chat_toggle.isChecked():
             self.action_chat_toggle.setChecked(True)
         if self._fullscreen_mode:
@@ -1404,9 +2736,16 @@ class SessionView(QWidget):
         else:
             self.assistant_tabs.setVisible(True)
         self.assistant_tabs.setCurrentWidget(self.note_panel)
+        self._set_excerpt_note_capture_mode(excerpt_capture_mode)
 
         if not self.note_title_input.text().strip():
             self.note_title_input.setText(f"Anotação - {self.current_book_title}")
+
+        if excerpt_capture_mode:
+            self.note_editor.clear()
+            self.note_editor.setFocus()
+            self.chat_status_label.setText("Capturando anotação do trecho selecionado")
+            return
 
         self.note_editor.setPlainText("Gerando template com contexto da sessão...")
         self._request_note_draft_from_llm()
@@ -1509,14 +2848,18 @@ class SessionView(QWidget):
 
     def _save_note_from_tab(self):
         title = self.note_title_input.text().strip()
-        content = self.note_editor.toPlainText().strip()
+        user_content = self.note_editor.toPlainText().strip()
 
         if not title:
             QMessageBox.warning(self, "Título obrigatório", "Defina um título para salvar a anotação.")
             return
-        if not content:
+        if not user_content:
             QMessageBox.warning(self, "Conteúdo vazio", "Adicione conteúdo antes de salvar.")
             return
+
+        content = user_content
+        if self._excerpt_note_capture_mode:
+            content = self._build_excerpt_note_document(user_content)
 
         note_path = self._write_note_to_personal_with_title(content, title)
         if not note_path:
@@ -1525,8 +2868,13 @@ class SessionView(QWidget):
 
         if self._selected_excerpt_for_note:
             self._link_excerpt_to_note(note_path, self._selected_excerpt_for_note)
+            self._append_note_link_to_current_chapter(
+                note_path,
+                chapter_path=self._selected_excerpt_chapter_path,
+            )
             self._selected_excerpt_for_note = ""
             self._selected_excerpt_chapter_path = None
+        self._set_excerpt_note_capture_mode(False)
 
         self.chat_history.append(f"Sistema: Nota salva em {note_path.name}")
         QMessageBox.information(
@@ -1553,9 +2901,9 @@ class SessionView(QWidget):
             return
 
         self._selected_excerpt_for_note = selected_text.strip()
-        self._selected_excerpt_chapter_path = self.current_chapter_path
+        self._selected_excerpt_chapter_path = self._resolve_active_chapter_path()
         self.note_title_input.setText(excerpt_title)
-        self._open_note_tab()
+        self._open_note_tab(excerpt_capture_mode=True)
 
     def _normalize_excerpt_title(self, selected_text: str, max_len: int = 80) -> str:
         text = re.sub(r"\s+", " ", selected_text.replace("\u2029", " ")).strip()
@@ -1578,16 +2926,10 @@ class SessionView(QWidget):
             QMessageBox.warning(self, "Contexto indisponível", "Não foi possível montar contexto de capítulos.")
             return
 
-        if mode == "resumo":
-            instruction = (
-                "Gere um resumo estruturado da sessão atual com: síntese, conceitos-chave, "
-                "3 insights e 2 conexões com capítulos anteriores."
-            )
-        else:
-            instruction = (
-                "Gere perguntas de estudo da sessão atual: 8 perguntas (4 compreensão, 2 crítica, 2 aplicação) "
-                "e um gabarito curto."
-            )
+        instruction = (
+            "Gere um resumo estruturado da sessão atual com: síntese, conceitos-chave, "
+            "3 insights e 2 conexões com capítulos anteriores."
+        )
 
         self._pending_note_request = {"mode": mode}
         prompt = f"{instruction}\n\n{context}"
@@ -1602,27 +2944,34 @@ class SessionView(QWidget):
         max_prev_chapters: int = 50,
         max_prev_chars: int = 1800,
     ) -> str:
-        if not self.current_chapter_path:
-            return ""
+        chapter_path = self._resolve_active_chapter_path()
 
         current_idx = -1
         for idx, chapter in enumerate(self.chapter_notes):
-            if chapter["path"] == self.current_chapter_path:
+            if chapter.get("path") == chapter_path:
                 current_idx = idx
                 break
-        if current_idx < 0:
-            return ""
 
-        current_text = self.current_chapter_path.read_text(encoding="utf-8", errors="ignore")
-        previous = self.chapter_notes[:current_idx]
-        if max_prev_chapters >= 0:
-            previous = previous[-max_prev_chapters:] if max_prev_chapters else []
+        if chapter_path and chapter_path.exists():
+            current_text = chapter_path.read_text(encoding="utf-8", errors="ignore")
+        else:
+            current_text = self._build_page_content(self.current_page)
+            if current_text.startswith("[") and current_text.endswith("]"):
+                return ""
+            chapter_path = self.book_source_path if self.book_source_path and self.book_source_path.exists() else None
+
+        previous: list[Dict[str, Any]] = []
+        if current_idx >= 0:
+            previous = self.chapter_notes[:current_idx]
+            if max_prev_chapters >= 0:
+                previous = previous[-max_prev_chapters:] if max_prev_chapters else []
 
         lines = []
         lines.append(f"Livro: {self.current_book_title}")
         lines.append(f"Página atual de leitura: {self.current_page}")
         lines.append("")
-        lines.append(f"Capítulo atual: {self.current_chapter_path.name}")
+        chapter_name = chapter_path.name if chapter_path else f"Página {self.current_page}"
+        lines.append(f"Capítulo atual: {chapter_name}")
         lines.append(self._truncate_text(current_text, max_current_chars))
         lines.append("")
         lines.append("Capítulos anteriores:")
@@ -1639,28 +2988,102 @@ class SessionView(QWidget):
 
         return "\n".join(lines)
 
-    def _build_review_generation_context(self) -> str:
+    def _build_review_generation_context(
+        self,
+        selected_note_entries: Optional[list[Dict[str, str]]] = None,
+        chapter_difficulty: Optional[int] = None,
+    ) -> str:
         chapter_context = self._build_chapter_context(
             max_current_chars=700,
             max_prev_chapters=1,
-            max_prev_chars=240,
+            max_prev_chars=420,
         )
         if not chapter_context:
             return ""
 
-        related_notes = self._load_related_notes_for_current_chapter()
-        lines = [chapter_context, "", "Notas relacionadas ao capítulo atual:"]
-        if not related_notes:
+        effective_difficulty = max(1, min(int(chapter_difficulty or self._review_chapter_difficulty), 5))
+        previous_chapter_excerpt = self._load_previous_chapter_excerpt(max_chars=650)
+        previous_summary = self._load_previous_chapter_review_summary(max_chars=520)
+        related_entries = (
+            selected_note_entries
+            if selected_note_entries is not None
+            else self._load_related_note_entries_for_current_chapter(max_items=4, max_chars=320)
+        )
+        lines = [
+            chapter_context,
+            "",
+            f"Dificuldade percebida do capítulo (escala 1-5): {effective_difficulty}",
+            "",
+            "Capítulo imediatamente anterior (trecho):",
+            previous_chapter_excerpt or "- Não encontrado.",
+            "",
+            "Resumo de revisão do capítulo anterior:",
+            previous_summary or "- Não encontrado.",
+            "",
+            "Notas relacionadas ao capítulo atual:",
+        ]
+        if not related_entries:
             lines.append("- Nenhuma nota relacionada encontrada.")
         else:
-            for note in related_notes:
-                lines.append(f"- {note['title']}")
-                lines.append(note["content"])
+            for note in related_entries:
+                title = note.get("title", "Nota sem título")
+                source = note.get("source", "")
+                source_text = f" [{source}]" if source else ""
+                lines.append(f"- {title}{source_text}")
+                lines.append(note.get("content", ""))
                 lines.append("")
         return "\n".join(lines)
 
+    def _load_previous_chapter_excerpt(self, max_chars: int = 650) -> str:
+        chapter_path = self._resolve_active_chapter_path()
+        if not chapter_path:
+            return ""
+        current_idx = -1
+        for idx, chapter in enumerate(self.chapter_notes):
+            if chapter.get("path") == chapter_path:
+                current_idx = idx
+                break
+        if current_idx <= 0:
+            return ""
+        prev_info = self.chapter_notes[current_idx - 1]
+        prev_path = prev_info.get("path")
+        if not prev_path or not prev_path.exists():
+            return ""
+        try:
+            prev_text = prev_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+        return self._truncate_text(prev_text, max_chars)
+
+    def _load_previous_chapter_review_summary(self, max_chars: int = 520) -> str:
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return ""
+        current_chapter = self._current_chapter_number()
+        if current_chapter <= 1:
+            return ""
+        prev_chapter = current_chapter - 1
+        safe_book = self._sanitize_filename(self.current_book_title)
+        filename = f"{safe_book}.{prev_chapter:02d}_resumo.md"
+        vault_path = Path(self.reading_controller.reading_manager.vault_path)
+        summary_path = vault_path / self.REVIEW_DIR / filename
+        if not summary_path.exists():
+            return ""
+        try:
+            content = summary_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+        return self._truncate_text(content.strip(), max_chars)
+
     def _load_related_notes_for_current_chapter(self) -> list[Dict[str, str]]:
-        chapter_path = self.current_chapter_path
+        entries = self._load_related_note_entries_for_current_chapter(max_items=2, max_chars=320)
+        return [{"title": item["title"], "content": item["content"]} for item in entries]
+
+    def _load_related_note_entries_for_current_chapter(
+        self,
+        max_items: int = 6,
+        max_chars: int = 320,
+    ) -> list[Dict[str, str]]:
+        chapter_path = self._resolve_active_chapter_path()
         if not chapter_path or not chapter_path.exists():
             return []
 
@@ -1683,8 +3106,25 @@ class SessionView(QWidget):
                 content = note_path.read_text(encoding="utf-8", errors="ignore").strip()
             except Exception:
                 continue
-            related.append({"title": note_path.stem, "content": self._truncate_text(content, 320)})
-            if len(related) >= 2:
+            display_path = note_path.name
+            vault_root = self._get_vault_root()
+            if vault_root:
+                try:
+                    display_path = str(note_path.relative_to(vault_root)).replace("\\", "/")
+                except Exception:
+                    display_path = note_path.name
+            truncated = self._truncate_text(content, max_chars)
+            related.append(
+                {
+                    "title": note_path.stem,
+                    "path": str(note_path),
+                    "display_path": display_path,
+                    "content": truncated,
+                    "source": "Relacionado",
+                    "estimated_chars": len(truncated) + 80,
+                }
+            )
+            if len(related) >= max_items:
                 break
         return related
 
@@ -1695,52 +3135,54 @@ class SessionView(QWidget):
         normalized = wikilink_target.strip().replace("\\", "/")
         if not normalized:
             return None
-        if normalized.endswith(".md"):
-            relative = normalized
+        if normalized.endswith(".md") or normalized.endswith(".canvas"):
+            relative_candidates = [normalized]
         else:
-            relative = f"{normalized}.md"
+            relative_candidates = [f"{normalized}.md", f"{normalized}.canvas"]
 
-        candidate = vault_root / relative
-        if candidate.exists():
-            return candidate
+        for relative in relative_candidates:
+            candidate = vault_root / relative
+            if candidate.exists():
+                return candidate
 
-        fallback_paths = [
-            vault_root / self.USER_NOTES_DIR / relative,
-            vault_root / self.USER_NOTES_DIR / Path(relative).name,
-            vault_root / self.REVIEW_DIR / relative,
-            vault_root / self.REVIEW_DIR / Path(relative).name,
-            vault_root / self.MINDMAPS_DIR / relative,
-            vault_root / self.MINDMAPS_DIR / Path(relative).name,
-            vault_root / "05 - Pessoal" / relative,  # retrocompatibilidade
-            vault_root / "05 - Pessoal" / Path(relative).name,
-        ]
-        for path in fallback_paths:
-            if path.exists():
-                return path
+            fallback_paths = [
+                vault_root / self.USER_NOTES_DIR / relative,
+                vault_root / self.USER_NOTES_DIR / Path(relative).name,
+                vault_root / self.REVIEW_DIR / relative,
+                vault_root / self.REVIEW_DIR / Path(relative).name,
+                vault_root / self.MINDMAPS_DIR / relative,
+                vault_root / self.MINDMAPS_DIR / Path(relative).name,
+                vault_root / "05 - Pessoal" / relative,  # retrocompatibilidade
+                vault_root / "05 - Pessoal" / Path(relative).name,
+            ]
+            for path in fallback_paths:
+                if path.exists():
+                    return path
         return None
 
     def _review_instruction_summary(self) -> str:
         return (
-            "Gere um resumo de revisão com 4 seções: síntese, conceitos-chave, ligações entre capítulos, "
-            "e pontos de dúvida. Máximo 350 palavras."
-        )
-
-    def _review_instruction_mindmap(self) -> str:
-        return (
-            "Gere um mapa mental para Canva em formato de lista estruturada: "
-            "NÓ CENTRAL, nós principais, subnós e conexões explícitas (origem -> destino)."
+            "Gere um resumo de revisão com EXATAMENTE 4 seções, sem texto extra e sem raciocínio interno. "
+            "Formato obrigatório:\n"
+            "## Síntese\n"
+            "<texto>\n"
+            "## Conceitos-chave\n"
+            "- item 1\n"
+            "- item 2\n"
+            "## Ligações entre capítulos\n"
+            "<texto>\n"
+            "## Pontos de dúvida\n"
+            "- dúvida 1\n"
+            "- dúvida 2\n"
+            "Máximo de 350 palavras."
         )
 
     def _review_instruction_flashcards(self) -> str:
         return (
-            "Gere 12 flashcards em markdown, um por bloco: "
-            "'Frente:' e 'Verso:'. Misture definição, aplicação e comparação."
-        )
-
-    def _review_instruction_questions(self) -> str:
-        return (
-            "Gere 10 perguntas de revisão (4 compreensão, 3 análise crítica, 3 aplicação) "
-            "com gabarito curto logo abaixo de cada pergunta."
+            "Gere EXATAMENTE 12 flashcards em markdown, sem texto extra antes/depois, no formato: "
+            "### Flashcard N\\nFrente: ...\\nVerso: ...\\n. "
+            "Misture definição, aplicação e comparação. Não inclua blocos de código. "
+            "Evite perguntas de metadado (título, autor, número de capítulo, número de página)."
         )
 
     def _truncate_text(self, text: str, max_len: int) -> str:
@@ -1761,8 +3203,8 @@ class SessionView(QWidget):
         if self._is_llm_failure_response(llm_text):
             self.chat_history.append("Sistema: geração ignorada por resposta de erro da LLM.")
             return
-        mode = request.get("mode", "resumo")
-        title_mode = "Resumo de Sessão" if mode == "resumo" else "Perguntas de Sessão"
+        mode = "resumo"
+        title_mode = "Resumo de Sessão"
         title = f"{title_mode} - {self.current_book_title}"
 
         content = [
@@ -1787,6 +3229,7 @@ class SessionView(QWidget):
         if note_path:
             self._append_note_link_to_current_chapter(note_path)
             self.chat_history.append(f"Sistema: Nota criada em {note_path.name}")
+            self._clear_llm_cache_after_material("Resumo")
 
     def _create_template_note(self, template_name: str, note_type: str):
         template_path = Path("src/cli/interactive/screens/glados_templates") / template_name
@@ -1843,6 +3286,7 @@ class SessionView(QWidget):
         slug: str,
         target_dir: str = "",
         filename_override: str = "",
+        overwrite_existing: bool = False,
     ) -> Optional[Path]:
         if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
             return None
@@ -1859,10 +3303,11 @@ class SessionView(QWidget):
             safe_book = self._sanitize_filename(self.current_book_title)[:60]
             filename = f"{stamp}-{slug}-{safe_book}.md"
         note_path = personal_dir / filename
-        suffix = 2
-        while note_path.exists():
-            note_path = personal_dir / f"{note_path.stem} ({suffix}){note_path.suffix}"
-            suffix += 1
+        if not overwrite_existing:
+            suffix = 2
+            while note_path.exists():
+                note_path = personal_dir / f"{note_path.stem} ({suffix}){note_path.suffix}"
+                suffix += 1
         note_path.write_text(content, encoding="utf-8")
         return note_path
 
@@ -1893,39 +3338,74 @@ class SessionView(QWidget):
         cleaned = re.sub(r"\s+", " ", cleaned).strip(". ").strip()
         return cleaned
 
-    def _link_excerpt_to_note(self, note_path: Path, selected_text: str):
-        target_path = self._selected_excerpt_chapter_path or self.current_chapter_path or self.book_source_path
-        if not target_path or not target_path.exists():
-            return
+    def _build_excerpt_note_document(self, user_note: str) -> str:
+        title = self.note_title_input.text().strip() or "Anotação de trecho"
+        excerpt = self._selected_excerpt_for_note.replace("\u2029", "\n").strip()
+        chapter_path = self._selected_excerpt_chapter_path or self._resolve_active_chapter_path()
+        chapter_link = f"[[{chapter_path.stem}]]" if chapter_path and chapter_path.is_file() else "-"
+        book_link = (
+            f"[[{self.book_source_path.stem}]]"
+            if self.book_source_path and self.book_source_path.is_file()
+            else self.current_book_title
+        )
+        lines = [
+            f"# {title}",
+            "",
+            "## Trecho selecionado",
+            excerpt or "-",
+            "",
+            "## Minha anotação",
+            user_note.strip(),
+            "",
+            "## Referências",
+            f"- Livro completo: {book_link}",
+            f"- Capítulo em foco: {chapter_link}",
+            "",
+        ]
+        return "\n".join(lines)
 
+    def _link_excerpt_to_note(self, note_path: Path, selected_text: str):
         excerpt = selected_text.replace("\u2029", "\n").strip()
         if not excerpt:
             return
 
-        relative_note = self._relative_note_path_from_abs(note_path)
-        if not relative_note:
-            return
-        wikilink = f"[[{relative_note}|{excerpt}]]"
-        text = target_path.read_text(encoding="utf-8", errors="ignore")
-
-        if wikilink in text:
+        markdown_note_path = self._relative_note_markdown_path_from_abs(note_path)
+        if not markdown_note_path:
             return
 
-        if excerpt in text:
-            updated = text.replace(excerpt, wikilink, 1)
-        else:
-            updated = text.rstrip() + f"\n\n- {wikilink}\n"
-        target_path.write_text(updated, encoding="utf-8")
+        excerpt_label = re.sub(r"\s+", " ", excerpt).replace("]", r"\]")
+        markdown_link = f"[{excerpt_label}](<{markdown_note_path}>)"
+        target_paths: list[Path] = []
+        for candidate in (
+            self.book_source_path,
+            self._selected_excerpt_chapter_path,
+            self.current_chapter_path,
+        ):
+            if not candidate or not candidate.exists() or not candidate.is_file():
+                continue
+            if candidate not in target_paths:
+                target_paths.append(candidate)
 
-    def _append_note_link_to_current_chapter(self, note_path: Path):
-        if not self.current_chapter_path or not self.current_chapter_path.exists():
+        for target_path in target_paths:
+            text = target_path.read_text(encoding="utf-8", errors="ignore")
+            if markdown_link in text:
+                continue
+            if excerpt in text:
+                updated = text.replace(excerpt, markdown_link, 1)
+            else:
+                updated = text.rstrip() + f"\n\n- {markdown_link}\n"
+            target_path.write_text(updated, encoding="utf-8")
+
+    def _append_note_link_to_current_chapter(self, note_path: Path, chapter_path: Optional[Path] = None):
+        target_chapter_path = chapter_path or self.current_chapter_path
+        if not target_chapter_path or not target_chapter_path.exists():
             return
 
         relative_note = self._relative_note_path_from_abs(note_path)
         if not relative_note:
             return
         link_line = f"- [[{relative_note}|{note_path.stem}]]"
-        text = self.current_chapter_path.read_text(encoding="utf-8", errors="ignore")
+        text = target_chapter_path.read_text(encoding="utf-8", errors="ignore")
         if link_line in text:
             return
 
@@ -1935,7 +3415,7 @@ class SessionView(QWidget):
 
         if not header_match:
             updated = text.rstrip() + f"\n\n{section_header}\n{link_line}\n"
-            self.current_chapter_path.write_text(updated, encoding="utf-8")
+            target_chapter_path.write_text(updated, encoding="utf-8")
             return
 
         section_start = header_match.end()
@@ -1955,7 +3435,7 @@ class SessionView(QWidget):
 
         new_section_body = "\n" + "\n".join(lines) + "\n"
         updated = text[:section_start] + new_section_body + text[section_end:]
-        self.current_chapter_path.write_text(updated, encoding="utf-8")
+        target_chapter_path.write_text(updated, encoding="utf-8")
 
     def _relative_note_path_from_abs(self, note_path: Path) -> Optional[str]:
         if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
@@ -1967,8 +3447,42 @@ class SessionView(QWidget):
             return None
         return str(relative.with_suffix("")).replace("\\", "/")
 
+    def _relative_note_markdown_path_from_abs(self, note_path: Path) -> Optional[str]:
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return None
+        vault_path = Path(self.reading_controller.reading_manager.vault_path)
+        try:
+            relative = note_path.relative_to(vault_path)
+        except Exception:
+            return None
+        return str(relative).replace("\\", "/")
+
+    def _display_relative_path(self, file_path: Optional[Path]) -> str:
+        if not file_path:
+            return ""
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return file_path.name
+        vault_path = Path(self.reading_controller.reading_manager.vault_path)
+        try:
+            relative = file_path.relative_to(vault_path)
+            return str(relative).replace("\\", "/")
+        except Exception:
+            return file_path.name
+
     def _sanitize_filename(self, value: str) -> str:
         return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-").lower() or "nota"
+
+    def _is_backend_unavailable_response(self, text: str) -> bool:
+        clean = (text or "").strip().lower()
+        if not clean:
+            return False
+        return (
+            "llm indispon" in clean
+            or "gpu_only estrito" in clean
+            or "modo gpu_only" in clean
+            or "gpu_only" in clean
+            or "backend gpu" in clean and "indispon" in clean
+        )
 
     def _is_llm_failure_response(self, text: str) -> bool:
         clean = (text or "").strip().lower()
@@ -1979,6 +3493,7 @@ class SessionView(QWidget):
             or "requested tokens" in clean
             or "exceed context window" in clean
             or "erro na geração" in clean
+            or self._is_backend_unavailable_response(clean)
         )
 
     def _current_chapter_number(self) -> int:
@@ -1994,19 +3509,233 @@ class SessionView(QWidget):
 
     def _build_review_filename(self, mode_slug: str, target_dir: str) -> str:
         book = self._sanitize_filename(self.current_book_title)
+        if mode_slug == "mapa-mental-canva" or target_dir == self.MINDMAPS_DIR:
+            return f"{book}.mapa-mental.canvas"
+
         chapter = self._current_chapter_number()
         chapter_part = f"{chapter:02d}" if chapter > 0 else "00"
         mode_map = {
             "resumo": "resumo",
             "flashcards": "flashcard",
-            "perguntas-10": "perguntas",
-            "mapa-mental-canva": "mapa-mental-canva",
-            "perguntas": "perguntas",
+            "perguntas-manual": "perguntas",
         }
         mode_part = mode_map.get(mode_slug, self._sanitize_filename(mode_slug))
-        if target_dir == self.MINDMAPS_DIR and "mapa-mental" not in mode_part:
-            mode_part = "mapa-mental-canva"
         return f"{book}.{chapter_part}_{mode_part}.md"
+
+    def _review_target_path(self, mode_slug: str, target_dir: str) -> Optional[Path]:
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return None
+        vault_path = Path(self.reading_controller.reading_manager.vault_path)
+        filename = self._build_review_filename(mode_slug, target_dir)
+        return vault_path / target_dir / filename
+
+    def _strip_llm_meta_text(self, text: str) -> str:
+        clean = (text or "").strip()
+        if not clean:
+            return ""
+
+        clean = re.sub(r"```(?:json|markdown|md|text)?", "", clean, flags=re.IGNORECASE).replace("```", "")
+        lines: list[str] = []
+        meta_pattern = re.compile(
+            r"^\s*(okay[, ]|i need to|let me|vou |preciso |racioc[ií]nio|chain of thought|thought:|analysis:)",
+            flags=re.IGNORECASE,
+        )
+        for raw_line in clean.splitlines():
+            line = raw_line.rstrip()
+            if meta_pattern.match(line):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    def _ensure_bullet_list(self, text: str) -> str:
+        raw_lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        if not raw_lines:
+            return "- Não identificado."
+        if any(ln.startswith("- ") for ln in raw_lines):
+            return "\n".join(raw_lines)
+        parts = [p.strip(" -•\t") for p in re.split(r"[;\n•]+", " ".join(raw_lines)) if p.strip(" -•\t")]
+        if not parts:
+            return "- Não identificado."
+        return "\n".join(f"- {part}" for part in parts[:6])
+
+    def _normalize_summary_response(self, text: str) -> tuple[Optional[str], str]:
+        clean = self._strip_llm_meta_text(text)
+        if not clean:
+            return None, "resposta vazia"
+
+        sections: Dict[str, list[str]] = {
+            "sintese": [],
+            "conceitos": [],
+            "ligacoes": [],
+            "duvidas": [],
+        }
+        current_key: Optional[str] = None
+        heading_pattern = re.compile(
+            r"^\s*(?:#+\s*)?(?:\*\*)?\s*"
+            r"(s[ií]ntese|conceitos?[- ]?chave|liga(?:ç|c)[õo]es?\s+entre\s+cap[ií]tulos|pontos?\s+de\s+d[úu]vida)"
+            r"\s*:?\s*(?:\*\*)?\s*(.*)$",
+            flags=re.IGNORECASE,
+        )
+
+        for raw_line in clean.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            match = heading_pattern.match(line)
+            if match:
+                heading = match.group(1).lower()
+                tail = match.group(2).strip()
+                if "sint" in heading or "sínt" in heading:
+                    current_key = "sintese"
+                elif "conceit" in heading:
+                    current_key = "conceitos"
+                elif "liga" in heading:
+                    current_key = "ligacoes"
+                else:
+                    current_key = "duvidas"
+                if tail:
+                    sections[current_key].append(tail)
+                continue
+            if current_key is not None:
+                sections[current_key].append(line)
+
+        has_any = any(sections[key] for key in sections)
+        if not has_any:
+            sections["sintese"].append(clean)
+
+        sintese = "\n".join(sections["sintese"]).strip() or "Não identificado."
+        conceitos = self._ensure_bullet_list("\n".join(sections["conceitos"]))
+        ligacoes = "\n".join(sections["ligacoes"]).strip() or "Não identificado."
+        duvidas = self._ensure_bullet_list("\n".join(sections["duvidas"]))
+
+        normalized = (
+            "## Síntese\n"
+            f"{sintese}\n\n"
+            "## Conceitos-chave\n"
+            f"{conceitos}\n\n"
+            "## Ligações entre capítulos\n"
+            f"{ligacoes}\n\n"
+            "## Pontos de dúvida\n"
+            f"{duvidas}\n"
+        )
+        return normalized, ""
+
+    def _fallback_review_terms(self, limit: int = 14) -> list[str]:
+        source = (self._review_context_payload or "").strip()
+        terms: list[str] = []
+        seen: set[str] = set()
+
+        for term in re.findall(r"\*\*([^*]{3,80})\*\*", source):
+            normalized = " ".join(term.strip().split())
+            key = normalized.lower()
+            if len(normalized) < 4 or key in seen:
+                continue
+            seen.add(key)
+            terms.append(normalized)
+            if len(terms) >= limit:
+                return terms
+
+        for term in re.findall(r"(?m)^#+\s+(.+)$", source):
+            normalized = " ".join(term.strip().split())
+            key = normalized.lower()
+            if len(normalized) < 4 or key in seen:
+                continue
+            seen.add(key)
+            terms.append(normalized)
+            if len(terms) >= limit:
+                return terms
+
+        if not terms:
+            terms = [
+                f"Conceito central do capítulo ({self.current_book_title})",
+                "Relação entre teoria e aplicação",
+                "Tensão crítica do argumento principal",
+                "Exemplo prático discutido no capítulo",
+            ]
+        return terms[:limit]
+
+    def _normalize_flashcards_response(self, text: str) -> tuple[Optional[str], str]:
+        clean = self._strip_llm_meta_text(text)
+        if not clean:
+            return None, "resposta vazia"
+
+        clean = re.sub(r"\*\*\s*Frente\s*:\s*\*\*", "Frente:", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\*\*\s*Verso\s*:\s*\*\*", "Verso:", clean, flags=re.IGNORECASE)
+        clean = clean.replace("**Frente:**", "Frente:").replace("**Verso:**", "Verso:")
+
+        pair_pattern = re.compile(
+            r"(?is)Frente:\s*(.+?)\s*Verso:\s*(.+?)(?=(?:\n\s*###\s*Flashcard|\n\s*Frente:|\Z))"
+        )
+        pairs = pair_pattern.findall(clean)
+
+        if len(pairs) < 12:
+            line_pairs = re.findall(
+                r"(?im)^(?!frente:|verso:)([^:\n]{4,90})\s*:\s*([^:\n].{12,})$",
+                clean,
+            )
+            for front, back in line_pairs:
+                pairs.append((front, back))
+
+        if len(pairs) < 12:
+            return None, "não foi possível extrair 12 pares 'Frente/Verso'"
+
+        blocks: list[str] = []
+        card_count = 0
+        quality_count = 0
+        for idx, (front, back) in enumerate(pairs[:12], start=1):
+            front_line = " ".join(front.strip().split())
+            back_line = " ".join(back.strip().split())
+            if not front_line or not back_line:
+                continue
+            card_count += 1
+            if self._is_flashcard_content_acceptable(front_line, back_line):
+                quality_count += 1
+            blocks.extend(
+                [
+                    f"### Flashcard {idx}",
+                    f"Frente: {front_line}",
+                    f"Verso: {back_line}",
+                    "",
+                ]
+            )
+
+        if card_count < 12:
+            return None, "conteúdo insuficiente após normalização de flashcards"
+        if quality_count < 10:
+            return None, "flashcards com baixa qualidade (metadado/trivial/genérico)"
+        return "\n".join(blocks).strip() + "\n", ""
+
+    def _is_flashcard_content_acceptable(self, front: str, back: str) -> bool:
+        if len(front.strip()) < 18 or len(back.strip()) < 35:
+            return False
+
+        front_norm = self._normalize_pt_text(front)
+        back_norm = self._normalize_pt_text(back)
+        generic_patterns = [
+            "qual e o titulo do livro",
+            "quem e o autor",
+            "qual capitulo",
+            "em qual pagina",
+            "explique o conceito",
+            "no contexto deste capitulo",
+        ]
+        if any(pattern in front_norm for pattern in generic_patterns):
+            return False
+        if "no contexto deste capitulo" in back_norm:
+            return False
+        if re.search(r"\b(livro|autor|capitulo|pagina|paginas)\b", front_norm) and len(front_norm) < 55:
+            return False
+        return True
+
+    def _normalize_pt_text(self, text: str) -> str:
+        normalized = (text or "").strip().lower()
+        normalized = normalized.replace("ç", "c")
+        normalized = normalized.replace("ã", "a").replace("â", "a").replace("á", "a")
+        normalized = normalized.replace("é", "e").replace("ê", "e")
+        normalized = normalized.replace("í", "i")
+        normalized = normalized.replace("ó", "o").replace("ô", "o").replace("õ", "o")
+        normalized = normalized.replace("ú", "u")
+        return normalized
 
     def _start_pomodoro(self):
         if not self.pomodoro:

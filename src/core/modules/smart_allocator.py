@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
-import math
 import re
 
 
@@ -52,6 +51,77 @@ class SmartAllocator:
             remaining -= alloc_pages
 
         return allocations
+
+    @staticmethod
+    def select_review_slots(
+        available_slots: List[Dict[str, Any]],
+        sessions_per_day: int,
+        session_duration_minutes: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Seleciona os melhores slots para revisão em um dia.
+
+        Critérios:
+        - Prioriza maior `quality_score`
+        - Garante duração mínima da sessão
+        - Evita sobreposição entre slots selecionados
+        """
+        target_sessions = max(1, int(sessions_per_day or 1))
+        target_duration = max(15, int(session_duration_minutes or 30))
+
+        sorted_slots = sorted(
+            available_slots or [],
+            key=lambda s: (
+                float(s.get("quality_score", 0.5) or 0.5),
+                str(s.get("start") or ""),
+            ),
+            reverse=True,
+        )
+
+        selected: List[Dict[str, Any]] = []
+        occupied_ranges: List[tuple[datetime, datetime]] = []
+
+        for slot in sorted_slots:
+            if len(selected) >= target_sessions:
+                break
+
+            start_str = str(slot.get("start") or "").strip()
+            end_str = str(slot.get("end") or "").strip()
+            if not start_str or not end_str:
+                continue
+
+            start_dt = SmartAllocator._parse_dt(start_str)
+            end_dt = SmartAllocator._parse_dt(end_str)
+            if not start_dt or not end_dt or end_dt <= start_dt:
+                continue
+
+            slot_duration = int((end_dt - start_dt).total_seconds() // 60)
+            if slot_duration < target_duration:
+                continue
+
+            # Trunca o slot ao tamanho desejado da sessão.
+            alloc_end_dt = start_dt + timedelta(minutes=target_duration)
+
+            has_overlap = False
+            for occ_start, occ_end in occupied_ranges:
+                if start_dt < occ_end and alloc_end_dt > occ_start:
+                    has_overlap = True
+                    break
+            if has_overlap:
+                continue
+
+            selected.append(
+                {
+                    "start": start_dt.strftime("%Y-%m-%d %H:%M"),
+                    "end": alloc_end_dt.strftime("%Y-%m-%d %H:%M"),
+                    "duration_minutes": target_duration,
+                    "quality_score": float(slot.get("quality_score", 0.5) or 0.5),
+                }
+            )
+            occupied_ranges.append((start_dt, alloc_end_dt))
+
+        selected.sort(key=lambda slot: slot.get("start", ""))
+        return selected
 
     @staticmethod
     def estimate_difficulty(text_chunk: str, user_history: Dict[str, Any]) -> float:
@@ -113,3 +183,20 @@ class SmartAllocator:
             )
 
         return plan
+
+    @staticmethod
+    def _parse_dt(value: str) -> datetime | None:
+        raw = str(value or "").strip().replace("Z", "+00:00")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            pass
+
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+        return None

@@ -141,6 +141,7 @@ class LibraryBookTile(QFrame):
     open_requested = pyqtSignal(Path)
     metadata_requested = pyqtSignal(Path)
     schedule_requested = pyqtSignal(Path)
+    review_requested = pyqtSignal(Path)
 
     def __init__(
         self,
@@ -237,11 +238,14 @@ class LibraryBookTile(QFrame):
         menu = QMenu(self)
         edit_action = menu.addAction("Editar metadados")
         schedule_action = menu.addAction("Agendar sessões")
+        review_action = menu.addAction("Abrir revisão")
         selected = menu.exec(self.options_button.mapToGlobal(self.options_button.rect().bottomLeft()))
         if selected == edit_action:
             self.metadata_requested.emit(self.book_dir)
         elif selected == schedule_action:
             self.schedule_requested.emit(self.book_dir)
+        elif selected == review_action:
+            self.review_requested.emit(self.book_dir)
 
     def _placeholder_cover(self) -> QPixmap:
         pixmap = QPixmap(self.cover_label.size())
@@ -329,6 +333,7 @@ class LibraryView(QWidget):
 
     navigate_to = pyqtSignal(str)
     open_book_requested = pyqtSignal(object)  # Path
+    review_workspace_requested = pyqtSignal(dict)
 
     def __init__(self, controllers: Optional[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
@@ -920,6 +925,7 @@ class LibraryView(QWidget):
                     tile.open_requested.connect(self._open_book_from_tile)
                     tile.metadata_requested.connect(self._open_metadata_editor)
                     tile.schedule_requested.connect(self._open_schedule_dialog)
+                    tile.review_requested.connect(self._open_review_dialog)
 
                     if self.sort_mode == "author":
                         rows_to_render[0].addWidget(tile)
@@ -1055,6 +1061,23 @@ class LibraryView(QWidget):
             return
 
         QMessageBox.warning(self, "Agendamento", "AgendaController não disponível.")
+
+    def _open_review_dialog(self, book_dir: Path):
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            QMessageBox.warning(self, "Revisão", "ReadingManager não disponível.")
+            return
+
+        metadata = self._load_book_metadata(book_dir)
+        book_id = self._ensure_book_in_reading_manager(metadata)
+        book_title = str(metadata.get("title", "Livro")).strip() or "Livro"
+        self.review_workspace_requested.emit(
+            {
+                "source": "library",
+                "book_id": str(book_id),
+                "book_title": book_title,
+                "book_dir": str(book_dir),
+            }
+        )
 
     def _set_schedule_feedback(self, book_dir: Path, text: str):
         self._schedule_feedback[str(book_dir)] = {

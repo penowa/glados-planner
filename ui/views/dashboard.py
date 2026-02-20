@@ -23,6 +23,8 @@ class DashboardView(QWidget):
     # Sinais
     refresh_requested = pyqtSignal()
     navigate_to = pyqtSignal(str)  # Novo sinal para navegação
+    review_requested = pyqtSignal(dict)
+    review_workspace_requested = pyqtSignal(dict)
     
     def __init__(self, controllers=None):
         super().__init__()
@@ -251,6 +253,8 @@ class DashboardView(QWidget):
             # Conectar sinais de sessão de leitura (agora na agenda)
             if hasattr(self.agenda_card, 'start_reading_session'):
                 self.agenda_card.start_reading_session.connect(self.handle_start_session)
+            if hasattr(self.agenda_card, 'start_review_session'):
+                self.agenda_card.start_review_session.connect(self.handle_start_review_session)
             if hasattr(self.agenda_card, 'edit_reading_session'):
                 self.agenda_card.edit_reading_session.connect(self.handle_edit_session)
             if hasattr(self.agenda_card, 'skip_reading_session'):
@@ -443,8 +447,10 @@ class DashboardView(QWidget):
     def handle_agenda_item_clicked(self, item_data):
         """Manipular clique em item da agenda"""
         logger.info(f"Item da agenda clicado: {item_data.get('title', 'Sem título')}")
-        # Aqui pode abrir um diálogo de edição, etc.
-    
+        event_type = str(item_data.get("type", "")).strip().lower()
+        if event_type in {"revisao", "revisão"}:
+            self.review_workspace_requested.emit(dict(item_data or {}))
+
     def handle_agenda_quick_action(self, action_name, data):
         """Manipular ação rápida da agenda"""
         logger.info(f"Ação rápida da agenda: {action_name}")
@@ -453,6 +459,13 @@ class DashboardView(QWidget):
         elif action_name == "add_reading_session":
             # Se a agenda tem uma ação para adicionar sessão de leitura
             self.navigate_to.emit('reading_scheduler')
+        elif action_name == "open_review_plan":
+            self.review_requested.emit(
+                {
+                    "source": "dashboard",
+                    "requested_at": QDateTime.currentDateTime().toString(Qt.DateFormat.ISODate),
+                }
+            )
     
     def handle_event_created(self, event_data):
         """Manipular evento criado no EventCreationCard"""
@@ -547,6 +560,11 @@ class DashboardView(QWidget):
                 logger.error(f"Erro ao iniciar sessão: {e}")
 
         self.navigate_to.emit('session')
+
+    def handle_start_review_session(self, event_data):
+        """Abre workspace de revisão para evento de revisão da agenda."""
+        logger.info(f"Abrindo revisão agendada: {event_data.get('id', 'N/A')}")
+        self.review_workspace_requested.emit(dict(event_data or {}))
     
     def handle_edit_session(self, session_data):
         """Editar sessão de leitura (agora vindo da agenda)"""

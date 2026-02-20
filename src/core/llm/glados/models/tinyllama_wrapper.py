@@ -7,6 +7,8 @@ import json
 import time
 import re
 import os
+import gc
+import subprocess
 from dataclasses import dataclass
 import sys
 
@@ -36,15 +38,49 @@ class LlamaConfig:
     n_batch: int = 128
     use_mlock: bool = True
     verbose: bool = False
+    vram_soft_limit_mb: int = 0
 
 class TinyLlamaGlados:
     """Wrapper do TinyLlama com personalidade GLaDOS"""
+
+    @staticmethod
+    def _query_gpu_memory_used_mb() -> Optional[int]:
+        try:
+            out = subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used",
+                    "--format=csv,noheader,nounits",
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            if not out:
+                return None
+            return int(out.splitlines()[0].strip())
+        except Exception:
+            return None
     
     def __init__(self, config: LlamaConfig, vault_structure: Any, glados_voice: Any):
-        # Limite rígido de threads para evitar saturação de CPU por bibliotecas nativas.
-        safe_threads = max(1, min(int(config.n_threads or 4), 4))
+        # Política de threads por modo:
+        # - cpu_only: respeita as threads configuradas.
+        # - gpu_only: limita em 2 threads (CPU auxiliar).
+        # - demais modos: teto 4 para evitar saturação.
+        requested_threads = max(1, int(config.n_threads or 4))
+        mode = str(config.device_mode or "auto").lower()
+        if mode == "cpu_only":
+            safe_threads = requested_threads
+        elif mode == "gpu_only":
+            safe_threads = min(requested_threads, 2)
+        else:
+            safe_threads = min(requested_threads, 4)
         config.n_threads = safe_threads
-        config.n_batch = max(32, min(int(config.n_batch or 128), 256))
+        requested_batch = int(config.n_batch or 128)
+        if mode == "gpu_only":
+            # Reduz pico de alocação em VRAM no backend Vulkan.
+            config.n_batch = max(8, min(requested_batch, 24))
+        else:
+            config.n_batch = max(32, min(requested_batch, 256))
         os.environ["OMP_NUM_THREADS"] = str(safe_threads)
         os.environ["OPENBLAS_NUM_THREADS"] = str(safe_threads)
         os.environ["MKL_NUM_THREADS"] = str(safe_threads)
@@ -55,6 +91,9 @@ class TinyLlamaGlados:
         self.glados_voice = glados_voice
         self.runtime_backend = "unavailable"
         self.runtime_device = "none"
+        self.strict_gpu_only = False
+        self.runtime_init_error = ""
+        self.runtime_gpu_attempts: List[int] = []
         
         # Inicializa o modelo se disponível
         self.llm = None
@@ -63,6 +102,7 @@ class TinyLlamaGlados:
             wants_gpu = bool(config.use_gpu)
             allows_cpu = bool(config.use_cpu)
             mode = str(config.device_mode or "auto").lower()
+            strict_gpu_only = False
 
             if mode == "cpu_only":
                 wants_gpu = False
@@ -70,9 +110,11 @@ class TinyLlamaGlados:
             elif mode == "gpu_only":
                 wants_gpu = True
                 allows_cpu = False
+                strict_gpu_only = True
             elif mode == "gpu_prefer":
                 wants_gpu = True
                 allows_cpu = True
+            self.strict_gpu_only = strict_gpu_only
 
             if wants_gpu and requested_gpu_layers <= 0:
                 requested_gpu_layers = 1
@@ -80,12 +122,16 @@ class TinyLlamaGlados:
             gpu_layer_candidates: List[int] = []
             if wants_gpu:
                 gpu_layer_candidates.append(requested_gpu_layers)
-                for candidate in (24, 18, 12, 8, 6, 4, 2, 1):
-                    if candidate < requested_gpu_layers and candidate not in gpu_layer_candidates:
+                # Em gpu_only seguimos sem fallback para CPU, mas ainda tentamos
+                # menos camadas na própria GPU para encontrar um ponto viável.
+                for candidate in range(requested_gpu_layers - 1, 0, -1):
+                    if candidate not in gpu_layer_candidates:
                         gpu_layer_candidates.append(candidate)
             if allows_cpu and 0 not in gpu_layer_candidates:
                 gpu_layer_candidates.append(0)
+            self.runtime_gpu_attempts = list(gpu_layer_candidates)
 
+            vram_soft_limit_mb = max(0, int(getattr(config, "vram_soft_limit_mb", 0) or 0))
             last_error = None
             for candidate_gpu_layers in gpu_layer_candidates:
                 try:
@@ -99,6 +145,9 @@ class TinyLlamaGlados:
                         "use_mlock": config.use_mlock,
                         "verbose": config.verbose,
                     }
+                    # Em GPUs pequenas, diminuir micro-batch reduz picos de alocação no Vulkan.
+                    if mode == "gpu_only":
+                        llama_kwargs["n_ubatch"] = max(1, min(int(config.n_batch), 8))
                     if candidate_gpu_layers > 0:
                         llama_kwargs["main_gpu"] = int(config.gpu_index or 0)
                     try:
@@ -125,6 +174,30 @@ class TinyLlamaGlados:
                                 verbose=config.verbose,
                             )
 
+                    if candidate_gpu_layers > 0 and vram_soft_limit_mb > 0:
+                        used_mb = self._query_gpu_memory_used_mb()
+                        if used_mb is not None and used_mb > vram_soft_limit_mb:
+                            action_text = "Reduzindo camadas."
+                            if strict_gpu_only:
+                                action_text = "Reduzindo camadas (mantendo gpu_only)."
+                            print(
+                                f"[GLaDOS] VRAM {used_mb} MiB acima do limite "
+                                f"({vram_soft_limit_mb} MiB) com n_gpu_layers="
+                                f"{candidate_gpu_layers}. {action_text}"
+                            )
+                            try:
+                                self.llm.close()
+                            except Exception:
+                                pass
+                            self.llm = None
+                            gc.collect()
+                            time.sleep(0.25)
+                            last_error = RuntimeError(
+                                f"gpu_only: VRAM acima do limite com "
+                                f"n_gpu_layers={candidate_gpu_layers}"
+                            )
+                            continue
+
                     config.n_gpu_layers = candidate_gpu_layers
                     self.runtime_backend = "gpu" if candidate_gpu_layers > 0 else "cpu"
                     if candidate_gpu_layers > 0:
@@ -132,11 +205,19 @@ class TinyLlamaGlados:
                         self.runtime_device = f"{gpu_label} (n_gpu_layers={candidate_gpu_layers})"
                     else:
                         self.runtime_device = "CPU"
+                    self.runtime_init_error = ""
                     if candidate_gpu_layers != requested_gpu_layers:
                         print(
                             f"[GLaDOS] Fallback de GPU aplicado: "
                             f"{requested_gpu_layers} -> {candidate_gpu_layers} camadas"
                         )
+                    if candidate_gpu_layers > 0 and vram_soft_limit_mb > 0:
+                        used_mb = self._query_gpu_memory_used_mb()
+                        if used_mb is not None:
+                            print(
+                                f"[GLaDOS] VRAM selecionada: {used_mb} MiB "
+                                f"(limite {vram_soft_limit_mb} MiB)"
+                            )
                     print(f"[GLaDOS] Modelo carregado: {Path(config.model_path).name}")
                     break
                 except Exception as e:
@@ -149,11 +230,15 @@ class TinyLlamaGlados:
                         )
 
             if self.llm is None and last_error is not None:
+                self.runtime_init_error = str(last_error)
                 print(f"[GLaDOS] Erro ao carregar modelo: {last_error}")
-                if not allows_cpu and wants_gpu:
-                    print("[GLaDOS] Modo GPU-only ativo: fallback para CPU desativado.")
+                if strict_gpu_only:
+                    print(
+                        "[GLaDOS] Modo GPU-only estrito: sem fallback para CPU."
+                    )
         else:
             print("[GLaDOS] Modo simulado ativado (sem llama-cpp-python)")
+            self.runtime_init_error = "llama-cpp-python não instalado; backend real indisponível."
         
         # Cache de respostas
         self.response_cache = {}
@@ -398,8 +483,16 @@ Resposta:
                 raw_response = output["choices"][0]["text"].strip()
             except Exception as e:
                 print(f"[GLaDOS] Erro na geração: {e}")
+                if self.strict_gpu_only:
+                    raise RuntimeError(
+                        f"gpu_only: falha de geração no backend GPU ({e})"
+                    ) from e
                 raw_response = self._fallback_response(clean_query, context)
         else:
+            if self.strict_gpu_only:
+                raise RuntimeError(
+                    "gpu_only: modelo indisponível na GPU; fallback CPU/simulado desativado."
+                )
             # Modo simulado
             raw_response = self._simulated_response(query, context)
 

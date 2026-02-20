@@ -1,6 +1,7 @@
 """
 Dialog para edição das configurações principais do sistema.
 """
+import os
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -54,6 +55,7 @@ class SettingsDialog(QDialog):
         self._setup_paths_tab()
         self._setup_llm_tab()
         self._setup_obsidian_tab()
+        self._setup_review_view_tab()
         self._setup_features_tab()
 
         footer_layout = QHBoxLayout()
@@ -127,9 +129,13 @@ class SettingsDialog(QDialog):
         self.llm_n_ctx_spin.setRange(256, 32768)
         self.llm_n_gpu_layers_spin = QSpinBox()
         self.llm_n_gpu_layers_spin.setRange(0, 200)
+        self.llm_cpu_threads_spin = QSpinBox()
+        max_threads = max(1, int(os.cpu_count() or 1))
+        self.llm_cpu_threads_spin.setRange(1, max_threads)
         self.llm_device_mode_combo = QComboBox()
         for label, value in self.DEVICE_MODE_LABELS:
             self.llm_device_mode_combo.addItem(label, value)
+        self.llm_device_mode_combo.currentIndexChanged.connect(self._sync_llm_mode_controls)
         self.llm_gpu_combo = QComboBox()
         self.llm_temperature_spin = QDoubleSpinBox()
         self.llm_temperature_spin.setRange(0.0, 2.0)
@@ -166,6 +172,7 @@ class SettingsDialog(QDialog):
         form.addRow("GPU detectada:", gpu_layout)
         form.addRow("Context window (n_ctx):", self.llm_n_ctx_spin)
         form.addRow("GPU layers:", self.llm_n_gpu_layers_spin)
+        form.addRow("CPU threads (cpu_only):", self.llm_cpu_threads_spin)
         form.addRow("Temperature:", self.llm_temperature_spin)
         form.addRow("Top-p:", self.llm_top_p_spin)
         form.addRow("Max tokens:", self.llm_max_tokens_spin)
@@ -209,11 +216,30 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(tab, "Features")
 
+    def _setup_review_view_tab(self):
+        tab = QWidget()
+        form = QFormLayout(tab)
+
+        self.review_prompt_enabled_check = QCheckBox("Ativar perguntas periódicas durante revisão")
+        self.review_question_interval_spin = QSpinBox()
+        self.review_question_interval_spin.setRange(1, 180)
+        self.review_question_interval_spin.setSuffix(" min")
+        self.review_arrow_pan_step_spin = QSpinBox()
+        self.review_arrow_pan_step_spin.setRange(40, 400)
+        self.review_arrow_pan_step_spin.setSingleStep(10)
+
+        form.addRow("", self.review_prompt_enabled_check)
+        form.addRow("Intervalo de perguntas:", self.review_question_interval_spin)
+        form.addRow("Passo das setas no mapa:", self.review_arrow_pan_step_spin)
+
+        self.tabs.addTab(tab, "Review View")
+
     def _load_current_values(self):
         app = self.settings_model.app
         paths = self.settings_model.paths
         llm = self.settings_model.llm
         obsidian = self.settings_model.obsidian
+        review_view = self.settings_model.review_view
         features = self.settings_model.features
 
         self.app_name_input.setText(app.name)
@@ -234,6 +260,7 @@ class SettingsDialog(QDialog):
         self._set_device_mode(getattr(llm, "device_mode", self._infer_device_mode(llm)))
         self.llm_n_ctx_spin.setValue(llm.n_ctx)
         self.llm_n_gpu_layers_spin.setValue(llm.n_gpu_layers)
+        self.llm_cpu_threads_spin.setValue(max(1, int(getattr(llm.cpu, "threads", 4) or 4)))
         self.llm_temperature_spin.setValue(llm.temperature)
         self.llm_top_p_spin.setValue(llm.top_p)
         self.llm_max_tokens_spin.setValue(llm.max_tokens)
@@ -241,10 +268,15 @@ class SettingsDialog(QDialog):
         self.llm_assistant_name_input.setText(llm.glados.glados_name)
         self._refresh_model_catalog()
         self._refresh_gpu_catalog(selected_index=int(getattr(llm, "gpu_index", 0) or 0))
+        self._sync_llm_mode_controls()
 
         self.obsidian_templates_dir_input.setText(obsidian.templates_dir)
         self.obsidian_auto_sync_check.setChecked(obsidian.auto_sync)
         self.obsidian_sync_interval_spin.setValue(obsidian.sync_interval)
+
+        self.review_prompt_enabled_check.setChecked(review_view.question_prompt_enabled)
+        self.review_question_interval_spin.setValue(int(review_view.question_interval_minutes))
+        self.review_arrow_pan_step_spin.setValue(int(review_view.arrow_pan_step))
 
         self.feature_llm.setChecked(features.enable_llm)
         self.feature_obsidian.setChecked(features.enable_obsidian_sync)
@@ -275,6 +307,7 @@ class SettingsDialog(QDialog):
             self.settings_model.llm.gpu_index = int(self.llm_gpu_combo.currentData() or 0)
             self.settings_model.llm.n_ctx = self.llm_n_ctx_spin.value()
             self.settings_model.llm.n_gpu_layers = self.llm_n_gpu_layers_spin.value()
+            self.settings_model.llm.cpu.threads = self.llm_cpu_threads_spin.value()
             self.settings_model.llm.temperature = self.llm_temperature_spin.value()
             self.settings_model.llm.top_p = self.llm_top_p_spin.value()
             self.settings_model.llm.max_tokens = self.llm_max_tokens_spin.value()
@@ -284,6 +317,10 @@ class SettingsDialog(QDialog):
             self.settings_model.obsidian.templates_dir = self.obsidian_templates_dir_input.text().strip()
             self.settings_model.obsidian.auto_sync = self.obsidian_auto_sync_check.isChecked()
             self.settings_model.obsidian.sync_interval = self.obsidian_sync_interval_spin.value()
+
+            self.settings_model.review_view.question_prompt_enabled = self.review_prompt_enabled_check.isChecked()
+            self.settings_model.review_view.question_interval_minutes = self.review_question_interval_spin.value()
+            self.settings_model.review_view.arrow_pan_step = self.review_arrow_pan_step_spin.value()
 
             self.settings_model.features.enable_llm = self.feature_llm.isChecked()
             self.settings_model.features.enable_obsidian_sync = self.feature_obsidian.isChecked()
@@ -370,6 +407,12 @@ class SettingsDialog(QDialog):
         if idx < 0:
             idx = self.llm_device_mode_combo.findData("auto")
         self.llm_device_mode_combo.setCurrentIndex(max(0, idx))
+        self._sync_llm_mode_controls()
+
+    def _sync_llm_mode_controls(self):
+        mode = str(self.llm_device_mode_combo.currentData() or "auto")
+        cpu_only = mode == "cpu_only"
+        self.llm_cpu_threads_spin.setEnabled(cpu_only)
 
     @staticmethod
     def _derive_device_flags(mode_value: str) -> tuple[bool, bool]:

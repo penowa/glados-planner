@@ -1,5 +1,5 @@
 app:
-  name: Philosophy Planner
+  name: Planner
   version: 0.1.0
   debug: true
   log_level: INFO
@@ -13,19 +13,20 @@ database:
   url: sqlite:///data/database/philosophy.db
   echo: false
 llm:
-  model_name: mistral-7b-GGUF-Q4K.gguf
-  model_path: /home/penowa/Glados/data/models/mistral-7b-GGUF-Q4K.gguf
+  model_name: Qwen3-4B-UD-Q4_K_XL.gguf
+  model_path: /home/penowa/Glados/data/models/Qwen3-4B-UD-Q4_K_XL.gguf
   models_dir: ./data/models
-  n_ctx: 4000
-  n_gpu_layers: 25
+  n_ctx: 3500
+  n_gpu_layers: 18
   use_gpu: true
   use_cpu: false
   device_mode: gpu_only
   gpu_index: 0
+  vram_soft_limit_mb: 0
   temperature: 0.35
   top_p: 0.9
   repeat_penalty: 1.12
-  max_tokens: 900
+  max_tokens: 1000
   cpu:
     threads: 4
     batch_size: 128
@@ -90,6 +91,10 @@ features:
   enable_translation: false
   enable_glados_personality: true
   enable_vault_as_brain: true
+review_view:
+  question_prompt_enabled: true
+  question_interval_minutes: 10
+  arrow_pan_step: 130
 cache:
   enabled: true
   max_size: 100

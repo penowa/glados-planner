@@ -86,14 +86,16 @@ class BackendWorker(QThread):
         query = self.task_data.get("query", "")
         use_semantic = self.task_data.get("use_semantic", True)
         user_name = self.task_data.get("user_name", "Helio")
-        
+        request_metadata = self.task_data.get("request_metadata") or {}
+
         self.progress_updated.emit(10, "Consultando o cérebro de GLaDOS...")
-        
+
         # Gerar resposta usando backend completo
         result = backend_llm.generate(
             query=query,
             user_name=user_name,
-            use_semantic=use_semantic
+            use_semantic=use_semantic,
+            request_metadata=request_metadata,
         )
         
         self.progress_updated.emit(90, "Formando resposta no estilo GLaDOS...")
@@ -103,9 +105,10 @@ class BackendWorker(QThread):
             "task_type": self.task_type,
             "query_length": len(query),
             "response_length": len(result.get("text", "")),
-            "semantic_used": use_semantic and result.get("semantic_context_used", False)
+            "semantic_used": use_semantic and result.get("semantic_context_used", False),
+            "request_metadata": request_metadata,
         }
-        
+
         return result
     
     def _run_vault_search(self) -> Dict:
@@ -322,10 +325,16 @@ class GladosController(QObject):
         for task_id in finished:
             del self.active_workers[task_id]
     
-    @pyqtSlot(str, bool, str)
-    def ask_glados(self, question: str, use_semantic: bool = True, user_name: str = "Helio"):
+    @pyqtSlot(str, bool, str, object)
+    def ask_glados(
+        self,
+        question: str,
+        use_semantic: bool = True,
+        user_name: str = "Helio",
+        request_metadata: Optional[Dict[str, Any]] = None,
+    ):
         """Envia pergunta para GLaDOS (backend completo)"""
-        
+
         # Adicionar ao histórico
         self._add_to_conversation("user", question)
         
@@ -336,7 +345,8 @@ class GladosController(QObject):
             task_data={
                 "query": question,
                 "use_semantic": use_semantic,
-                "user_name": user_name
+                "user_name": user_name,
+                "request_metadata": request_metadata or {},
             }
         )
         

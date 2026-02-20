@@ -34,6 +34,7 @@ class AgendaCard(PhilosophyCard):
     # Compatibilidade com dashboard.py
     navigate_to_agenda = pyqtSignal()
     start_reading_session = pyqtSignal(dict)
+    start_review_session = pyqtSignal(dict)
     edit_reading_session = pyqtSignal(dict)
     skip_reading_session = pyqtSignal(dict)
 
@@ -141,10 +142,13 @@ class AgendaCard(PhilosophyCard):
 
         self.add_button = QPushButton("➕ Adicionar")
         self.add_button.setObjectName("action_button")
+        self.review_button = QPushButton("🧠 Abrir revisão")
+        self.review_button.setObjectName("action_button")
         self.details_button = QPushButton("📋 Ver Detalhes")
         self.details_button.setObjectName("action_button")
 
         actions_layout.addWidget(self.add_button)
+        actions_layout.addWidget(self.review_button)
         actions_layout.addWidget(self.details_button)
 
         layout.addWidget(header)
@@ -193,6 +197,7 @@ class AgendaCard(PhilosophyCard):
     def _setup_connections(self):
         self.checkin_button.clicked.connect(self.on_checkin_clicked)
         self.add_button.clicked.connect(self.on_add_event)
+        self.review_button.clicked.connect(self.on_open_review)
         self.details_button.clicked.connect(self.on_view_details)
 
         self.prev_week_button.clicked.connect(self.show_previous_week)
@@ -377,6 +382,7 @@ class AgendaCard(PhilosophyCard):
             self.timer_label.setText("--:--")
             self.next_event_time = None
             self.next_event_data = None
+            self.start_session_button.setText("Iniciar sessão agendada")
             self.start_session_button.setVisible(False)
             self.timer_label.setVisible(True)
             return
@@ -398,6 +404,7 @@ class AgendaCard(PhilosophyCard):
             self.timer_label.setText("--:--")
             self.next_event_time = None
             self.next_event_data = None
+            self.start_session_button.setText("Iniciar sessão agendada")
             self.start_session_button.setVisible(False)
             self.timer_label.setVisible(True)
             return
@@ -419,10 +426,15 @@ class AgendaCard(PhilosophyCard):
         delta = self.next_event_time - now
         next_event = getattr(self, "next_event_data", None) or {}
         is_reading = self._is_reading_event(next_event)
+        is_review = self._is_review_event(next_event)
 
-        if is_reading and delta.total_seconds() <= 300:
+        if (is_reading or is_review) and delta.total_seconds() <= 300:
             self.timer_label.setVisible(False)
             self.start_session_button.setVisible(True)
+            if is_review:
+                self.start_session_button.setText("Abrir revisão agendada")
+            else:
+                self.start_session_button.setText("Iniciar sessão agendada")
         else:
             self.start_session_button.setVisible(False)
             self.timer_label.setVisible(True)
@@ -444,14 +456,28 @@ class AgendaCard(PhilosophyCard):
         event_type = str(event.get("type", "")).strip().lower()
         return event_type == "leitura"
 
+    def _is_review_event(self, event: Dict[str, Any]) -> bool:
+        event_type = str(event.get("type", "")).strip().lower()
+        return event_type in {"revisao", "revisão"}
+
     def _start_next_reading_session(self):
         event_data = getattr(self, "next_event_data", None)
         if not event_data:
+            return
+        if self._is_review_event(event_data):
+            self.start_review_session.emit(event_data)
             return
         self.start_reading_session.emit(event_data)
 
     def on_add_event(self):
         self.add_event_requested.emit()
+
+    def on_open_review(self):
+        event_data = getattr(self, "next_event_data", None)
+        if event_data and self._is_review_event(event_data):
+            self.start_review_session.emit(event_data)
+            return
+        self.quick_action.emit("open_review_plan", {})
 
     def on_view_details(self):
         self.navigate_to_detailed_view.emit()

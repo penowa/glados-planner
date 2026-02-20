@@ -31,6 +31,8 @@ from ui.views.session import SessionView
 from ui.views.vault_glados import VaultGladosView
 from ui.views.weekly_review import WeeklyReviewView
 from ui.views.library import LibraryView
+from ui.views.review_planner import ReviewPlanDialog
+from ui.views.review_workspace import ReviewWorkspaceView
 
 # Controllers
 from ui.controllers.book_controller import BookController
@@ -116,6 +118,7 @@ class MainWindow(QMainWindow):
     theme_changed = pyqtSignal(str)
     view_changed = pyqtSignal(str)
     system_status_changed = pyqtSignal(dict)
+    review_completion_detected = pyqtSignal(dict)
     
     def __init__(
         self,
@@ -150,6 +153,8 @@ class MainWindow(QMainWindow):
         self.notifications_enabled = True
         self._event_notification_count = 0
         self._reading_session_notified_ids = set()
+        self._pending_review_prompts: Dict[str, Dict[str, Any]] = {}
+        self._review_completion_listener_registered = False
         
         # Inicializar
         self.setup_window()
@@ -441,6 +446,12 @@ class MainWindow(QMainWindow):
                 self.custom_assistant_name
             )
         self.views['dashboard'].navigate_to.connect(self.change_view)
+        if hasattr(self.views['dashboard'], "review_requested"):
+            self.views['dashboard'].review_requested.connect(self.open_review_planner_from_dashboard)
+        if hasattr(self.views['dashboard'], "review_workspace_requested"):
+            self.views['dashboard'].review_workspace_requested.connect(
+                self.open_review_workspace_from_dashboard
+            )
         self.views['vault_glados'] = VaultGladosView(self.controllers)
         if hasattr(self.views['vault_glados'], "update_identity"):
             self.views['vault_glados'].update_identity(
@@ -453,10 +464,16 @@ class MainWindow(QMainWindow):
         self.views['library'] = LibraryView(self.controllers)
         self.views['library'].navigate_to.connect(self.change_view)
         self.views['library'].open_book_requested.connect(self.open_book_from_library)
+        if hasattr(self.views['library'], "review_workspace_requested"):
+            self.views['library'].review_workspace_requested.connect(
+                self.open_review_workspace_from_library
+            )
         self.views['agenda'] = AgendaView(self.controllers.get('agenda'))
         self.views['agenda'].navigate_to.connect(self.change_view)
         self.views['weekly_review'] = WeeklyReviewView(self.controllers)
         self.views['weekly_review'].navigate_to.connect(self.change_view)
+        self.views['review_workspace'] = ReviewWorkspaceView(self.controllers)
+        self.views['review_workspace'].navigate_to.connect(self.change_view)
         #self.views['library'] =  LibraryView(self.controllers['reading'])
         #self.views['focus'] = FocusView(self.controllers['focus'])
         #self.views['concepts'] = ConceptsView(self.controllers['book'])
@@ -484,6 +501,7 @@ class MainWindow(QMainWindow):
         # 1. Conexões internas
         self.theme_changed.connect(self.on_theme_changed)
         self.view_changed.connect(self.on_view_changed)
+        self.review_completion_detected.connect(self._on_review_completion_detected)
         
         # 2. Conexões com EventBus
         bus = self.event_bus
@@ -516,6 +534,11 @@ class MainWindow(QMainWindow):
             daily_checkin_controller.evening_checkin_needed.connect(self._refresh_notification_counter)
             daily_checkin_controller.checkin_completed.connect(self._on_checkin_completed)
 
+        agenda_controller = self.controllers.get("agenda")
+        if agenda_controller and hasattr(agenda_controller, "review_plan_scheduled"):
+            agenda_controller.review_plan_scheduled.connect(self._on_review_plan_scheduled)
+
+        self._register_reading_completion_listener()
         self._refresh_notification_counter()
     
     def setup_systems(self):
@@ -594,6 +617,12 @@ class MainWindow(QMainWindow):
             return
         
         old_view = self.current_view
+        old_widget = self.views.get(old_view)
+        if old_widget and hasattr(old_widget, "on_view_deactivated"):
+            try:
+                old_widget.on_view_deactivated(view_name)
+            except Exception as exc:
+                logger.debug("Falha em on_view_deactivated(%s): %s", old_view, exc)
         self.current_view = view_name
         
         # Atualizar título do app_logo
@@ -710,6 +739,12 @@ class MainWindow(QMainWindow):
         self.config.update(updated_settings)
         self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(updated_settings)
         self._apply_custom_identity_to_ui()
+        review_view = self.views.get("review_workspace")
+        if review_view and hasattr(review_view, "apply_review_settings"):
+            try:
+                review_view.apply_review_settings(updated_settings.get("review_view", {}))
+            except Exception as exc:
+                logger.debug("Falha ao aplicar settings na review workspace: %s", exc)
         self.show_success_notification(
             "Configurações salvas",
             "As configurações foram atualizadas com sucesso."
@@ -806,6 +841,7 @@ class MainWindow(QMainWindow):
             'dashboard': self.custom_assistant_name,
             'vault_glados': f'Vault + {self.custom_assistant_name}',
             'session': 'Sessão',
+            'review_workspace': 'Revisão',
             'library': 'Biblioteca',
             'agenda': 'Agenda',
             'weekly_review': 'Revisão Semanal',
@@ -897,6 +933,283 @@ class MainWindow(QMainWindow):
             self.change_view("session")
         except Exception as exc:
             logger.error("Falha ao abrir livro da biblioteca: %s", exc)
+
+    @pyqtSlot(dict)
+    def open_review_workspace_from_dashboard(self, payload: Dict[str, Any] | None = None):
+        """Abre workspace de revisão a partir do evento da agenda no dashboard."""
+        self._open_review_workspace(payload or {}, source="dashboard")
+
+    @pyqtSlot(dict)
+    def open_review_workspace_from_library(self, payload: Dict[str, Any] | None = None):
+        """Abre workspace de revisão a partir da biblioteca."""
+        self._open_review_workspace(payload or {}, source="library")
+
+    def _open_review_workspace(self, payload: Dict[str, Any], source: str = ""):
+        review_view = self.views.get("review_workspace")
+        if not review_view or not hasattr(review_view, "open_review"):
+            QMessageBox.warning(self, "Revisão", "Review workspace não está disponível.")
+            return
+
+        event_data = dict(payload or {})
+        metadata = event_data.get("metadata", {}) if isinstance(event_data.get("metadata"), dict) else {}
+
+        book_id = str(
+            event_data.get("book_id")
+            or metadata.get("book_id")
+            or metadata.get("id")
+            or ""
+        ).strip()
+
+        book_title = str(event_data.get("book_title") or "").strip()
+        if not book_title:
+            title_candidate = str(event_data.get("title") or "").strip()
+            lowered = title_candidate.lower()
+            if lowered.startswith("revisão:") or lowered.startswith("revisao:"):
+                title_candidate = title_candidate.split(":", 1)[1].strip()
+            book_title = title_candidate
+
+        book_dir_raw = event_data.get("book_dir") or metadata.get("book_dir")
+        book_dir = Path(book_dir_raw) if book_dir_raw else None
+        if book_dir and not book_dir.exists():
+            book_dir = None
+
+        opened = False
+        try:
+            opened = bool(
+                review_view.open_review(
+                    book_id=book_id,
+                    book_title=book_title,
+                    book_dir=book_dir,
+                    source_event=event_data,
+                )
+            )
+        except Exception as exc:
+            logger.error("Falha ao abrir review workspace (%s): %s", source, exc)
+            QMessageBox.warning(self, "Revisão", f"Não foi possível abrir a revisão: {exc}")
+            return
+
+        if not opened:
+            QMessageBox.information(
+                self,
+                "Revisão",
+                "Não foi possível localizar dados suficientes para abrir a revisão da obra.",
+            )
+            return
+
+        self.change_view("review_workspace")
+
+    def _resolve_review_backends(self):
+        agenda_controller = self.controllers.get("agenda")
+        reading_controller = self.controllers.get("reading")
+        reading_manager = None
+        if reading_controller is not None:
+            reading_manager = getattr(reading_controller, "reading_manager", None)
+        if reading_manager is None:
+            reading_manager = self.backend_modules.get("reading_manager")
+        return agenda_controller, reading_manager
+
+    def _build_review_book_options(self, completed_only: bool = True) -> List[Dict[str, Any]]:
+        _, reading_manager = self._resolve_review_backends()
+        readings = getattr(reading_manager, "readings", None)
+        if not isinstance(readings, dict):
+            return []
+
+        options: List[Dict[str, Any]] = []
+        for bid, progress in readings.items():
+            total_pages = int(getattr(progress, "total_pages", 0) or 0)
+            current_page = int(getattr(progress, "current_page", 0) or 0)
+            completion = (current_page / total_pages * 100.0) if total_pages > 0 else 0.0
+            is_completed = total_pages > 0 and current_page >= total_pages
+            if completed_only and not is_completed:
+                continue
+
+            options.append(
+                {
+                    "book_id": str(bid),
+                    "title": str(getattr(progress, "title", "Livro") or "Livro"),
+                    "author": str(getattr(progress, "author", "") or ""),
+                    "completion": completion,
+                }
+            )
+
+        options.sort(key=lambda item: (item["title"].lower(), item["book_id"]))
+        return options
+
+    @pyqtSlot(dict)
+    def open_review_planner_from_dashboard(self, _payload: dict | None = None):
+        """Abre fluxo de plano de revisão a partir do dashboard."""
+        self._open_review_planner(source="dashboard", completed_only=True)
+
+    def _schedule_review_plan(
+        self,
+        book_id: str,
+        plan_days: int,
+        hours_per_session: float,
+        sessions_per_day: int,
+    ) -> Dict[str, Any]:
+        agenda_controller, _ = self._resolve_review_backends()
+        if not agenda_controller:
+            return {"error": "AgendaController não disponível."}
+
+        if hasattr(agenda_controller, "schedule_review_plan"):
+            return agenda_controller.schedule_review_plan(
+                str(book_id),
+                int(plan_days),
+                float(hours_per_session),
+                int(sessions_per_day),
+            ) or {}
+
+        manager = getattr(agenda_controller, "agenda_manager", None)
+        if manager and hasattr(manager, "create_review_plan"):
+            return manager.create_review_plan(
+                book_id=str(book_id),
+                plan_days=int(plan_days),
+                hours_per_session=float(hours_per_session),
+                sessions_per_day=int(sessions_per_day),
+            ) or {}
+
+        return {"error": "AgendaManager não suporta plano de revisão."}
+
+    def _open_review_planner(
+        self,
+        *,
+        source: str,
+        book_id: str | None = None,
+        book_title: str = "",
+        completed_only: bool = True,
+    ) -> Dict[str, Any]:
+        agenda_controller, reading_manager = self._resolve_review_backends()
+        if not agenda_controller or not reading_manager:
+            QMessageBox.warning(self, "Plano de revisão", "Módulos de leitura/agenda não disponíveis.")
+            return {"error": "backends_unavailable"}
+
+        normalized_book_id = str(book_id or "").strip()
+        options: List[Dict[str, Any]] = []
+        if not normalized_book_id:
+            options = self._build_review_book_options(completed_only=completed_only)
+            if not options:
+                QMessageBox.information(
+                    self,
+                    "Plano de revisão",
+                    "Nenhuma obra elegível foi encontrada para criar revisão.",
+                )
+                return {"error": "no_books_available"}
+
+        dialog = ReviewPlanDialog(
+            self,
+            book_id=normalized_book_id or None,
+            book_title=book_title,
+            book_options=None if normalized_book_id else options,
+        )
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return {"cancelled": True}
+
+        values = dialog.values()
+        selected_book_id = str(values.get("book_id") or normalized_book_id or "").strip()
+        if not selected_book_id:
+            QMessageBox.warning(self, "Plano de revisão", "Livro inválido para criação do plano.")
+            return {"error": "invalid_book"}
+
+        plan_days = int(values.get("plan_days", 7) or 7)
+        hours_per_session = float(values.get("hours_per_session", 1.0) or 1.0)
+        sessions_per_day = int(values.get("sessions_per_day", 1) or 1)
+
+        result = self._schedule_review_plan(
+            selected_book_id,
+            plan_days,
+            hours_per_session,
+            sessions_per_day,
+        )
+
+        if result.get("error"):
+            QMessageBox.warning(
+                self,
+                "Plano de revisão",
+                f"Não foi possível criar o plano: {result.get('error')}",
+            )
+            return result
+
+        sessions_created = int(result.get("sessions_created_count", 0) or 0)
+        title = str(
+            result.get("book_title")
+            or values.get("book_title")
+            or book_title
+            or selected_book_id
+        ).strip()
+        self._pending_review_prompts.pop(selected_book_id, None)
+        self._refresh_notification_counter()
+
+        self.event_bus.notification.emit(
+            "success",
+            "Plano de revisão criado",
+            f"{title}: {sessions_created} sessão(ões) agendadas via {source}.",
+        )
+
+        dashboard_view = self.views.get("dashboard")
+        if dashboard_view and hasattr(dashboard_view, "refresh_data"):
+            dashboard_view.refresh_data()
+
+        return result
+
+    def _register_reading_completion_listener(self):
+        if self._review_completion_listener_registered:
+            return
+        _, reading_manager = self._resolve_review_backends()
+        if not reading_manager or not hasattr(reading_manager, "register_completion_listener"):
+            return
+        try:
+            reading_manager.register_completion_listener(self._on_reading_completion_listener)
+            self._review_completion_listener_registered = True
+        except Exception as exc:
+            logger.warning("Falha ao registrar listener de conclusão de leitura: %s", exc)
+
+    def _unregister_reading_completion_listener(self):
+        if not self._review_completion_listener_registered:
+            return
+        _, reading_manager = self._resolve_review_backends()
+        if not reading_manager or not hasattr(reading_manager, "unregister_completion_listener"):
+            self._review_completion_listener_registered = False
+            return
+        try:
+            reading_manager.unregister_completion_listener(self._on_reading_completion_listener)
+        except Exception:
+            pass
+        self._review_completion_listener_registered = False
+
+    def _on_reading_completion_listener(self, payload: Dict[str, Any]):
+        try:
+            self.review_completion_detected.emit(dict(payload or {}))
+        except Exception as exc:
+            logger.warning("Falha ao encaminhar conclusão de leitura: %s", exc)
+
+    @pyqtSlot(dict)
+    def _on_review_completion_detected(self, payload: Dict[str, Any]):
+        book_id = str(payload.get("book_id") or "").strip()
+        if not book_id:
+            return
+
+        title = str(payload.get("title") or "Livro").strip() or "Livro"
+        self._pending_review_prompts[book_id] = {
+            "book_id": book_id,
+            "title": title,
+            "payload": dict(payload or {}),
+            "detected_at": datetime.now().isoformat(),
+        }
+        self._refresh_notification_counter()
+
+        self.event_bus.notification.emit(
+            "info",
+            "Livro concluído",
+            f"'{title}' foi concluído. Deseja criar um plano de revisão?",
+        )
+
+        self._open_review_planner(
+            source="auto_completion",
+            book_id=book_id,
+            book_title=title,
+            completed_only=False,
+        )
 
     def _has_upcoming_reading_session(self, window_minutes: int = 10) -> bool:
         agenda_controller = self.controllers.get("agenda")
@@ -1084,6 +1397,7 @@ class MainWindow(QMainWindow):
         daily_checkin_controller = self.controllers.get('daily_checkin')
         morning_action = None
         evening_action = None
+        review_actions: Dict[Any, str] = {}
 
         if daily_checkin_controller:
             morning_pending = daily_checkin_controller.is_morning_pending()
@@ -1104,6 +1418,13 @@ class MainWindow(QMainWindow):
 
         system_notifications_action = menu.addAction("🔔 Ver notificações do sistema")
 
+        if self._pending_review_prompts:
+            menu.addSeparator()
+            for book_id, entry in list(self._pending_review_prompts.items())[:8]:
+                title = str(entry.get("title") or book_id).strip()
+                action = menu.addAction(f"🧠 Abrir revisão: {title}")
+                review_actions[action] = book_id
+
         pos = self.notification_button.mapToGlobal(QPoint(0, self.notification_button.height()))
         selected_action = menu.exec(pos)
 
@@ -1113,6 +1434,15 @@ class MainWindow(QMainWindow):
             daily_checkin_controller.show_evening_dialog(self)
         elif selected_action == system_notifications_action:
             self._show_notification_panel()
+        elif selected_action in review_actions:
+            selected_book_id = review_actions.get(selected_action)
+            pending = self._pending_review_prompts.get(str(selected_book_id), {})
+            self._open_review_planner(
+                source="notification",
+                book_id=str(selected_book_id or ""),
+                book_title=str(pending.get("title") or ""),
+                completed_only=False,
+            )
 
         self._refresh_notification_counter()
 
@@ -1145,11 +1475,25 @@ class MainWindow(QMainWindow):
             pending += 1
         return pending
 
+    def _get_pending_review_prompts_count(self) -> int:
+        return len(self._pending_review_prompts)
+
     def _refresh_notification_counter(self):
         """Atualiza contador do sino considerando sistema + check-ins"""
-        total = self._event_notification_count + self._get_pending_checkins_count()
+        total = (
+            self._event_notification_count
+            + self._get_pending_checkins_count()
+            + self._get_pending_review_prompts_count()
+        )
         self.notification_count.setText(str(total))
         self.notification_count.setVisible(total > 0)
+
+    @pyqtSlot(str, dict)
+    def _on_review_plan_scheduled(self, book_id: str, _result: dict):
+        normalized = str(book_id or "").strip()
+        if normalized:
+            self._pending_review_prompts.pop(normalized, None)
+            self._refresh_notification_counter()
 
     @pyqtSlot(str, dict)
     def _on_checkin_completed(self, checkin_type: str, data: dict):
@@ -1579,6 +1923,8 @@ class MainWindow(QMainWindow):
                 self.backup_timer.stop()
             if hasattr(self, 'status_timer'):
                 self.status_timer.stop()
+
+            self._unregister_reading_completion_listener()
             
             # 2. Limpar views
             for view_name, view in self.views.items():

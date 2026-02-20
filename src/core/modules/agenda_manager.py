@@ -16,6 +16,7 @@ import uuid
 # Módulos que serão importados (importação real será ajustada)
 from .reading_manager import ReadingManager
 from .review_system import ReviewSystem
+from .smart_allocator import SmartAllocator
 from .pomodoro_timer import PomodoroTimer
 from .writing_assistant import WritingAssistant
 
@@ -1101,6 +1102,158 @@ class AgendaManager:
             {"period": "tarde", "time": "14:00-17:00", "score": 0.7},
             {"period": "noite", "time": "19:00-22:00", "score": 0.9}
         ]
+
+    def _preferred_study_window(self) -> Tuple[int, int]:
+        """Calcula janela diária de estudo baseada no horário de sono."""
+        sleep_cfg = self.user_preferences.get("sleep_schedule", {})
+        sleep_end = self._normalize_hhmm(sleep_cfg.get("end", "07:00"), "07:00")
+        sleep_start = self._normalize_hhmm(sleep_cfg.get("start", "23:00"), "23:00")
+
+        try:
+            wake_hour = int(sleep_end.split(":", 1)[0])
+        except Exception:
+            wake_hour = 7
+
+        try:
+            sleep_hour = int(sleep_start.split(":", 1)[0])
+        except Exception:
+            sleep_hour = 23
+
+        start_hour = max(6, min(12, wake_hour + 1))
+        end_hour = max(18, min(23, sleep_hour - 1))
+
+        if end_hour <= start_hour:
+            return 8, 22
+        return start_hour, end_hour
+
+    def create_review_plan(
+        self,
+        book_id: str,
+        plan_days: int = 7,
+        hours_per_session: float = 1.0,
+        sessions_per_day: int = 1,
+        start_date: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Cria um plano de revisão para uma obra usando slots da agenda + SmartAllocator.
+
+        Args:
+            book_id: ID da obra no ReadingManager
+            plan_days: Horizonte do plano (3, 7 ou 14 dias)
+            hours_per_session: Duração de cada sessão em horas
+            sessions_per_day: Quantidade desejada de sessões por dia
+            start_date: Data inicial (YYYY-MM-DD). Padrão: hoje
+
+        Returns:
+            Resultado com sessões criadas e avisos
+        """
+        try:
+            plan_days = int(plan_days or 7)
+        except Exception:
+            plan_days = 7
+        if plan_days not in (3, 7, 14):
+            return {"error": "Plano inválido. Use 3, 7 ou 14 dias."}
+
+        try:
+            hours_per_session = float(hours_per_session or 1.0)
+        except Exception:
+            hours_per_session = 1.0
+        hours_per_session = max(0.25, min(8.0, hours_per_session))
+        session_minutes = max(15, int(round(hours_per_session * 60)))
+
+        try:
+            sessions_per_day = int(sessions_per_day or 1)
+        except Exception:
+            sessions_per_day = 1
+        sessions_per_day = max(1, min(8, sessions_per_day))
+
+        book_progress = self.reading_manager.get_reading_progress(book_id)
+        if not book_progress:
+            return {"error": "Livro não encontrado"}
+
+        book_title = str(book_progress.get("title", "Livro")).strip() or "Livro"
+        completion = float(book_progress.get("percentage", 0.0) or 0.0)
+
+        if start_date:
+            try:
+                start_day = date.fromisoformat(str(start_date).strip())
+            except Exception:
+                start_day = datetime.now().date()
+        else:
+            start_day = datetime.now().date()
+
+        start_hour, end_hour = self._preferred_study_window()
+        sessions_created: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+
+        for day_offset in range(plan_days):
+            target_day = start_day + timedelta(days=day_offset)
+            date_str = target_day.isoformat()
+            free_slots = self.find_free_slots(
+                date_str,
+                duration_minutes=session_minutes,
+                start_hour=start_hour,
+                end_hour=end_hour,
+                consider_preferences=True,
+            )
+
+            selected_slots = SmartAllocator.select_review_slots(
+                available_slots=free_slots,
+                sessions_per_day=sessions_per_day,
+                session_duration_minutes=session_minutes,
+            )
+
+            if len(selected_slots) < sessions_per_day:
+                warnings.append(
+                    f"{date_str}: apenas {len(selected_slots)}/{sessions_per_day} sessão(ões) encontradas."
+                )
+
+            for idx, slot in enumerate(selected_slots, start=1):
+                event_id = self.add_event(
+                    title=f"Revisão: {book_title}",
+                    start=str(slot.get("start", "")).strip(),
+                    end=str(slot.get("end", "")).strip(),
+                    event_type="revisao",
+                    book_id=book_id,
+                    discipline="Revisão",
+                    difficulty=2,
+                    review_plan=True,
+                    review_plan_day=day_offset + 1,
+                    review_session_index=idx,
+                    review_total_days=plan_days,
+                    hours_per_session=hours_per_session,
+                )
+                sessions_created.append(
+                    {
+                        "event_id": event_id,
+                        "date": date_str,
+                        "start": slot.get("start"),
+                        "end": slot.get("end"),
+                        "duration_minutes": int(slot.get("duration_minutes", session_minutes) or session_minutes),
+                        "quality_score": float(slot.get("quality_score", 0.5) or 0.5),
+                    }
+                )
+
+        result = {
+            "book_id": str(book_id),
+            "book_title": book_title,
+            "completion_percentage": completion,
+            "plan_days": plan_days,
+            "hours_per_session": hours_per_session,
+            "sessions_per_day_requested": sessions_per_day,
+            "sessions_expected": plan_days * sessions_per_day,
+            "sessions_created_count": len(sessions_created),
+            "sessions_created": sessions_created,
+            "start_date": start_day.isoformat(),
+            "end_date": (start_day + timedelta(days=plan_days - 1)).isoformat(),
+            "warnings": warnings,
+        }
+
+        if not sessions_created:
+            result["error"] = (
+                "Não foi possível encontrar slots livres para as sessões de revisão."
+            )
+        return result
     
     def transition_to_review(self, book_id: str, review_type: str = "spaced",
                            deadline: str = None) -> Dict:

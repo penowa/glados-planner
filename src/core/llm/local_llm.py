@@ -67,8 +67,18 @@ class LocalLLM:
             return
         
         try:
-            # Configuração do modelo
-            cpu_threads = max(1, min(int(settings.llm.cpu.threads), 4))
+            # Configuração de threads por modo:
+            # - cpu_only: respeita integralmente o valor configurado pelo usuário.
+            # - gpu_only: limita a 2 threads para reduzir uso de CPU auxiliar.
+            # - demais modos: mantém teto conservador de 4.
+            device_mode = str(getattr(settings.llm, "device_mode", "auto") or "auto").lower()
+            requested_threads = max(1, int(getattr(settings.llm.cpu, "threads", 4) or 4))
+            if device_mode == "cpu_only":
+                cpu_threads = requested_threads
+            elif device_mode == "gpu_only":
+                cpu_threads = min(requested_threads, 2)
+            else:
+                cpu_threads = min(requested_threads, 4)
             gpu_devices = detect_nvidia_gpus()
             selected_gpu = None
             selected_gpu_name = ""
@@ -98,6 +108,7 @@ class LocalLLM:
                 use_cpu=bool(getattr(settings.llm, "use_cpu", True)),
                 device_mode=str(getattr(settings.llm, "device_mode", "auto")),
                 gpu_index=int(getattr(settings.llm, "gpu_index", 0) or 0),
+                vram_soft_limit_mb=int(getattr(settings.llm, "vram_soft_limit_mb", 0) or 0),
                 gpu_name=selected_gpu_name,
                 temperature=settings.llm.temperature,
                 top_p=settings.llm.top_p,
@@ -250,8 +261,15 @@ class LocalLLM:
             "max_tokens": cfg.max_tokens,
         }
     
-    def generate(self, query: str, user_name: str = None, use_semantic: bool = True) -> Dict[str, Any]:
+    def generate(
+        self,
+        query: str,
+        user_name: str = None,
+        use_semantic: bool = True,
+        request_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Gera resposta para uma consulta com contexto semântico"""
+        metadata = request_metadata or {}
         
         # Verificar cache primeiro
         cache_key = self._get_cache_key(query, user_name)
@@ -261,6 +279,7 @@ class LocalLLM:
                 print("⚡ Resposta do cache")
                 response = dict(response)
                 response["text"] = self._sanitize_response_text(response.get("text", ""))
+                response["request_metadata"] = metadata
                 return {
                     **response,
                     "cached": True,
@@ -276,6 +295,29 @@ class LocalLLM:
                     "Coloque em ./data/models/",
                     "Verifique o caminho em config/settings.yaml"
                 ]
+            }
+
+        if (
+            str(getattr(settings.llm, "device_mode", "auto")).lower() == "gpu_only"
+            and getattr(self.model, "llm", None) is None
+        ):
+            details = str(getattr(self.model, "runtime_init_error", "") or "").strip()
+            attempted = getattr(self.model, "runtime_gpu_attempts", []) or []
+            attempted_text = ",".join(str(x) for x in attempted) if attempted else "n/d"
+            if not details:
+                details = "modelo não carregou na GPU (causa não informada pelo backend)."
+            return {
+                "text": (
+                    "LLM indisponível na GPU (modo gpu_only estrito). "
+                    f"Diagnóstico: {details} "
+                    f"[gpu_index={getattr(settings.llm, 'gpu_index', 0)}, "
+                    f"n_gpu_layers={getattr(settings.llm, 'n_gpu_layers', 0)}, "
+                    f"tentativas={attempted_text}, "
+                    f"vram_soft_limit_mb={getattr(settings.llm, 'vram_soft_limit_mb', 0)}]"
+                ),
+                "model": "None",
+                "status": "error",
+                "error": f"gpu_only: model not loaded on GPU ({details})",
             }
         
         if user_name is None:
@@ -302,7 +344,8 @@ class LocalLLM:
                 "query": query,
                 "response": response[:100] + "..." if len(response) > 100 else response,
                 "timestamp": datetime.now().isoformat(),
-                "used_semantic": use_semantic and bool(semantic_context)
+                "used_semantic": use_semantic and bool(semantic_context),
+                "request_metadata": metadata,
             })
             
             # Limitar histórico
@@ -315,7 +358,8 @@ class LocalLLM:
                 "model": "TinyLlama-1.1B",
                 "status": "success",
                 "semantic_context_used": use_semantic and bool(semantic_context),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "request_metadata": metadata,
             }
             
             self.response_cache[cache_key] = (datetime.now().timestamp(), result)
@@ -338,6 +382,14 @@ class LocalLLM:
         except Exception as e:
             error_msg = f"Erro gerando resposta: {e}"
             print(f"❌ {error_msg}")
+
+            if str(getattr(settings.llm, "device_mode", "auto")).lower() == "gpu_only":
+                return {
+                    "text": "Falha na geração em modo gpu_only. Ajuste n_gpu_layers/libere VRAM.",
+                    "model": "None",
+                    "status": "error",
+                    "error": str(e),
+                }
             
             # Fallback para resposta sem LLM
             if self.sembrain:

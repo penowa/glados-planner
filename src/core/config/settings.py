@@ -59,6 +59,7 @@ class LlmConfig(BaseModel):
     use_cpu: bool = True
     device_mode: Literal["auto", "cpu_only", "gpu_prefer", "gpu_only"] = "auto"
     gpu_index: int = 0
+    vram_soft_limit_mb: int = 0
     temperature: float = 0.35
     top_p: float = 0.9
     repeat_penalty: float = 1.12
@@ -87,6 +88,12 @@ class FeaturesConfig(BaseModel):
     enable_glados_personality: bool = True
     enable_vault_as_brain: bool = True
 
+
+class ReviewViewConfig(BaseModel):
+    question_prompt_enabled: bool = True
+    question_interval_minutes: int = 10
+    arrow_pan_step: int = 130
+
 class CacheConfig(BaseModel):
     enabled: bool = True
     max_size: int = 100
@@ -106,6 +113,7 @@ class Settings(BaseSettings):
     obsidian: ObsidianConfig = ObsidianConfig()
     pomodoro: PomodoroConfig = PomodoroConfig()
     features: FeaturesConfig = FeaturesConfig()
+    review_view: ReviewViewConfig = ReviewViewConfig()
     cache: CacheConfig = CacheConfig()
     development: DevelopmentConfig = DevelopmentConfig()
     

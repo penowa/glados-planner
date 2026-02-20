@@ -147,6 +147,8 @@ class AgendaController(QObject):
     reading_scheduled = pyqtSignal(str, dict)  # (book_id, result)
     reading_scheduling_failed = pyqtSignal(str, str, dict)  # (book_id, error, context)
     reading_allocation_progress = pyqtSignal(str, int, str)  # (book_id, percent, message)
+    review_plan_scheduled = pyqtSignal(str, dict)  # (book_id, result)
+    review_plan_failed = pyqtSignal(str, str, dict)  # (book_id, error, context)
     
     # Otimizações e prazos
     deadlines_loaded = pyqtSignal(list)
@@ -271,6 +273,53 @@ class AgendaController(QObject):
         self._execute_scheduling_operation(book_id, operation_id, pages_per_day, strategy)
         
         return operation_id
+
+    @pyqtSlot(str, int, float, int, result=dict)
+    def schedule_review_plan(
+        self,
+        book_id: str,
+        plan_days: int = 7,
+        hours_per_session: float = 1.0,
+        sessions_per_day: int = 1,
+    ) -> Dict:
+        """
+        Agenda plano de revisão para um livro concluído (ou em conclusão).
+        """
+        if not self.agenda_manager or not hasattr(self.agenda_manager, "create_review_plan"):
+            error = "AgendaManager não suporta criação de plano de revisão."
+            context = {"book_id": book_id, "timestamp": datetime.now().isoformat()}
+            self.review_plan_failed.emit(book_id, error, context)
+            return {"error": error}
+
+        try:
+            result = self.agenda_manager.create_review_plan(
+                book_id=book_id,
+                plan_days=plan_days,
+                hours_per_session=hours_per_session,
+                sessions_per_day=sessions_per_day,
+            )
+        except Exception as exc:
+            error = str(exc)
+            context = {"book_id": book_id, "timestamp": datetime.now().isoformat()}
+            self.review_plan_failed.emit(book_id, error, context)
+            logger.error(f"Falha ao criar plano de revisão para {book_id}: {exc}")
+            return {"error": error}
+
+        if isinstance(result, dict) and result.get("error"):
+            error = str(result.get("error"))
+            context = {
+                "book_id": book_id,
+                "timestamp": datetime.now().isoformat(),
+                "result": result,
+            }
+            self.review_plan_failed.emit(book_id, error, context)
+            return result
+
+        self._invalidate_agenda_cache()
+        self.review_plan_scheduled.emit(book_id, result)
+        self.review_transitioned.emit(result if isinstance(result, dict) else {})
+        self.load_agenda_async()
+        return result
     
     def _validate_book_for_scheduling(self, book_id: str) -> Dict:
         """Valida livro para agendamento"""

@@ -2,7 +2,7 @@
 """
 Gerenciador de leituras filosóficas
 """
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
@@ -47,6 +47,9 @@ class ReadingManager:
         self.readings = self._load_progress()
         if not isinstance(self.readings, dict):
             self.readings = {}
+
+        # Observadores para eventos de conclusão de livro.
+        self._completion_listeners: List[Callable[[Dict[str, Any]], None]] = []
     
     def _load_progress(self) -> Dict[str, ReadingProgress]:
         """Carrega progresso de leitura do arquivo"""
@@ -126,6 +129,9 @@ class ReadingManager:
                     "title": progress.title,
                     "progress": f"{progress.current_page}/{progress.total_pages}",
                     "percentage": (progress.current_page / progress.total_pages * 100) if progress.total_pages > 0 else 0,
+                    "current_page": progress.current_page,
+                    "total_pages": progress.total_pages,
+                    "completed": progress.total_pages > 0 and progress.current_page >= progress.total_pages,
                     "reading_speed": progress.reading_speed,
                     "estimated_completion": progress.estimated_completion
                 }
@@ -139,6 +145,9 @@ class ReadingManager:
                     "title": progress.title,
                     "progress": f"{progress.current_page}/{progress.total_pages}",
                     "percentage": (progress.current_page / progress.total_pages * 100) if progress.total_pages > 0 else 0,
+                    "current_page": progress.current_page,
+                    "total_pages": progress.total_pages,
+                    "completed": progress.total_pages > 0 and progress.current_page >= progress.total_pages,
                     "reading_speed": progress.reading_speed,
                     "estimated_completion": progress.estimated_completion
                 }
@@ -156,30 +165,46 @@ class ReadingManager:
         Returns:
             True se atualizado com sucesso
         """
+        requested_page = max(int(current_page or 0), 0)
+        now_iso = datetime.now().isoformat()
+
+        previous_progress = self.readings.get(book_id)
+        was_completed = bool(
+            previous_progress
+            and previous_progress.total_pages > 0
+            and previous_progress.current_page >= previous_progress.total_pages
+        )
+
         if book_id not in self.readings:
             # Cria novo registro se não existir
             # Tenta obter informações do vault
             book_info = self._get_book_info_from_vault(book_id)
             if not book_info:
                 return False
+
+            total_pages = max(int(book_info.get('total_pages', 300) or 300), 1)
+            requested_page = min(requested_page, total_pages)
             
             self.readings[book_id] = ReadingProgress(
                 book_id=book_id,
                 title=book_info.get('title', 'Desconhecido'),
                 author=book_info.get('author', 'Desconhecido'),
-                total_pages=book_info.get('total_pages', 300),
-                current_page=current_page,
-                start_date=datetime.now().isoformat(),
-                last_read=datetime.now().isoformat(),
+                total_pages=total_pages,
+                current_page=requested_page,
+                start_date=now_iso,
+                last_read=now_iso,
                 reading_speed=10.0,  # padrão
-                estimated_completion=self._calculate_estimated_completion(book_id, current_page),
+                estimated_completion=self._calculate_estimated_completion(book_id, requested_page),
                 notes=[notes] if notes else []
             )
         else:
             # Atualiza registro existente
             progress = self.readings[book_id]
-            progress.current_page = current_page
-            progress.last_read = datetime.now().isoformat()
+            if progress.total_pages > 0:
+                requested_page = min(requested_page, int(progress.total_pages))
+
+            progress.current_page = requested_page
+            progress.last_read = now_iso
             
             if notes:
                 progress.notes.append(f"{datetime.now().strftime('%Y-%m-%d')}: {notes}")
@@ -188,11 +213,48 @@ class ReadingManager:
             self._update_reading_speed(book_id)
             
             # Recalcula estimativa de conclusão
-            progress.estimated_completion = self._calculate_estimated_completion(book_id, current_page)
+            progress.estimated_completion = self._calculate_estimated_completion(book_id, requested_page)
         
         # Salva alterações
         self._save_progress()
+
+        current = self.readings.get(book_id)
+        is_completed = bool(
+            current
+            and current.total_pages > 0
+            and current.current_page >= current.total_pages
+        )
+        if not was_completed and is_completed and current:
+            self._emit_completion_event(
+                {
+                    "book_id": str(current.book_id),
+                    "title": str(current.title or "Livro"),
+                    "author": str(current.author or "Desconhecido"),
+                    "current_page": int(current.current_page or 0),
+                    "total_pages": int(current.total_pages or 0),
+                    "completed_at": now_iso,
+                }
+            )
         return True
+
+    def register_completion_listener(self, callback: Callable[[Dict[str, Any]], None]):
+        """Registra callback para conclusão de livro."""
+        if not callable(callback):
+            return
+        if callback not in self._completion_listeners:
+            self._completion_listeners.append(callback)
+
+    def unregister_completion_listener(self, callback: Callable[[Dict[str, Any]], None]):
+        """Remove callback previamente registrado."""
+        if callback in self._completion_listeners:
+            self._completion_listeners.remove(callback)
+
+    def _emit_completion_event(self, payload: Dict[str, Any]):
+        for callback in list(self._completion_listeners):
+            try:
+                callback(dict(payload))
+            except Exception:
+                continue
     
     def generate_schedule(self, book_id: str, target_date: str = None) -> Dict:
         """
