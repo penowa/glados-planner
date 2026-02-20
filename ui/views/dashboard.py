@@ -34,6 +34,7 @@ class DashboardView(QWidget):
         self.book_controller = controllers.get('book') if controllers else None
         self.agenda_controller = controllers.get('agenda') if controllers else None
         self.reading_controller = controllers.get('reading') if controllers else None
+        self.daily_checkin_controller = controllers.get('daily_checkin') if controllers else None
         self.agenda_backend = self._resolve_agenda_backend()
         
         # Cards
@@ -49,11 +50,17 @@ class DashboardView(QWidget):
         self.daily_stats = {}
         self.user_name = "Usuário"
         self.assistant_name = "GLaDOS"
+        self.checkin_action_button = None
+        self._checkin_pulse_active = False
+        self._checkin_pulse_phase = False
+        self._active_checkin_type = None
+        self._all_checkins_done = False
         self._load_identity_from_settings()
         
         self.setup_ui()
         self.setup_connections()
         self.setup_timers()
+        self._refresh_checkin_button_state()
         
         logger.info("DashboardView inicializado com cards integrados")
 
@@ -207,10 +214,18 @@ class DashboardView(QWidget):
         refresh_button.setFixedSize(32, 32)
         refresh_button.setToolTip("Atualizar dashboard")
         refresh_button.clicked.connect(self.refresh_data)
+
+        # Botão único de check-in (matinal/noturno)
+        self.checkin_action_button = QPushButton("É hora do check-up!")
+        self.checkin_action_button.setObjectName("dashboard_checkin_button")
+        self.checkin_action_button.setMinimumWidth(220)
+        self.checkin_action_button.setFixedHeight(32)
+        self.checkin_action_button.clicked.connect(self._handle_dashboard_checkin)
         
         layout.addWidget(self.greeting_label)
         layout.addStretch()
         layout.addWidget(self.date_label)
+        layout.addWidget(self.checkin_action_button)
         layout.addWidget(refresh_button)
         
         # Separador sutil
@@ -277,6 +292,14 @@ class DashboardView(QWidget):
         
         if self.reading_controller and hasattr(self.reading_controller, 'stats_updated'):
             self.reading_controller.stats_updated.connect(self.update_stats_data)
+
+        if self.daily_checkin_controller:
+            if hasattr(self.daily_checkin_controller, "morning_checkin_needed"):
+                self.daily_checkin_controller.morning_checkin_needed.connect(self._refresh_checkin_button_state)
+            if hasattr(self.daily_checkin_controller, "evening_checkin_needed"):
+                self.daily_checkin_controller.evening_checkin_needed.connect(self._refresh_checkin_button_state)
+            if hasattr(self.daily_checkin_controller, "checkin_completed"):
+                self.daily_checkin_controller.checkin_completed.connect(self._on_checkin_completed)
         
     def show_import_dialog(self, file_path, initial_metadata):
         """Mostrar diálogo de configuração de importação"""
@@ -392,6 +415,16 @@ class DashboardView(QWidget):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.refresh_data)
         self.update_timer.start(300000)  # 5 minutos
+
+        # Timer para recalcular estado do botão de check-in
+        self.checkin_state_timer = QTimer()
+        self.checkin_state_timer.timeout.connect(self._refresh_checkin_button_state)
+        self.checkin_state_timer.start(30000)  # 30 segundos
+
+        # Timer para animação de pulso
+        self.checkin_pulse_timer = QTimer()
+        self.checkin_pulse_timer.timeout.connect(self._toggle_checkin_pulse)
+        self.checkin_pulse_timer.start(700)
     
     def load_initial_data(self):
         """Carrega dados iniciais dos controllers"""
@@ -425,6 +458,7 @@ class DashboardView(QWidget):
                 logger.error(f"Erro ao carregar estatísticas: {e}")
         
         # Vault permanece em modo sob demanda para reduzir custo de boot.
+        self._refresh_checkin_button_state()
     
     # ============ HANDLERS ============
     
@@ -618,6 +652,7 @@ class DashboardView(QWidget):
             self.agenda_card.refresh()
         if self.upcoming_commitments_card and hasattr(self.upcoming_commitments_card, 'refresh'):
             self.upcoming_commitments_card.refresh()
+        self._refresh_checkin_button_state()
     
     @pyqtSlot(dict)
     def update_stats_data(self, stats_data):
@@ -633,6 +668,160 @@ class DashboardView(QWidget):
     def on_view_activated(self):
         """Chamado quando a view é ativada"""
         self.load_initial_data()
+        self._refresh_checkin_button_state()
+
+    @pyqtSlot(str, dict)
+    def _on_checkin_completed(self, _checkin_type, _data):
+        self._refresh_checkin_button_state()
+
+    def _handle_dashboard_checkin(self):
+        controller = self.daily_checkin_controller
+        if not controller:
+            self.show_notification("Sistema de check-in indisponível.", "warning")
+            return
+
+        state = controller.get_dashboard_state() if hasattr(controller, "get_dashboard_state") else {}
+        active_type = str(state.get("active_type") or "").strip().lower()
+        dialog_parent = self.window() if isinstance(self.window(), QWidget) else self
+
+        if active_type == "morning":
+            controller.show_morning_dialog(dialog_parent)
+        elif active_type == "evening":
+            controller.show_evening_dialog(dialog_parent)
+        elif hasattr(controller, "is_morning_pending") and controller.is_morning_pending():
+            controller.show_morning_dialog(dialog_parent)
+        elif hasattr(controller, "is_evening_pending") and controller.is_evening_pending():
+            controller.show_evening_dialog(dialog_parent)
+        else:
+            self.show_notification("Check-ins do dia já concluídos.", "info")
+
+        self._refresh_checkin_button_state()
+
+    def _toggle_checkin_pulse(self):
+        if not self._checkin_pulse_active:
+            return
+        self._checkin_pulse_phase = not self._checkin_pulse_phase
+        self._apply_checkin_button_style()
+
+    def _refresh_checkin_button_state(self):
+        button = self.checkin_action_button
+        if not button:
+            return
+
+        button.setText("É hora do check-up!")
+        controller = self.daily_checkin_controller
+        if not controller:
+            button.setEnabled(False)
+            button.setVisible(True)
+            button.setToolTip("Controller de check-in não inicializado.")
+            self._active_checkin_type = None
+            self._checkin_pulse_active = False
+            self._checkin_pulse_phase = False
+            self._all_checkins_done = False
+            self._apply_checkin_button_style()
+            return
+
+        button.setEnabled(True)
+        state = controller.get_dashboard_state() if hasattr(controller, "get_dashboard_state") else {}
+        morning_pending = bool(state.get("morning_pending"))
+        evening_pending = bool(state.get("evening_pending"))
+        active_type = str(state.get("active_type") or "").strip().lower()
+        waiting_evening = bool(state.get("waiting_evening"))
+        evening_trigger = str(state.get("evening_trigger_time") or "").strip()
+        now_hour = QDateTime.currentDateTime().time().hour()
+        is_after_18 = now_hour >= 18
+
+        pulse = bool(state.get("pulse"))
+        should_show_morning = (not is_after_18) and morning_pending
+        should_show_evening = is_after_18 and evening_pending
+        should_show_button = should_show_morning or should_show_evening
+
+        self._active_checkin_type = None
+        if should_show_morning:
+            self._active_checkin_type = "morning"
+        elif should_show_evening:
+            self._active_checkin_type = "evening"
+
+        button.setVisible(should_show_button)
+        self._checkin_pulse_active = pulse
+        self._all_checkins_done = (not morning_pending and not evening_pending)
+        if not pulse:
+            self._checkin_pulse_phase = False
+
+        if active_type == "morning":
+            button.setToolTip("Check-in matinal pendente. O alerta visual encerra às 18h.")
+        elif active_type == "evening" and pulse:
+            button.setToolTip("Última atividade do dia passou. Faça o check-in noturno.")
+        elif morning_pending:
+            button.setToolTip("Check-in matinal ainda não registrado.")
+        elif evening_pending and waiting_evening:
+            if evening_trigger:
+                button.setToolTip(f"Check-in noturno ficará em destaque após {evening_trigger}.")
+            else:
+                button.setToolTip("Check-in noturno ficará em destaque após a última atividade do dia.")
+        elif evening_pending:
+            button.setToolTip("Check-in noturno pendente.")
+        else:
+            button.setToolTip("Check-ins do dia concluídos.")
+
+        self._apply_checkin_button_style()
+
+    def _apply_checkin_button_style(self):
+        if not self.checkin_action_button:
+            return
+
+        active_type = self._active_checkin_type
+        pulse_on = bool(self._checkin_pulse_active and self._checkin_pulse_phase)
+
+        if active_type == "morning":
+            base_bg = "#B8890A"
+            pulse_bg = "#D4A30C"
+            border = "#F5D56A"
+            text = "#1B1B1B"
+        elif active_type == "evening":
+            base_bg = "#A47908"
+            pulse_bg = "#C6920A"
+            border = "#EBC85D"
+            text = "#1B1B1B"
+        elif self._all_checkins_done:
+            base_bg = "#14532D"
+            pulse_bg = base_bg
+            border = "#22C55E"
+            text = "#DCFCE7"
+        else:
+            base_bg = "#1F2937"
+            pulse_bg = "#334155"
+            border = "#475569"
+            text = "#E2E8F0"
+
+        current_bg = pulse_bg if pulse_on else base_bg
+        hover_bg = pulse_bg if self._checkin_pulse_active else "#D4A30C"
+
+        self.checkin_action_button.setStyleSheet(
+            f"""
+            QPushButton#dashboard_checkin_button {{
+                background-color: {current_bg};
+                color: {text};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }}
+            QPushButton#dashboard_checkin_button:hover {{
+                background-color: {hover_bg};
+                border-color: #FFE08A;
+            }}
+            QPushButton#dashboard_checkin_button:pressed {{
+                background-color: #8E6707;
+            }}
+            QPushButton#dashboard_checkin_button:disabled {{
+                background-color: #1E293B;
+                color: #64748B;
+                border-color: #334155;
+            }}
+            """
+        )
         
     def cleanup(self):
         """Limpeza antes de fechar"""
@@ -640,6 +829,10 @@ class DashboardView(QWidget):
             self.greeting_timer.stop()
         if hasattr(self, 'update_timer'):
             self.update_timer.stop()
+        if hasattr(self, 'checkin_state_timer'):
+            self.checkin_state_timer.stop()
+        if hasattr(self, 'checkin_pulse_timer'):
+            self.checkin_pulse_timer.stop()
         
         # Limpar timer do vault se existir
         if hasattr(self, 'vault_timer'):

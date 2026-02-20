@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QSlider, QTextEdit, QGroupBox,
     QDialogButtonBox, QFormLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
 from core.modules.daily_checkin import DailyCheckinSystem
@@ -23,6 +23,8 @@ class EveningCheckinDialog(QDialog):
     def __init__(self, checkin_system: DailyCheckinSystem, parent=None):
         super().__init__(parent)
         self.checkin_system = checkin_system
+        self._is_saving = False
+        self._close_scheduled = False
         self.setWindowTitle("🌙 Check-in Noturno")
         self.setMinimumWidth(550)
         self.setModal(True)
@@ -92,10 +94,28 @@ class EveningCheckinDialog(QDialog):
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
+        self.button_box = button_box
         layout.addWidget(button_box)
+
+    def _disable_form(self):
+        self.mood_slider.setEnabled(False)
+        self.achievements_edit.setEnabled(False)
+        self.challenges_edit.setEnabled(False)
+        self.insights_edit.setEnabled(False)
+        if hasattr(self, "button_box"):
+            self.button_box.setEnabled(False)
+
+    def _finalize_accept(self):
+        # Fecha sem chamar o override novamente.
+        if self.result() != QDialog.DialogCode.Accepted:
+            QDialog.accept(self)
 
     def accept(self):
         """Salva o check-in noturno e fecha o diálogo"""
+        if self._is_saving or self._close_scheduled:
+            return
+
+        self._is_saving = True
         try:
             mood = float(self.mood_slider.value())
             achievements = self.achievements_edit.toPlainText().strip().split('\n')
@@ -117,13 +137,16 @@ class EveningCheckinDialog(QDialog):
             self.summary_label.setText(f"📊 Resumo: {analysis['summary']}")
             logger.info(f"Check-in noturno salvo: humor={mood}, conquistas={len(achievements)}")
 
-            # Aguarda um pouco para o usuário ver o resumo antes de fechar
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(2000, super().accept)
+            # Aguarda um pouco para o usuário ver o resumo antes de fechar.
+            self._close_scheduled = True
+            self._disable_form()
+            QTimer.singleShot(2000, self._finalize_accept)
 
         except Exception as e:
             logger.error(f"Erro ao salvar check-in noturno: {e}")
-            super().accept()  # Fecha mesmo assim
+            QDialog.accept(self)  # Fecha mesmo assim
+        finally:
+            self._is_saving = False
 
     def get_data(self):
         """Retorna os dados preenchidos (para uso externo)"""

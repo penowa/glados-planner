@@ -195,7 +195,7 @@ class UpcomingCommitmentsCard(QFrame):
 
             item = QFrame()
             item.setStyleSheet(
-                f"QFrame {{ background-color: rgba(255,255,255,0.02); border-left: 4px solid {color}; border-radius: 6px; }}"
+                f"QFrame {{ background-color: {self._hex_to_rgba(color, 0.14)}; border-left: 4px solid {color}; border-radius: 6px; }}"
             )
             item_layout = QVBoxLayout(item)
             item_layout.setContentsMargins(10, 10, 10, 10)
@@ -205,14 +205,14 @@ class UpcomingCommitmentsCard(QFrame):
             title.setWordWrap(True)
             title.setTextFormat(Qt.TextFormat.PlainText)
             title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-            title.setStyleSheet("font-size: 13px; font-weight: 600;")
+            title.setStyleSheet("font-size: 13px; font-weight: 600; color: #FFFFFF;")
             title.setMinimumHeight(title.fontMetrics().height() + 4)
             item_layout.addWidget(title)
 
             meta = QLabel(f"{self._format_date_time(event.get('start'))}  •  {self._humanize_type(event_type)}")
             meta.setAlignment(Qt.AlignmentFlag.AlignLeft)
             meta.setWordWrap(True)
-            meta.setStyleSheet(f"font-size: 12px; color: {color};")
+            meta.setStyleSheet("font-size: 12px; color: #FFFFFF;")
             meta.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             meta.setMinimumHeight(meta.fontMetrics().height() + 2)
             item_layout.addWidget(meta)
@@ -243,3 +243,16 @@ class UpcomingCommitmentsCard(QFrame):
 
     def _humanize_type(self, event_type: str) -> str:
         return event_type.replace("_", " ").strip().capitalize()
+
+    def _hex_to_rgba(self, hex_color: str, alpha: float) -> str:
+        color = str(hex_color or "").strip().lstrip("#")
+        if len(color) != 6:
+            return "rgba(255,255,255,0.04)"
+        try:
+            red = int(color[0:2], 16)
+            green = int(color[2:4], 16)
+            blue = int(color[4:6], 16)
+        except ValueError:
+            return "rgba(255,255,255,0.04)"
+        normalized_alpha = max(0.0, min(float(alpha), 1.0))
+        return f"rgba({red},{green},{blue},{normalized_alpha:.2f})"

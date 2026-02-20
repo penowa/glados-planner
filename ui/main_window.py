@@ -312,7 +312,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.performance_widget)
 
         # Acesso rápido à sessão de leitura
-        self.session_quick_button = QPushButton("📚")
+        self.session_quick_button = QPushButton("📖")
         self.session_quick_button.setObjectName("session_quick_button")
         self.session_quick_button.setFixedSize(36, 36)
         self.session_quick_button.setToolTip("Abrir sessão de leitura")
@@ -336,7 +336,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.agenda_button)
 
         # Acesso à Biblioteca
-        self.library_button = QPushButton("📖")
+        self.library_button = QPushButton("📚")
         self.library_button.setObjectName("library_button")
         self.library_button.setFixedSize(36, 36)
         self.library_button.setToolTip("Abrir Biblioteca")

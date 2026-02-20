@@ -169,6 +169,10 @@ class AgendaCard(PhilosophyCard):
 
             day_frame = QFrame()
             day_frame.setObjectName("week_day_column")
+            if col < 6:
+                day_frame.setStyleSheet("QFrame#week_day_column { border-right: 1px solid rgba(138, 148, 166, 0.28); }")
+            else:
+                day_frame.setStyleSheet("QFrame#week_day_column { border-right: 0px; }")
             day_layout = QVBoxLayout(day_frame)
             day_layout.setContentsMargins(6, 6, 6, 6)
             day_layout.setSpacing(4)

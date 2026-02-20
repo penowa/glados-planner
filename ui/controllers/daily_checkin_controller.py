@@ -11,7 +11,7 @@ from ui.widgets.dialogs.evening_checkin_dialog import EveningCheckinDialog
 
 import logging
 from datetime import datetime, time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger('GLaDOS.Controllers.DailyCheckin')
 
@@ -74,10 +74,155 @@ class DailyCheckinController(QObject):
             # Carregar check-ins existentes para hoje
             for checkin in self.checkin_system.checkins.values():
                 if checkin.date == today:
-                    if 'morning' in checkin.notes.lower():
+                    checkin_type = self._infer_checkin_type(checkin)
+                    if checkin_type == "morning":
                         self._morning_done_today = True
-                    if 'evening' in checkin.notes.lower() or checkin.time > "12:00":
+                    elif checkin_type == "evening":
                         self._evening_done_today = True
+
+    def _infer_checkin_type(self, checkin) -> str:
+        """Infere tipo do check-in a partir de notas e horário."""
+        notes = str(getattr(checkin, "notes", "") or "").strip().lower()
+        if any(token in notes for token in ("morning", "matinal", "manhã")):
+            return "morning"
+        if any(token in notes for token in ("evening", "noturno", "noite")):
+            return "evening"
+
+        time_raw = str(getattr(checkin, "time", "") or "").strip()
+        try:
+            parsed = datetime.strptime(time_raw, "%H:%M").time()
+        except Exception:
+            return ""
+        return "morning" if parsed < time(12, 0) else "evening"
+
+    def _resolve_event_type(self, event: Any) -> str:
+        """Extrai tipo do evento em formato estável."""
+        if isinstance(event, dict):
+            raw = event.get("type")
+            if hasattr(raw, "value"):
+                raw = getattr(raw, "value", "")
+            return str(raw or "").strip().lower()
+
+        event_type = getattr(event, "type", None)
+        if hasattr(event_type, "value"):
+            return str(getattr(event_type, "value", "") or "").strip().lower()
+        return str(event_type or "").strip().lower()
+
+    def _resolve_event_end(self, event: Any) -> Optional[datetime]:
+        """Obtém término do evento, suportando dicionário e objeto."""
+        end_value = event.get("end") if isinstance(event, dict) else getattr(event, "end", None)
+        if isinstance(end_value, datetime):
+            return end_value
+
+        raw = str(end_value or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                return datetime.strptime(raw, "%Y-%m-%d %H:%M")
+            except Exception:
+                return None
+
+    def _iter_today_events(self):
+        """Retorna eventos de hoje (objetos ou dicionários)."""
+        if not self.agenda_controller:
+            return []
+
+        today = datetime.now().date()
+        events = []
+        agenda_manager = getattr(self.agenda_controller, "agenda_manager", None)
+        event_map = getattr(agenda_manager, "events", None)
+
+        if isinstance(event_map, dict):
+            for event in event_map.values():
+                start_dt = getattr(event, "start", None)
+                if isinstance(start_dt, datetime) and start_dt.date() == today:
+                    events.append(event)
+            return events
+
+        if hasattr(self.agenda_controller, "load_agenda"):
+            date_str = today.strftime("%Y-%m-%d")
+            try:
+                loaded = self.agenda_controller.load_agenda(date_str) or []
+                events.extend(loaded)
+            except Exception:
+                return []
+        return events
+
+    def _get_last_activity_end(self) -> Optional[datetime]:
+        """
+        Retorna horário final da última atividade agendada de hoje.
+
+        Ignora eventos de check-in para não antecipar o gatilho noturno.
+        """
+        latest_end: Optional[datetime] = None
+        for event in self._iter_today_events():
+            event_type = self._resolve_event_type(event)
+            if event_type == "checkin":
+                continue
+
+            end_dt = self._resolve_event_end(event)
+            if not isinstance(end_dt, datetime):
+                continue
+            if latest_end is None or end_dt > latest_end:
+                latest_end = end_dt
+        return latest_end
+
+    def _get_evening_trigger_datetime(self) -> datetime:
+        """
+        Define início do lembrete noturno.
+
+        Regra: após a última atividade do dia; sem atividades, usa 18:00.
+        """
+        now = datetime.now()
+        last_event_end = self._get_last_activity_end()
+        if last_event_end:
+            return last_event_end
+        return datetime.combine(now.date(), time(18, 0))
+
+    def get_dashboard_state(self) -> Dict[str, Any]:
+        """
+        Estado do botão de check-in na dashboard.
+
+        Returns:
+            active_type: 'morning' | 'evening' | None
+            pulse: se botão deve pulsar
+            waiting_evening: evening pendente, porém ainda antes do gatilho
+            evening_trigger_time: HH:MM do início esperado para check-in noturno
+        """
+        self._check_today_status()
+        now = datetime.now()
+
+        morning_pending = not self._morning_done_today
+        evening_pending = not self._evening_done_today
+        morning_window_open = now.time() < time(18, 0)
+
+        evening_trigger = self._get_evening_trigger_datetime()
+        evening_due = evening_pending and now >= evening_trigger
+
+        if morning_pending and morning_window_open:
+            active_type = "morning"
+            pulse = True
+        elif evening_due:
+            active_type = "evening"
+            pulse = True
+        elif evening_pending:
+            active_type = "evening"
+            pulse = False
+        else:
+            active_type = None
+            pulse = False
+
+        return {
+            "active_type": active_type,
+            "pulse": pulse,
+            "morning_pending": morning_pending,
+            "evening_pending": evening_pending,
+            "waiting_evening": bool(evening_pending and not evening_due),
+            "evening_trigger_time": evening_trigger.strftime("%H:%M"),
+        }
 
     def _check_time_of_day(self):
         """Verifica se é hora de mostrar check-in matinal"""
@@ -91,11 +236,12 @@ class DailyCheckinController(QObject):
 
     def _check_evening_condition(self):
         """Verifica se é hora de mostrar check-in noturno (após 18h ou fim da agenda)"""
-        now = datetime.now()
-        current_time = now.time()
+        self._check_today_status()
+        if self._morning_done_today is False and datetime.now().time() < time(18, 0):
+            return
 
-        # Após 18h, se ainda não fez check-in noturno
-        if current_time >= time(18, 0) and not self._evening_done_today:
+        dashboard_state = self.get_dashboard_state()
+        if dashboard_state.get("active_type") == "evening" and dashboard_state.get("pulse"):
             self.evening_checkin_needed.emit()
 
     def _on_event_completed(self, event_id: str, completed: bool):
@@ -110,8 +256,9 @@ class DailyCheckinController(QObject):
         all_completed = all(event.get('completed', False) for event in events_today)
 
         if all_completed and not self._evening_done_today:
-            # Ainda hoje e não fez check-in noturno
-            self.evening_checkin_needed.emit()
+            dashboard_state = self.get_dashboard_state()
+            if dashboard_state.get("active_type") == "evening" and dashboard_state.get("pulse"):
+                self.evening_checkin_needed.emit()
 
     # ===== Métodos públicos =====
 

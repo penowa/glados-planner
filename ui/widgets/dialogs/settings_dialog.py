@@ -2,6 +2,7 @@
 Dialog para edição das configurações principais do sistema.
 """
 import os
+import shutil
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -63,6 +64,10 @@ class SettingsDialog(QDialog):
         self.open_onboarding_now_button = QPushButton("Abrir boas-vindas agora")
         self.open_onboarding_now_button.clicked.connect(self._open_onboarding_now)
         footer_layout.addWidget(self.open_onboarding_now_button)
+
+        self.factory_reset_button = QPushButton("Reset de fábrica")
+        self.factory_reset_button.clicked.connect(self._factory_reset)
+        footer_layout.addWidget(self.factory_reset_button)
         footer_layout.addStretch()
 
         buttons = QDialogButtonBox(
@@ -470,3 +475,110 @@ class SettingsDialog(QDialog):
                 "Não foi possível abrir",
                 f"Falha ao abrir onboarding:\n{e}"
             )
+
+    def _factory_reset(self):
+        answer = QMessageBox.warning(
+            self,
+            "Reset de fábrica",
+            (
+                "Isso vai apagar dados da aplicação (cache, histórico/exportações e banco de dados)\n"
+                "e resetar nomes para o padrão.\n\n"
+                "Deseja continuar?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self._reset_application_data()
+            self._reset_settings_after_factory_cleanup()
+            self._load_current_values()
+            QMessageBox.information(
+                self,
+                "Reset concluído",
+                "Configurações de fábrica aplicadas com sucesso."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erro no reset",
+                f"Não foi possível concluir o reset de fábrica:\n{e}"
+            )
+
+    def _reset_application_data(self):
+        current_settings = Settings.from_yaml(self.settings_path)
+
+        data_dir = self._to_abs_path(current_settings.paths.data_dir)
+        cache_dir = self._to_abs_path(current_settings.paths.cache_dir)
+        exports_dir = self._to_abs_path(current_settings.paths.exports_dir)
+        history_dir = data_dir / "history"
+        db_file = self._resolve_sqlite_db_file(current_settings.database.url)
+
+        # Limpa dados adicionados pela aplicação sem remover modelos baixados.
+        self._clear_directory_contents(cache_dir)
+        self._clear_directory_contents(exports_dir)
+        self._clear_directory_contents(history_dir)
+
+        if db_file:
+            self._delete_sqlite_files(db_file)
+
+    def _reset_settings_after_factory_cleanup(self):
+        preserved_settings = Settings.from_yaml(self.settings_path)
+        default_settings = Settings()
+
+        preserved_settings.llm.glados.user_name = default_settings.llm.glados.user_name
+        preserved_settings.llm.glados.glados_name = default_settings.llm.glados.glados_name
+        preserved_settings.save_yaml(self.settings_path)
+
+        self.config_manager.reset_to_defaults()
+        self.settings_model = reload_settings(self.settings_path)
+
+        payload = self.settings_model.model_dump()
+        payload["ui"] = {
+            "show_onboarding_dialog": self._as_bool(
+                self.config_manager.get("ui/show_onboarding_dialog", True),
+                True,
+            )
+        }
+        self.settings_saved.emit(payload)
+
+    @staticmethod
+    def _to_abs_path(raw_path: str) -> Path:
+        path = Path(str(raw_path or "").strip()).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path
+
+    @staticmethod
+    def _clear_directory_contents(directory: Path):
+        if not directory.exists():
+            directory.mkdir(parents=True, exist_ok=True)
+            return
+
+        for item in directory.iterdir():
+            if item.name == ".keep":
+                continue
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
+
+    def _resolve_sqlite_db_file(self, database_url: str) -> Path | None:
+        url = str(database_url or "").strip()
+        if not url.startswith("sqlite:///"):
+            return None
+
+        raw_db_path = url.replace("sqlite:///", "", 1)
+        if not raw_db_path:
+            return None
+        return self._to_abs_path(raw_db_path)
+
+    @staticmethod
+    def _delete_sqlite_files(db_file: Path):
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        sidecars = [db_file, db_file.with_suffix(db_file.suffix + "-wal"), db_file.with_suffix(db_file.suffix + "-shm"), db_file.with_suffix(db_file.suffix + "-journal")]
+        for path in sidecars:
+            if path.exists():
+                path.unlink(missing_ok=True)

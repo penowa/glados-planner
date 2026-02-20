@@ -12,7 +12,7 @@ logger = logging.getLogger('GLaDOS.UI.Animations')
 
 
 class LoadingSplash(QWidget):
-    """Tela de carregamento com animação personalizada"""
+    """Tela de carregamento minimalista."""
     
     # Sinais
     fade_finished = pyqtSignal()
@@ -21,20 +21,7 @@ class LoadingSplash(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
-        # Configurações
-        self.animation_timer = QTimer()
-        self.animation_timer.timeout.connect(self.update_animation)
-        self.animation_step = 0
-        self.dots_count = 0
-        self.max_dots = 3
-        self.loading_texts = [
-            "Inicializando o núcleo da GLaDOS",
-            "Validando configurações locais",
-            "Preparando interface e tema",
-            "Conectando módulos principais"
-        ]
-        self.current_text_index = 0
+        self.assistant_name = "GLaDOS"
         
         self.setup_ui()
         self.setup_animations()
@@ -43,73 +30,28 @@ class LoadingSplash(QWidget):
     
     def setup_ui(self):
         """Configura interface da splash screen"""
-        # Layout principal
         layout = QVBoxLayout()
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(20)
-        
-        # Título principal
-        self.title_label = QLabel("GLaDOS Philosophy Planner")
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_font = QFont("Georgia", 28, QFont.Weight.Bold)
-        self.title_label.setFont(title_font)
-        self.title_label.setStyleSheet("color: #F5F5DC;")
-        layout.addWidget(self.title_label)
+        layout.setContentsMargins(36, 32, 36, 32)
+        layout.setSpacing(14)
 
-        # Separador
-        separator = QWidget()
-        separator.setFixedHeight(2)
-        separator.setStyleSheet("background-color: #8B7355;")
-        layout.addWidget(separator)
-
-        self.welcome_label = QLabel(
-            "Bem-vindo ao seu planner diario. A GLaDOS esta preparando seu dia."
-        )
-        self.welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.welcome_label.setWordWrap(True)
-        self.welcome_label.setStyleSheet("color: #D8CBB5; font-size: 12px;")
-        layout.addWidget(self.welcome_label)
-        
-        # Texto de carregamento
-        self.loading_label = QLabel()
-        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        loading_font = QFont("Arial", 12)
-        self.loading_label.setFont(loading_font)
-        self.loading_label.setStyleSheet("color: #C9BAA6;")
-        layout.addWidget(self.loading_label)
-        
-        # Indicador de progresso (animação customizada)
-        self.progress_widget = QWidget()
-        self.progress_widget.setFixedHeight(20)
-        layout.addWidget(self.progress_widget)
-
-        self.progress_label = QLabel("Boot em andamento")
+        self.progress_label = QLabel()
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.progress_label.setStyleSheet("color: #B6A68D; font-size: 10px;")
+        self.progress_label.setWordWrap(True)
+        self.progress_label.setStyleSheet("color: #D8CBB5; font-size: 13px;")
         layout.addWidget(self.progress_label)
-        
-        # Versão e copyright
-        self.version_label = QLabel("GLaDOS Planner · Vault lazy-load ativo")
-        self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        version_font = QFont("Arial", 9)
-        self.version_label.setFont(version_font)
-        self.version_label.setStyleSheet("color: #8B7355;")
-        layout.addWidget(self.version_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # modo indeterminado
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(10)
+        layout.addWidget(self.progress_bar)
         
         self.setLayout(layout)
-        
-        # Definir tamanho fixo
-        self.setFixedSize(600, 400)
-        
-        # Definir texto inicial
-        self.update_loading_text()
+        self.setFixedSize(520, 120)
+        self._apply_fixed_message()
     
     def setup_animations(self):
         """Configura animações da splash screen"""
-        # Timer para animação dos pontos
-        self.animation_timer.start(80)  # Atualiza com mais fluidez
-        
-        # Fade in ao mostrar
         self.setWindowOpacity(0)
         self.fade_in_animation = QPropertyAnimation(self, b"windowOpacity")
         self.fade_in_animation.setDuration(500)
@@ -117,92 +59,19 @@ class LoadingSplash(QWidget):
         self.fade_in_animation.setEndValue(1)
         self.fade_in_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
     
-    def update_animation(self):
-        """Atualiza animação dos pontos de carregamento"""
-        self.animation_step += 1
-        self.dots_count = (self.dots_count + 1) % (self.max_dots + 1)
-        
-        # Atualizar texto periodicamente
-        if self.animation_step % 18 == 0:
-            self.current_text_index = (self.current_text_index + 1) % len(self.loading_texts)
-            self.update_loading_text()
-        
-        self.update()  # Forçar repaint para progresso personalizado
-    
-    def update_loading_text(self):
-        """Atualiza texto de carregamento com pontos animados"""
-        base_text = self.loading_texts[self.current_text_index]
-        dots = "." * self.dots_count
-        self.loading_label.setText(f"{base_text}{dots}")
-        phase = (self.animation_step % 120) / 120
-        self.progress_label.setText(f"Boot em andamento {int(phase * 100)}%")
-    
-    def paintEvent(self, event):
-        """Desenha indicador de progresso personalizado"""
-        super().paintEvent(event)
-        
-        # Desenhar progresso circular
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Posicionar no centro do widget de progresso
-        progress_rect = self.progress_widget.geometry()
-        center_x = progress_rect.x() + progress_rect.width() // 2
-        center_y = progress_rect.y() + progress_rect.height() // 2
-        radius = min(progress_rect.width(), progress_rect.height()) // 3
-        
-        # Fundo do círculo
-        painter.setPen(QPen(QColor(50, 50, 50), 3))
-        painter.setBrush(QBrush(QColor(30, 30, 30)))
-        painter.drawEllipse(QPoint(center_x, center_y), radius, radius)
-        
-        # Arco de progresso animado
-        angle = (self.animation_step * 6) % 360
-        pen = QPen(QColor(85, 107, 47), 4)  # Verde oliva
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        
-        # Desenhar arco
-        painter.drawArc(
-            center_x - radius,
-            center_y - radius,
-            radius * 2,
-            radius * 2,
-            90 * 16,  # Iniciar no topo
-            -angle * 16  # Arco animado
-        )
-        
-        # Pontos orbitais
-        dot_radius = 4
-        dot_count = 3
-        for i in range(dot_count):
-            dot_angle = angle + (i * 120)  # 3 pontos igualmente espaçados
-            rad = dot_angle * 3.14159 / 180
-            
-            dot_x = center_x + int((radius + 10) * (1 + 0.3 * i) * math.cos(rad))
-            dot_y = center_y - int((radius + 10) * (1 + 0.3 * i) * math.sin(rad))
-            
-            painter.setBrush(QBrush(QColor(139, 115, 85)))  # Bronze
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(QPoint(dot_x, dot_y), dot_radius, dot_radius)
+    def _apply_fixed_message(self):
+        self.progress_label.setText(f"{self.assistant_name} esta configurando seu planner")
     
     def show_message(self, message: str):
-        """Atualiza mensagem de carregamento"""
-        self.loading_texts.append(message.strip())
-        self.loading_texts = self.loading_texts[-8:]
-        self.current_text_index = len(self.loading_texts) - 1
-        self.update_loading_text()
-        self.progress_label.setText(message.strip())
-        logger.debug(f"Splash message: {message}")
+        """Mantém mensagem fixa para splash minimalista."""
+        logger.debug(f"Splash message ignorada (layout fixo): {message}")
+        self._apply_fixed_message()
 
     def set_identity(self, user_name: str, assistant_name: str):
-        """Atualiza identidade visual e texto de boas-vindas."""
-        user = (user_name or "").strip() or "Usuario"
+        """Atualiza nome do assistente na mensagem fixa."""
         assistant = (assistant_name or "").strip() or "GLaDOS"
-        self.title_label.setText(f"{assistant} Philosophy Planner")
-        self.welcome_label.setText(
-            f"Bem-vindo, {user}. {assistant} esta organizando seu planner diario."
-        )
+        self.assistant_name = assistant
+        self._apply_fixed_message()
     
     def show(self):
         """Mostra a splash screen com animação de fade in"""
@@ -231,17 +100,12 @@ class LoadingSplash(QWidget):
     
     def close(self):
         """Fecha a splash screen"""
-        self.animation_timer.stop()
         super().close()
     
     def set_progress(self, percent: int):
         """Define progresso (opcional, para compatibilidade)"""
         # Esta splash screen usa animação indeterminada
         pass
-
-
-# Adicionar import de math que é usado no paintEvent
-import math
 
 # ============ CLASSES EXISTENTES (mantidas do arquivo original) ============
 
