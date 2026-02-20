@@ -58,7 +58,12 @@ class ConfigManager:
                 'echo': False
             },
             'llm': {
+                'models_dir': './data/models',
                 'model_path': './data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf',
+                'use_gpu': True,
+                'use_cpu': True,
+                'device_mode': 'auto',
+                'gpu_index': 0,
                 'n_ctx': 2048,
                 'n_gpu_layers': 0,
                 'temperature': 0.7,

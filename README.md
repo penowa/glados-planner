@@ -49,6 +49,9 @@ source venv/bin/activate.fish  # fish
 # Instale dependências
 pip install -r requirements.txt
 
+# (Opcional) Stack de embeddings/NLP pesado
+pip install -r requirements-nlp.txt
+
 # Configure seu ambiente
 cp .env.example .env
 # Edite .env com suas configurações
@@ -56,6 +59,17 @@ cp .env.example .env
 # Inicialize o banco de dados
 python -m src.cli.init_db
 ```
+
+### LLM local na GPU (GTX 750 Ti)
+
+```bash
+source venv/bin/activate
+./scripts/install_llama_cpp_gpu.sh vulkan
+```
+
+- Para GTX 750 Ti, use `vulkan` por padrão.
+- `cuda` só funciona com toolkit que ainda suporte `compute_50` (CUDA 13+ não suporta).
+- Mantenha `llm.n_gpu_layers` em `config/settings.yaml` maior que `0` para offload de camadas.
 
 ## Build de Release (PyInstaller)
 

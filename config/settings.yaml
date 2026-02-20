@@ -13,10 +13,15 @@ database:
   url: sqlite:///data/database/philosophy.db
   echo: false
 llm:
-  model_name: Mistral-7B-GGUF-Q4K
-  model_path: /home/penowa/Glados/data/models/Qwen3-4B-UD-Q4_K_XL.gguf
+  model_name: mistral-7b-GGUF-Q4K.gguf
+  model_path: /home/penowa/Glados/data/models/mistral-7b-GGUF-Q4K.gguf
+  models_dir: ./data/models
   n_ctx: 4000
-  n_gpu_layers: 18
+  n_gpu_layers: 25
+  use_gpu: true
+  use_cpu: false
+  device_mode: gpu_only
+  gpu_index: 0
   temperature: 0.35
   top_p: 0.9
   repeat_penalty: 1.12

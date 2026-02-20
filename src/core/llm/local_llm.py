@@ -14,6 +14,10 @@ from core.config.settings import settings
 from core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados, LlamaConfig
 from core.llm.glados.brain.vault_connector import VaultStructure
 from core.llm.glados.personality.glados_voice import GladosVoice
+from core.llm.runtime_discovery import (
+    detect_nvidia_gpus,
+    pick_model_path,
+)
 
 class LocalLLM:
     """Gerenciador do LLM local com busca semântica integrada"""
@@ -35,28 +39,66 @@ class LocalLLM:
         self.sembrain = None
         self.response_cache = {}
         self.query_history = []
+        self.runtime_info: Dict[str, Any] = {
+            "models": [],
+            "gpus": [],
+            "selected_gpu": None,
+            "device_mode": getattr(settings.llm, "device_mode", "auto"),
+            "use_gpu": bool(getattr(settings.llm, "use_gpu", True)),
+            "use_cpu": bool(getattr(settings.llm, "use_cpu", True)),
+        }
         
         # Obter diretório base do projeto
         base_dir = Path(__file__).parent.parent.parent.parent
         
-        # Verificar e expandir caminho do modelo
-        model_path = Path(settings.llm.model_path)
-        if not model_path.is_absolute():
-            model_path = base_dir / model_path
-        
-        if not model_path.exists():
-            print(f"❌ Modelo não encontrado: {model_path}")
-            print(f"   📥 Baixe o modelo GGUF e coloque em: {model_path.parent}")
+        model_path_text, discovered_models = pick_model_path(
+            explicit_model_path=str(getattr(settings.llm, "model_path", "") or ""),
+            models_dir=str(getattr(settings.llm, "models_dir", settings.paths.models_dir)),
+            model_name=str(getattr(settings.llm, "model_name", "") or ""),
+        )
+        self.runtime_info["models"] = discovered_models
+        model_path = Path(model_path_text) if model_path_text else None
+
+        if model_path is None or not model_path.exists():
+            expected_dir = str(getattr(settings.llm, "models_dir", settings.paths.models_dir))
+            print(f"❌ Nenhum modelo GGUF válido encontrado em: {expected_dir}")
+            print("   📥 Configure um .gguf em Configurações > LLM.")
             self._initialized = True
             return
         
         try:
             # Configuração do modelo
             cpu_threads = max(1, min(int(settings.llm.cpu.threads), 4))
+            gpu_devices = detect_nvidia_gpus()
+            selected_gpu = None
+            selected_gpu_name = ""
+            if gpu_devices:
+                gpu_index = int(getattr(settings.llm, "gpu_index", 0) or 0)
+                for gpu in gpu_devices:
+                    if int(gpu.get("index", -1)) == gpu_index:
+                        selected_gpu = gpu
+                        selected_gpu_name = str(gpu.get("name", ""))
+                        break
+                if selected_gpu is None:
+                    selected_gpu = gpu_devices[0]
+                    selected_gpu_name = str(selected_gpu.get("name", ""))
+                    try:
+                        settings.llm.gpu_index = int(selected_gpu.get("index", 0))
+                    except Exception:
+                        pass
+
+            self.runtime_info["gpus"] = gpu_devices
+            self.runtime_info["selected_gpu"] = selected_gpu
+
             config = LlamaConfig(
                 model_path=str(model_path),
                 n_ctx=settings.llm.n_ctx,
                 n_gpu_layers=settings.llm.n_gpu_layers,
+                use_gpu=bool(getattr(settings.llm, "use_gpu", True)),
+                use_cpu=bool(getattr(settings.llm, "use_cpu", True)),
+                device_mode=str(getattr(settings.llm, "device_mode", "auto")),
+                gpu_index=int(getattr(settings.llm, "gpu_index", 0) or 0),
+                gpu_name=selected_gpu_name,
                 temperature=settings.llm.temperature,
                 top_p=settings.llm.top_p,
                 repeat_penalty=settings.llm.repeat_penalty,
@@ -85,6 +127,12 @@ class LocalLLM:
             
             # Instanciar o TinyLlamaGlados
             self.model = TinyLlamaGlados(config, self.vault_structure, glados_voice)
+            if self.model is not None:
+                print(
+                    f"🧩 Runtime LLM: mode={config.device_mode} | "
+                    f"use_gpu={config.use_gpu} | use_cpu={config.use_cpu} | "
+                    f"device={self.model.runtime_device}"
+                )
             
             # Carregar cache se existir
             self._load_cache()
@@ -373,6 +421,7 @@ class LocalLLM:
             return {
                 "status": "not_loaded",
                 "message": "Modelo não carregado",
+                "runtime": self.runtime_info,
                 "timestamp": datetime.now().isoformat()
             }
         
@@ -382,6 +431,16 @@ class LocalLLM:
             status = {
                 "status": "loaded" if stats.get("model_loaded", False) else "error",
                 "model": stats.get("config", {}).get("model", "Unknown"),
+                "runtime": {
+                    "backend": stats.get("runtime", {}).get("backend", "unknown"),
+                    "device": stats.get("runtime", {}).get("device", "unknown"),
+                    "device_mode": self.runtime_info.get("device_mode"),
+                    "use_gpu": self.runtime_info.get("use_gpu"),
+                    "use_cpu": self.runtime_info.get("use_cpu"),
+                    "selected_gpu": self.runtime_info.get("selected_gpu"),
+                    "available_gpus": self.runtime_info.get("gpus", []),
+                    "available_models": self.runtime_info.get("models", []),
+                },
                 "cache": {
                     "hits": stats.get("cache_hits", 0),
                     "misses": stats.get("cache_misses", 0),

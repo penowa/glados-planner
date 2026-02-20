@@ -1,6 +1,8 @@
 """
 Dialog para edição das configurações principais do sistema.
 """
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QTabWidget, QWidget,
@@ -10,6 +12,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
 
 from core.config.settings import Settings, reload_settings
+from core.llm.runtime_discovery import detect_nvidia_gpus, discover_gguf_models
 from ui.utils.config_manager import ConfigManager
 
 
@@ -17,6 +20,12 @@ class SettingsDialog(QDialog):
     """Dialog para controle de configurações do sistema."""
 
     settings_saved = pyqtSignal(dict)
+    DEVICE_MODE_LABELS = [
+        ("Automático", "auto"),
+        ("Apenas CPU", "cpu_only"),
+        ("Preferir GPU", "gpu_prefer"),
+        ("Apenas GPU (sem fallback)", "gpu_only"),
+    ]
 
     def __init__(self, parent=None, settings_path: str = "config/settings.yaml"):
         super().__init__(parent)
@@ -98,10 +107,10 @@ class SettingsDialog(QDialog):
         vault_layout.addWidget(vault_btn)
 
         form.addRow("Vault:", vault_layout)
-        form.addRow("Data dir:", self.data_dir_input)
-        form.addRow("Models dir:", self.models_dir_input)
-        form.addRow("Exports dir:", self.exports_dir_input)
-        form.addRow("Cache dir:", self.cache_dir_input)
+        form.addRow("Diretório de dados:", self.data_dir_input)
+        form.addRow("Diretório de modelos:", self.models_dir_input)
+        form.addRow("Diretório de exportações:", self.exports_dir_input)
+        form.addRow("Diretório de cache:", self.cache_dir_input)
 
         self.tabs.addTab(tab, "Paths")
 
@@ -111,12 +120,17 @@ class SettingsDialog(QDialog):
 
         self.llm_user_name_input = QLineEdit()
         self.llm_assistant_name_input = QLineEdit()
-        self.llm_model_name_input = QLineEdit()
         self.llm_model_path_input = QLineEdit()
+        self.llm_model_combo = QComboBox()
+        self.llm_model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
         self.llm_n_ctx_spin = QSpinBox()
         self.llm_n_ctx_spin.setRange(256, 32768)
         self.llm_n_gpu_layers_spin = QSpinBox()
         self.llm_n_gpu_layers_spin.setRange(0, 200)
+        self.llm_device_mode_combo = QComboBox()
+        for label, value in self.DEVICE_MODE_LABELS:
+            self.llm_device_mode_combo.addItem(label, value)
+        self.llm_gpu_combo = QComboBox()
         self.llm_temperature_spin = QDoubleSpinBox()
         self.llm_temperature_spin.setRange(0.0, 2.0)
         self.llm_temperature_spin.setSingleStep(0.05)
@@ -126,16 +140,30 @@ class SettingsDialog(QDialog):
         self.llm_max_tokens_spin = QSpinBox()
         self.llm_max_tokens_spin.setRange(64, 4096)
 
+        model_catalog_layout = QHBoxLayout()
+        model_catalog_layout.addWidget(self.llm_model_combo)
+        model_refresh_btn = QPushButton("Atualizar")
+        model_refresh_btn.clicked.connect(self._refresh_model_catalog)
+        model_catalog_layout.addWidget(model_refresh_btn)
+
         model_path_layout = QHBoxLayout()
         model_path_layout.addWidget(self.llm_model_path_input)
         model_btn = QPushButton("Selecionar")
         model_btn.clicked.connect(self._select_model_path)
         model_path_layout.addWidget(model_btn)
 
+        gpu_layout = QHBoxLayout()
+        gpu_layout.addWidget(self.llm_gpu_combo)
+        gpu_refresh_btn = QPushButton("Detectar")
+        gpu_refresh_btn.clicked.connect(self._refresh_gpu_catalog)
+        gpu_layout.addWidget(gpu_refresh_btn)
+
         form.addRow("Nome do usuário (dashboard):", self.llm_user_name_input)
         form.addRow("Nome do assistente:", self.llm_assistant_name_input)
-        form.addRow("Nome do modelo:", self.llm_model_name_input)
+        form.addRow("Modelos detectados:", model_catalog_layout)
         form.addRow("Caminho do modelo:", model_path_layout)
+        form.addRow("Modo de execução:", self.llm_device_mode_combo)
+        form.addRow("GPU detectada:", gpu_layout)
         form.addRow("Context window (n_ctx):", self.llm_n_ctx_spin)
         form.addRow("GPU layers:", self.llm_n_gpu_layers_spin)
         form.addRow("Temperature:", self.llm_temperature_spin)
@@ -202,8 +230,8 @@ class SettingsDialog(QDialog):
         self.exports_dir_input.setText(paths.exports_dir)
         self.cache_dir_input.setText(paths.cache_dir)
 
-        self.llm_model_name_input.setText(llm.model_name)
         self.llm_model_path_input.setText(llm.model_path)
+        self._set_device_mode(getattr(llm, "device_mode", self._infer_device_mode(llm)))
         self.llm_n_ctx_spin.setValue(llm.n_ctx)
         self.llm_n_gpu_layers_spin.setValue(llm.n_gpu_layers)
         self.llm_temperature_spin.setValue(llm.temperature)
@@ -211,6 +239,8 @@ class SettingsDialog(QDialog):
         self.llm_max_tokens_spin.setValue(llm.max_tokens)
         self.llm_user_name_input.setText(llm.glados.user_name)
         self.llm_assistant_name_input.setText(llm.glados.glados_name)
+        self._refresh_model_catalog()
+        self._refresh_gpu_catalog(selected_index=int(getattr(llm, "gpu_index", 0) or 0))
 
         self.obsidian_templates_dir_input.setText(obsidian.templates_dir)
         self.obsidian_auto_sync_check.setChecked(obsidian.auto_sync)
@@ -236,8 +266,13 @@ class SettingsDialog(QDialog):
             self.settings_model.paths.exports_dir = self.exports_dir_input.text().strip()
             self.settings_model.paths.cache_dir = self.cache_dir_input.text().strip()
 
-            self.settings_model.llm.model_name = self.llm_model_name_input.text().strip()
+            self.settings_model.llm.model_name = Path(self.llm_model_path_input.text().strip()).name
+            self.settings_model.llm.models_dir = self.models_dir_input.text().strip()
             self.settings_model.llm.model_path = self.llm_model_path_input.text().strip()
+            mode_value = str(self.llm_device_mode_combo.currentData() or "auto")
+            self.settings_model.llm.device_mode = mode_value
+            self.settings_model.llm.use_gpu, self.settings_model.llm.use_cpu = self._derive_device_flags(mode_value)
+            self.settings_model.llm.gpu_index = int(self.llm_gpu_combo.currentData() or 0)
             self.settings_model.llm.n_ctx = self.llm_n_ctx_spin.value()
             self.settings_model.llm.n_gpu_layers = self.llm_n_gpu_layers_spin.value()
             self.settings_model.llm.temperature = self.llm_temperature_spin.value()
@@ -303,6 +338,77 @@ class SettingsDialog(QDialog):
         )
         if selected:
             self.llm_model_path_input.setText(selected)
+            self._refresh_model_catalog()
+
+    def _refresh_model_catalog(self):
+        models_dir = self.models_dir_input.text().strip() or self.settings_model.paths.models_dir
+        current_path = self.llm_model_path_input.text().strip()
+        catalog = discover_gguf_models(models_dir)
+
+        self.llm_model_combo.blockSignals(True)
+        self.llm_model_combo.clear()
+        self.llm_model_combo.addItem("(manual) manter caminho atual", "")
+        selected_idx = 0
+        for i, item in enumerate(catalog, start=1):
+            label = f"{item.get('name')} ({item.get('size_mb', 0)} MB)"
+            model_path = str(item.get("path", ""))
+            self.llm_model_combo.addItem(label, model_path)
+            if current_path and Path(current_path).resolve() == Path(model_path).resolve():
+                selected_idx = i
+        self.llm_model_combo.setCurrentIndex(selected_idx)
+        self.llm_model_combo.blockSignals(False)
+
+    def _on_model_combo_changed(self, _index: int):
+        selected_path = str(self.llm_model_combo.currentData() or "").strip()
+        if not selected_path:
+            return
+        self.llm_model_path_input.setText(selected_path)
+
+    def _set_device_mode(self, mode_value: str):
+        value = str(mode_value or "auto")
+        idx = self.llm_device_mode_combo.findData(value)
+        if idx < 0:
+            idx = self.llm_device_mode_combo.findData("auto")
+        self.llm_device_mode_combo.setCurrentIndex(max(0, idx))
+
+    @staticmethod
+    def _derive_device_flags(mode_value: str) -> tuple[bool, bool]:
+        mode = str(mode_value or "auto")
+        if mode == "cpu_only":
+            return False, True
+        if mode == "gpu_only":
+            return True, False
+        if mode == "gpu_prefer":
+            return True, True
+        return True, True
+
+    @staticmethod
+    def _infer_device_mode(llm_cfg) -> str:
+        use_gpu = bool(getattr(llm_cfg, "use_gpu", True))
+        use_cpu = bool(getattr(llm_cfg, "use_cpu", True))
+        if use_gpu and not use_cpu:
+            return "gpu_only"
+        if not use_gpu and use_cpu:
+            return "cpu_only"
+        return "auto"
+
+    def _refresh_gpu_catalog(self, selected_index: int = 0):
+        gpus = detect_nvidia_gpus()
+        self.llm_gpu_combo.clear()
+        if not gpus:
+            self.llm_gpu_combo.addItem("Nenhuma GPU NVIDIA detectada", 0)
+            return
+
+        preferred_idx = 0
+        for i, gpu in enumerate(gpus):
+            idx = int(gpu.get("index", i))
+            name = str(gpu.get("name", "GPU"))
+            mem_mb = int(gpu.get("memory_total_mb", 0))
+            label = f"GPU {idx}: {name} ({mem_mb} MB)"
+            self.llm_gpu_combo.addItem(label, idx)
+            if idx == selected_index:
+                preferred_idx = i
+        self.llm_gpu_combo.setCurrentIndex(preferred_idx)
 
     def _open_onboarding_now(self):
         parent = self.parent()

@@ -4,7 +4,7 @@ Atualizado para incluir todas as novas configurações
 """
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Literal
 import yaml
 from pathlib import Path
 
@@ -52,8 +52,13 @@ class GladosPersonalityConfig(BaseModel):
 class LlmConfig(BaseModel):
     model_name: str = "Mistral-7B-GGUF-Q4K"
     model_path: str = "./data/models/mistral-7b-GGUF-Q4K.gguf"
+    models_dir: str = "./data/models"
     n_ctx: int = 2048
     n_gpu_layers: int = 0
+    use_gpu: bool = True
+    use_cpu: bool = True
+    device_mode: Literal["auto", "cpu_only", "gpu_prefer", "gpu_only"] = "auto"
+    gpu_index: int = 0
     temperature: float = 0.35
     top_p: float = 0.9
     repeat_penalty: float = 1.12

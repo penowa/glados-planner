@@ -1,0 +1,6 @@
+# Optional NLP/embeddings stack.
+# These dependencies may pull PyTorch and large CUDA wheels on Linux.
+# Install only if you use semantic search/embeddings features.
+sentence-transformers>=2.2.2
+transformers>=4.36.2
+safetensors>=0.4.2

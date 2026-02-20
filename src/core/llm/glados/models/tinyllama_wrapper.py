@@ -23,6 +23,11 @@ class LlamaConfig:
     model_path: str
     n_ctx: int = 2048
     n_gpu_layers: int = 0
+    use_gpu: bool = True
+    use_cpu: bool = True
+    device_mode: str = "auto"
+    gpu_index: int = 0
+    gpu_name: str = ""
     temperature: float = 0.35
     top_p: float = 0.9
     repeat_penalty: float = 1.12
@@ -48,37 +53,105 @@ class TinyLlamaGlados:
         self.config = config
         self.vault = vault_structure
         self.glados_voice = glados_voice
+        self.runtime_backend = "unavailable"
+        self.runtime_device = "none"
         
         # Inicializa o modelo se disponível
         self.llm = None
         if LLAMA_AVAILABLE:
-            try:
-                llama_kwargs = {
-                    "model_path": config.model_path,
-                    "n_ctx": config.n_ctx,
-                    "n_gpu_layers": config.n_gpu_layers,
-                    "n_threads": config.n_threads,
-                    "n_threads_batch": config.n_threads,
-                    "n_batch": config.n_batch,
-                    "use_mlock": config.use_mlock,
-                    "verbose": config.verbose,
-                }
+            requested_gpu_layers = max(0, int(config.n_gpu_layers or 0))
+            wants_gpu = bool(config.use_gpu)
+            allows_cpu = bool(config.use_cpu)
+            mode = str(config.device_mode or "auto").lower()
+
+            if mode == "cpu_only":
+                wants_gpu = False
+                allows_cpu = True
+            elif mode == "gpu_only":
+                wants_gpu = True
+                allows_cpu = False
+            elif mode == "gpu_prefer":
+                wants_gpu = True
+                allows_cpu = True
+
+            if wants_gpu and requested_gpu_layers <= 0:
+                requested_gpu_layers = 1
+
+            gpu_layer_candidates: List[int] = []
+            if wants_gpu:
+                gpu_layer_candidates.append(requested_gpu_layers)
+                for candidate in (24, 18, 12, 8, 6, 4, 2, 1):
+                    if candidate < requested_gpu_layers and candidate not in gpu_layer_candidates:
+                        gpu_layer_candidates.append(candidate)
+            if allows_cpu and 0 not in gpu_layer_candidates:
+                gpu_layer_candidates.append(0)
+
+            last_error = None
+            for candidate_gpu_layers in gpu_layer_candidates:
                 try:
-                    self.llm = Llama(**llama_kwargs)
-                except TypeError:
-                    # Fallback para versões antigas do llama-cpp com assinatura menor.
-                    self.llm = Llama(
-                        model_path=config.model_path,
-                        n_ctx=config.n_ctx,
-                        n_gpu_layers=config.n_gpu_layers,
-                        n_threads=config.n_threads,
-                        n_threads_batch=config.n_threads,
-                        verbose=config.verbose,
-                    )
-                print(f"[GLaDOS] Modelo carregado: {Path(config.model_path).name}")
-            except Exception as e:
-                print(f"[GLaDOS] Erro ao carregar modelo: {e}")
-                self.llm = None
+                    llama_kwargs = {
+                        "model_path": config.model_path,
+                        "n_ctx": config.n_ctx,
+                        "n_gpu_layers": candidate_gpu_layers,
+                        "n_threads": config.n_threads,
+                        "n_threads_batch": config.n_threads,
+                        "n_batch": config.n_batch,
+                        "use_mlock": config.use_mlock,
+                        "verbose": config.verbose,
+                    }
+                    if candidate_gpu_layers > 0:
+                        llama_kwargs["main_gpu"] = int(config.gpu_index or 0)
+                    try:
+                        self.llm = Llama(**llama_kwargs)
+                    except TypeError:
+                        # Fallback para versões antigas do llama-cpp com assinatura menor.
+                        try:
+                            self.llm = Llama(
+                                model_path=config.model_path,
+                                n_ctx=config.n_ctx,
+                                n_gpu_layers=candidate_gpu_layers,
+                                main_gpu=int(config.gpu_index or 0),
+                                n_threads=config.n_threads,
+                                n_threads_batch=config.n_threads,
+                                verbose=config.verbose,
+                            )
+                        except TypeError:
+                            self.llm = Llama(
+                                model_path=config.model_path,
+                                n_ctx=config.n_ctx,
+                                n_gpu_layers=candidate_gpu_layers,
+                                n_threads=config.n_threads,
+                                n_threads_batch=config.n_threads,
+                                verbose=config.verbose,
+                            )
+
+                    config.n_gpu_layers = candidate_gpu_layers
+                    self.runtime_backend = "gpu" if candidate_gpu_layers > 0 else "cpu"
+                    if candidate_gpu_layers > 0:
+                        gpu_label = config.gpu_name or f"GPU #{int(config.gpu_index or 0)}"
+                        self.runtime_device = f"{gpu_label} (n_gpu_layers={candidate_gpu_layers})"
+                    else:
+                        self.runtime_device = "CPU"
+                    if candidate_gpu_layers != requested_gpu_layers:
+                        print(
+                            f"[GLaDOS] Fallback de GPU aplicado: "
+                            f"{requested_gpu_layers} -> {candidate_gpu_layers} camadas"
+                        )
+                    print(f"[GLaDOS] Modelo carregado: {Path(config.model_path).name}")
+                    break
+                except Exception as e:
+                    last_error = e
+                    self.llm = None
+                    if candidate_gpu_layers > 0:
+                        print(
+                            f"[GLaDOS] Falha com n_gpu_layers={candidate_gpu_layers}: {e}. "
+                            "Tentando com menos camadas."
+                        )
+
+            if self.llm is None and last_error is not None:
+                print(f"[GLaDOS] Erro ao carregar modelo: {last_error}")
+                if not allows_cpu and wants_gpu:
+                    print("[GLaDOS] Modo GPU-only ativo: fallback para CPU desativado.")
         else:
             print("[GLaDOS] Modo simulado ativado (sem llama-cpp-python)")
         
@@ -383,6 +456,12 @@ Esta é uma resposta simulada do TinyLlama. No modo real, esta seria uma respost
             "config": {
                 "model": Path(self.config.model_path).name,
                 "context_size": self.config.n_ctx,
-                "max_tokens": self.config.max_tokens
-            }
+                "max_tokens": self.config.max_tokens,
+                "device_mode": self.config.device_mode,
+            },
+            "runtime": {
+                "backend": self.runtime_backend,
+                "device": self.runtime_device,
+                "gpu_index": int(self.config.gpu_index or 0),
+            },
         }
