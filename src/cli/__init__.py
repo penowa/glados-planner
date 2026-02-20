@@ -1,6 +1,6 @@
 # src/cli/__init__.py
 """Módulo CLI do GLaDOS Planner"""
-__version__ = "1.0.0-redesign"
+__version__ = "1.0.0"
 
 # src/cli/components.py (esqueleto)
 """Componentes reutilizáveis GLaDOS"""

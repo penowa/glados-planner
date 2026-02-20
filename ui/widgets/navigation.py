@@ -136,7 +136,7 @@ class NavigationBar(QWidget):
         status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Versão
-        version_label = QLabel("v1.0.0 Alpha")
+        version_label = QLabel("v1.0.0")
         version_label.setObjectName("nav_version")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         

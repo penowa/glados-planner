@@ -43,7 +43,7 @@ class ConfigManager:
         return {
             'app': {
                 'name': 'Philosophy Planner',
-                'version': '0.1.0',
+                'version': '1.0.0',
                 'debug': True,
                 'log_level': 'INFO'
             },

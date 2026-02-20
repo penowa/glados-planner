@@ -79,6 +79,9 @@ pip install -r requirements-release.txt
 
 # Gere o executável (formato onedir)
 ./scripts/build_release.sh
+
+# Gere artefato .tar.gz + checksum para GitHub Release
+./scripts/package_release_artifacts.sh v1.0.0
 ```
 
 Artefato de saída: `dist/glados-planner/`

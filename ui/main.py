@@ -33,6 +33,7 @@ from core.modules.reading_manager import ReadingManager
 from core.modules.agenda_manager import AgendaManager
 from core.config.settings import settings as core_settings
 from core.llm.local_llm import llm
+from core.vault.bootstrap import bootstrap_vault
 from utils.config_manager import ConfigManager
 
 # ============ IMPORTS DA UI ============
@@ -142,12 +143,10 @@ class PhilosophyPlannerApp:
     
     def show_splash_screen(self):
         """Exibe tela de carregamento"""
-        user_name, assistant_name = self._resolve_custom_identity()
+        _, assistant_name = self._resolve_custom_identity()
         self.splash = LoadingSplash()
-        self.splash.set_identity(user_name, assistant_name)
-        self.splash.show_message(
-            f"Bem-vindo, {user_name}. {assistant_name} esta preparando seu planner diario."
-        )
+        self.splash.set_identity("", assistant_name)
+        self.splash.show_message(f"{assistant_name} esta configurando seu planner")
         self.splash.show()
 
     def _resolve_custom_identity(self) -> tuple[str, str]:
@@ -222,9 +221,13 @@ class PhilosophyPlannerApp:
     def init_backend_modules(self):
         """Inicializa módulos do backend"""
         self.splash.show_message("Validando configurações do vault...")
-        vault_path = str(Path(core_settings.paths.vault).expanduser())
-        vault_exists = Path(vault_path).is_dir()
-        self.logger.info("Vault path validado: %s (exists=%s)", vault_path, vault_exists)
+        configured_vault_path = str(Path(core_settings.paths.vault).expanduser())
+        bootstrapped_vault = bootstrap_vault(
+            vault_path=configured_vault_path,
+            vault_structure=getattr(core_settings.obsidian, "vault_structure", []),
+        )
+        vault_path = str(bootstrapped_vault)
+        self.logger.info("Vault pronto: %s", vault_path)
 
         # Vault fica lazy: apenas valida path no boot; scan completo só sob demanda.
         self.backend_modules['vault_manager'] = LazyObsidianVaultManager(vault_path)
@@ -251,7 +254,7 @@ class PhilosophyPlannerApp:
         bus = self.event_bus
         
         for name, module in self.backend_modules.items():
-            bus.module_ready.emit(name, {"status": "initialized", "version": "1.0"})
+            bus.module_ready.emit(name, {"status": "initialized", "version": "1.0.0"})
         
         bus.module_error.connect(
             lambda module, error: self.error_manager.handle_error(

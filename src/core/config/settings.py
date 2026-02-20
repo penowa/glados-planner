@@ -10,7 +10,7 @@ from pathlib import Path
 
 class AppConfig(BaseModel):
     name: str = "Glados Planner"
-    version: str = "0.4.0"
+    version: str = "1.0.0"
     debug: bool = True
     log_level: str = "INFO"
 
