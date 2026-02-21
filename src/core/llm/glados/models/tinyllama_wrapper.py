@@ -44,6 +44,19 @@ class TinyLlamaGlados:
     """Wrapper do TinyLlama com personalidade GLaDOS"""
 
     @staticmethod
+    def _apply_cpu_only_env() -> None:
+        """
+        Força o processo a ocultar/acessar zero GPUs quando cpu_only estiver ativo.
+        Algumas variáveis podem ser ignoradas dependendo do backend, mas não quebram
+        execução quando não suportadas.
+        """
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+        os.environ["NVIDIA_VISIBLE_DEVICES"] = "none"
+        os.environ["HIP_VISIBLE_DEVICES"] = ""
+        os.environ["ROCR_VISIBLE_DEVICES"] = ""
+        os.environ["GGML_VK_DISABLE"] = "1"
+
+    @staticmethod
     def _query_gpu_memory_used_mb() -> Optional[int]:
         try:
             out = subprocess.check_output(
@@ -70,6 +83,7 @@ class TinyLlamaGlados:
         mode = str(config.device_mode or "auto").lower()
         if mode == "cpu_only":
             safe_threads = requested_threads
+            self._apply_cpu_only_env()
         elif mode == "gpu_only":
             safe_threads = min(requested_threads, 2)
         else:

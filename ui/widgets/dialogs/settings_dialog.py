@@ -23,10 +23,10 @@ class SettingsDialog(QDialog):
 
     settings_saved = pyqtSignal(dict)
     DEVICE_MODE_LABELS = [
-        ("Automático", "auto"),
-        ("Apenas CPU", "cpu_only"),
-        ("Preferir GPU", "gpu_prefer"),
-        ("Apenas GPU (sem fallback)", "gpu_only"),
+        ("Automático (recomendado)", "auto"),
+        ("Somente CPU (mais compatível)", "cpu_only"),
+        ("Preferir GPU (com fallback para CPU)", "gpu_prefer"),
+        ("Somente GPU (sem fallback)", "gpu_only"),
     ]
 
     def __init__(self, parent=None, settings_path: str = "config/settings.yaml"):
@@ -106,6 +106,10 @@ class SettingsDialog(QDialog):
         self.models_dir_input = QLineEdit()
         self.exports_dir_input = QLineEdit()
         self.cache_dir_input = QLineEdit()
+        self.data_dir_input.setReadOnly(True)
+        self.models_dir_input.setReadOnly(True)
+        self.exports_dir_input.setReadOnly(True)
+        self.cache_dir_input.setReadOnly(True)
 
         vault_layout = QHBoxLayout()
         vault_layout.addWidget(self.vault_path_input)
@@ -114,10 +118,17 @@ class SettingsDialog(QDialog):
         vault_layout.addWidget(vault_btn)
 
         form.addRow("Vault:", vault_layout)
-        form.addRow("Diretório de dados:", self.data_dir_input)
-        form.addRow("Diretório de modelos:", self.models_dir_input)
-        form.addRow("Diretório de exportações:", self.exports_dir_input)
-        form.addRow("Diretório de cache:", self.cache_dir_input)
+        auto_paths_note = QLabel(
+            "Pastas de dados são gerenciadas automaticamente em data/ ao lado do executável."
+        )
+        auto_paths_note.setWordWrap(True)
+        auto_paths_note.setStyleSheet("color: #8A94A6; font-size: 12px;")
+
+        form.addRow("Diretório de dados (automático):", self.data_dir_input)
+        form.addRow("Diretório de modelos (automático):", self.models_dir_input)
+        form.addRow("Diretório de exportações (automático):", self.exports_dir_input)
+        form.addRow("Diretório de cache (automático):", self.cache_dir_input)
+        form.addRow("", auto_paths_note)
 
         self.tabs.addTab(tab, "Paths")
 
@@ -150,6 +161,11 @@ class SettingsDialog(QDialog):
         self.llm_top_p_spin.setSingleStep(0.01)
         self.llm_max_tokens_spin = QSpinBox()
         self.llm_max_tokens_spin.setRange(64, 4096)
+        llm_help = QLabel(
+            "Dica rápida: use 'Automático' e ajuste apenas se souber o que está fazendo."
+        )
+        llm_help.setWordWrap(True)
+        llm_help.setStyleSheet("color: #8A94A6; font-size: 12px;")
 
         model_catalog_layout = QHBoxLayout()
         model_catalog_layout.addWidget(self.llm_model_combo)
@@ -171,16 +187,17 @@ class SettingsDialog(QDialog):
 
         form.addRow("Nome do usuário (dashboard):", self.llm_user_name_input)
         form.addRow("Nome do assistente:", self.llm_assistant_name_input)
-        form.addRow("Modelos detectados:", model_catalog_layout)
-        form.addRow("Caminho do modelo:", model_path_layout)
-        form.addRow("Modo de execução:", self.llm_device_mode_combo)
-        form.addRow("GPU detectada:", gpu_layout)
-        form.addRow("Context window (n_ctx):", self.llm_n_ctx_spin)
-        form.addRow("GPU layers:", self.llm_n_gpu_layers_spin)
-        form.addRow("CPU threads (cpu_only):", self.llm_cpu_threads_spin)
-        form.addRow("Temperature:", self.llm_temperature_spin)
-        form.addRow("Top-p:", self.llm_top_p_spin)
-        form.addRow("Max tokens:", self.llm_max_tokens_spin)
+        form.addRow("", llm_help)
+        form.addRow("Modelos encontrados (.gguf):", model_catalog_layout)
+        form.addRow("Arquivo do modelo:", model_path_layout)
+        form.addRow("Como rodar o modelo:", self.llm_device_mode_combo)
+        form.addRow("GPU disponível:", gpu_layout)
+        form.addRow("Tamanho de contexto (n_ctx):", self.llm_n_ctx_spin)
+        form.addRow("Camadas na GPU (n_gpu_layers):", self.llm_n_gpu_layers_spin)
+        form.addRow("Threads de CPU (somente CPU):", self.llm_cpu_threads_spin)
+        form.addRow("Criatividade (temperature):", self.llm_temperature_spin)
+        form.addRow("Foco na resposta (top-p):", self.llm_top_p_spin)
+        form.addRow("Limite de tokens por resposta:", self.llm_max_tokens_spin)
 
         self.tabs.addTab(tab, "LLM")
 
@@ -337,12 +354,16 @@ class SettingsDialog(QDialog):
                 "ui/show_onboarding_dialog",
                 self.show_onboarding_check.isChecked()
             )
+            self.config_manager.set("ui/onboarding_preference_set", True)
+            self.config_manager.set("ui/onboarding_dialog_version", "tutorial_v2")
 
             self.settings_model.save_yaml(self.settings_path)
             updated = reload_settings(self.settings_path)
             payload = updated.model_dump()
             payload["ui"] = {
-                "show_onboarding_dialog": self.show_onboarding_check.isChecked()
+                "show_onboarding_dialog": self.show_onboarding_check.isChecked(),
+                "onboarding_preference_set": True,
+                "onboarding_dialog_version": "tutorial_v2",
             }
             self.settings_saved.emit(payload)
             self.accept()

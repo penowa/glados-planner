@@ -39,7 +39,7 @@ class ReadingManager:
                 vault_path = settings.paths.vault
             except (ImportError, AttributeError):
                 # Fallback para caminho padrão
-                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Planner")
         self.vault_path = Path(vault_path).expanduser()
         self.progress_file = self.vault_path / "01-LEITURAS" / "progresso_leitura.json"
         

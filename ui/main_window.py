@@ -729,6 +729,19 @@ class MainWindow(QMainWindow):
 
     def should_show_onboarding_dialog(self) -> bool:
         """Verifica preferencia persistida para exibicao do onboarding."""
+        required_onboarding_version = "tutorial_v2"
+        current_onboarding_version = str(
+            self.config_manager.get("ui/onboarding_dialog_version", "")
+        ).strip()
+        if current_onboarding_version != required_onboarding_version:
+            return True
+
+        preference_set = self._as_bool(
+            self.config_manager.get("ui/onboarding_preference_set", False),
+            False
+        )
+        if not preference_set:
+            return True
         return self._as_bool(
             self.config_manager.get("ui/show_onboarding_dialog", True),
             True
@@ -764,7 +777,7 @@ class MainWindow(QMainWindow):
 
     def _resolve_custom_identity(self, source: Dict[str, Any] | None = None) -> tuple[str, str]:
         """Obtém nomes customizados (usuário/assistente) de config local ou YAML."""
-        user_name = "Usuário"
+        user_name = "Pindarolas"
         assistant_name = "GLaDOS"
         data = source if isinstance(source, dict) else {}
 

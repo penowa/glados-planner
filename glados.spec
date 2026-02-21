@@ -17,10 +17,6 @@ datas = [
     ("ui/themes", "ui/themes"),
     ("ui/resources", "ui/resources"),
     ("src/cli/interactive/screens/glados_templates", "src/cli/interactive/screens/glados_templates"),
-    ("data/database/.keep", "data/database"),
-    ("data/cache/.keep", "data/cache"),
-    ("data/exports/.keep", "data/exports"),
-    ("data/history/book_processing_history.json", "data/history"),
 ]
 
 

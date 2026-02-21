@@ -88,9 +88,9 @@ class AgendaBridge:
     
     def _from_defaults(self) -> Optional[str]:
         defaults = [
-            "~/Documentos/Obsidian/Philosophy_Vault",
-            "~/Obsidian/Philosophy_Vault",
-            "~/Documents/Obsidian/Philosophy_Vault",
+            "~/Documentos/Obsidian/Planner",
+            "~/Obsidian/Planner",
+            "~/Documents/Obsidian/Planner",
         ]
         
         for path in defaults:

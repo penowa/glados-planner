@@ -63,7 +63,7 @@ class ObsidianVaultManager:
                 vault_path = settings.paths.vault
             else:
                 # Fallback para caminho padrão
-                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Planner")
 
         resolved_vault_path = Path(vault_path).expanduser().resolve()
         if getattr(self, "_initialized", False):

@@ -154,7 +154,7 @@ class AgendaManager:
                 vault_path = settings.paths.vault
             except (ImportError, AttributeError):
                 # Fallback para caminho padrão
-                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Planner")
         self.vault_path = Path(vault_path).expanduser()
         self.user_id = user_id
         

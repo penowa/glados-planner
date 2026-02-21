@@ -4,15 +4,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -26,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.config.settings import Settings, reload_settings
+from core.llm.model_installer import ModelInstallError, install_models
 from core.llm.runtime_discovery import detect_nvidia_gpus, discover_gguf_models
 from core.modules.agenda_manager import AgendaManager
 from core.vault.bootstrap import bootstrap_vault
@@ -37,9 +40,9 @@ class OnboardingDialog(QDialog):
 
     DEVICE_MODE_LABELS = [
         ("Automático", "auto"),
-        ("Apenas CPU", "cpu_only"),
+        ("Somente CPU", "cpu_only"),
         ("Preferir GPU", "gpu_prefer"),
-        ("Apenas GPU (sem fallback)", "gpu_only"),
+        ("Somente GPU", "gpu_only"),
     ]
 
     def __init__(self, parent=None, settings_path: str = "config/settings.yaml"):
@@ -59,13 +62,12 @@ class OnboardingDialog(QDialog):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
-        header = QLabel("Configure seu ambiente inicial")
+        header = QLabel("Tutorial Inicial do Planner")
         header.setFont(QFont("Georgia", 16, QFont.Weight.Bold))
         layout.addWidget(header)
 
         subtitle = QLabel(
-            "Primeiro acesso: ajuste identidade, paths, LLM, agenda, pomodoro e revisão. "
-            "O vault será criado automaticamente."
+            "Vamos configurar tudo passo a passo para você começar sem dor de cabeça."
         )
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -73,12 +75,12 @@ class OnboardingDialog(QDialog):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self._setup_welcome_tab()
-        self._setup_identity_tab()
-        self._setup_paths_tab()
         self._setup_llm_tab()
+        self._setup_paths_tab()
         self._setup_agenda_tab()
         self._setup_pomodoro_review_tab()
         self._setup_features_tab()
+        self._setup_summary_tab()
 
         self.hide_on_start_check = QCheckBox("Não exibir este diálogo novamente")
         layout.addWidget(self.hide_on_start_check)
@@ -88,7 +90,7 @@ class OnboardingDialog(QDialog):
         )
         ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         if ok_button:
-            ok_button.setText("Concluir configuração")
+            ok_button.setText("Salvar e iniciar")
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_button:
             cancel_button.setText("Fechar")
@@ -98,40 +100,125 @@ class OnboardingDialog(QDialog):
 
     def _setup_welcome_tab(self):
         tab = QWidget()
-        tab_layout = QVBoxLayout(tab)
-        label = QLabel(
-            "Checklist desta etapa:\n\n"
-            "1. Definir nomes e tema.\n"
-            "2. Confirmar paths (vault/data/modelos/export/cache).\n"
-            "3. Ajustar preferências da LLM.\n"
-            "4. Ajustar rotina da agenda, pomodoro e revisão.\n"
-            "5. Confirmar módulos ativos.\n\n"
-            "Ao concluir, o vault será inicializado com estrutura e arquivos esperados."
+        layout = QVBoxLayout(tab)
+
+        welcome = QLabel(
+            "Ola, seja bem vindo(a) ao seu novo planner.\n"
+            "Como deseja ser tratado(a)?"
         )
-        label.setWordWrap(True)
-        tab_layout.addWidget(label)
-        tab_layout.addStretch()
+        welcome.setWordWrap(True)
+        welcome.setStyleSheet("font-size: 14px; font-weight: 600;")
+        layout.addWidget(welcome)
+
+        form = QFormLayout()
+        self.user_name_input = QLineEdit()
+        self.user_name_input.setPlaceholderText("Ex.: Pindarolas")
+        form.addRow("Seu nome:", self.user_name_input)
+        layout.addLayout(form)
+
+        llm_intro = QLabel(
+            "O seu planner conta com a ajuda de um assistente para revisão, síntese, pesquisa, organização e apoio para seus estudos.\n"
+            "Agora, escolha como a assistente deve se chamar no sistema."
+        )
+        llm_intro.setWordWrap(True)
+        llm_intro.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        layout.addWidget(llm_intro)
+
+        assistant_form = QFormLayout()
+        self.assistant_name_input = QLineEdit()
+        self.assistant_name_input.setPlaceholderText("Ex.: GLaDOS")
+        assistant_form.addRow("Nome da assistente:", self.assistant_name_input)
+        layout.addLayout(assistant_form)
+
+        llm_download_help = QLabel(
+            "Download de modelos da assistente (opcional):\n"
+            "TinyLlama 1.1B é leve e rápido, mas limitado em tarefas complexas.\n"
+            "Qwen3 4B responde melhor em cenários difíceis, mas consome mais RAM, VRAM e disco."
+        )
+        llm_download_help.setWordWrap(True)
+        llm_download_help.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        layout.addWidget(llm_download_help)
+
+        self.llm_download_choice_combo = QComboBox()
+        self.llm_download_choice_combo.addItem("Não baixar agora", "none")
+        self.llm_download_choice_combo.addItem("Baixar TinyLlama 1.1B - 0.7 GB", "tinyllama")
+        self.llm_download_choice_combo.addItem("Baixar Qwen3 4B - 2.5 GB", "qwen4b")
+        self.llm_download_choice_combo.addItem("Baixar ambos - 3.2 GB", "all")
+        self.llm_download_button = QPushButton("Baixar modelos")
+        self.llm_download_button.clicked.connect(self._download_selected_models)
+        self.llm_download_status_label = QLabel("Status de download: nenhum.")
+        self.llm_download_status_label.setWordWrap(True)
+        self.llm_download_status_label.setStyleSheet("color: #8A94A6; font-size: 12px;")
+
+        download_layout = QHBoxLayout()
+        download_layout.addWidget(self.llm_download_choice_combo, 1)
+        download_layout.addWidget(self.llm_download_button)
+
+        download_form = QFormLayout()
+        download_form.addRow("Modelo inicial:", download_layout)
+        download_form.addRow("", self.llm_download_status_label)
+        layout.addLayout(download_form)
+        layout.addStretch()
+
         self.tabs.addTab(tab, "Boas-vindas")
 
-    def _setup_identity_tab(self):
+    def _create_info_box(self, text: str) -> QFrame:
+        box = QFrame()
+        box.setObjectName("onboarding_info_box")
+        box.setStyleSheet(
+            "QFrame#onboarding_info_box {"
+            "background: rgba(98, 114, 164, 0.12);"
+            "border: 1px solid rgba(136, 154, 219, 0.35);"
+            "border-radius: 8px;"
+            "padding: 6px;"
+            "}"
+        )
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(10, 8, 10, 8)
+        box_layout.setSpacing(2)
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet("color: #AFC3FF; font-size: 12px;")
+        box_layout.addWidget(label)
+        return box
+
+    def _setup_summary_tab(self):
         tab = QWidget()
-        form = QFormLayout(tab)
-        self.user_name_input = QLineEdit()
-        self.assistant_name_input = QLineEdit()
-        form.addRow("Seu nome:", self.user_name_input)
-        form.addRow("Nome do assistente:", self.assistant_name_input)
-        form.addRow("Tema inicial:", QLabel("Dark Academia (único disponível)"))
-        self.tabs.addTab(tab, "Identidade")
+        tab_layout = QVBoxLayout(tab)
+        summary_box = self._create_info_box(
+            "Resumo do que foi configurado:\n\n"
+            "1. Como você quer ser chamado(a).\n"
+            "2. Como a LLM irá atuar no planner.\n"
+            "3. Onde seu vault ficará e onde os dados internos serão salvos.\n"
+            "4. Como sua rotina base será preenchida (agenda/pomodoro/review).\n"
+            "5. Quais módulos ficarão ativos.\n\n"
+            "Ao clicar em \"Salvar e iniciar\", o planner já começa pronto para uso."
+        )
+        tab_layout.addWidget(summary_box)
+        tab_layout.addStretch()
+        self.tabs.addTab(tab, "Resumo")
 
     def _setup_paths_tab(self):
         tab = QWidget()
-        form = QFormLayout(tab)
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.addWidget(
+            self._create_info_box(
+                "Aqui você define apenas o Vault, que guarda suas notas.\n"
+                "As pastas internas do planner são criadas automaticamente em data/ ao lado do executável."
+            )
+        )
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
 
         self.vault_path_input = QLineEdit()
         self.data_dir_input = QLineEdit()
         self.models_dir_input = QLineEdit()
         self.exports_dir_input = QLineEdit()
         self.cache_dir_input = QLineEdit()
+        self.data_dir_input.setReadOnly(True)
+        self.models_dir_input.setReadOnly(True)
+        self.exports_dir_input.setReadOnly(True)
+        self.cache_dir_input.setReadOnly(True)
 
         vault_layout = QHBoxLayout()
         vault_layout.addWidget(self.vault_path_input)
@@ -140,15 +227,25 @@ class OnboardingDialog(QDialog):
         vault_layout.addWidget(vault_btn)
 
         form.addRow("Vault:", vault_layout)
-        form.addRow("Diretório de dados:", self.data_dir_input)
-        form.addRow("Diretório de modelos:", self.models_dir_input)
-        form.addRow("Diretório de exportações:", self.exports_dir_input)
-        form.addRow("Diretório de cache:", self.cache_dir_input)
-        self.tabs.addTab(tab, "Paths")
+        form.addRow("Diretório de dados (automático):", self.data_dir_input)
+        form.addRow("Diretório de modelos (automático):", self.models_dir_input)
+        form.addRow("Diretório de exportações (automático):", self.exports_dir_input)
+        form.addRow("Diretório de cache (automático):", self.cache_dir_input)
+        tab_layout.addLayout(form)
+        tab_layout.addStretch()
+        self.tabs.addTab(tab, "Arquivos")
 
     def _setup_llm_tab(self):
         tab = QWidget()
-        form = QFormLayout(tab)
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.addWidget(
+            self._create_info_box(
+                "Aqui você escolhe o modelo da LLM, o modo de execução e os limites de resposta.\n"
+                "Se estiver em dúvida, mantenha o modo de execução em Automático."
+            )
+        )
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
 
         self.llm_model_path_input = QLineEdit()
         self.llm_model_combo = QComboBox()
@@ -191,21 +288,31 @@ class OnboardingDialog(QDialog):
         gpu_refresh_btn.clicked.connect(self._refresh_gpu_catalog)
         gpu_layout.addWidget(gpu_refresh_btn)
 
-        form.addRow("Modelos detectados:", model_catalog_layout)
-        form.addRow("Caminho do modelo:", model_path_layout)
-        form.addRow("Modo de execução:", self.llm_device_mode_combo)
-        form.addRow("GPU detectada:", gpu_layout)
-        form.addRow("Context window (n_ctx):", self.llm_n_ctx_spin)
-        form.addRow("GPU layers:", self.llm_n_gpu_layers_spin)
-        form.addRow("CPU threads (cpu_only):", self.llm_cpu_threads_spin)
-        form.addRow("Temperature:", self.llm_temperature_spin)
-        form.addRow("Top-p:", self.llm_top_p_spin)
-        form.addRow("Max tokens:", self.llm_max_tokens_spin)
+        form.addRow("Modelos encontrados:", model_catalog_layout)
+        form.addRow("Arquivo do modelo:", model_path_layout)
+        form.addRow("Como rodar o modelo:", self.llm_device_mode_combo)
+        form.addRow("GPU disponível:", gpu_layout)
+        form.addRow("Tamanho de contexto:", self.llm_n_ctx_spin)
+        form.addRow("Camadas na GPU:", self.llm_n_gpu_layers_spin)
+        form.addRow("Threads de CPU:", self.llm_cpu_threads_spin)
+        form.addRow("Criatividade:", self.llm_temperature_spin)
+        form.addRow("Foco na resposta:", self.llm_top_p_spin)
+        form.addRow("Limite de tokens por resposta:", self.llm_max_tokens_spin)
+        tab_layout.addLayout(form)
+        tab_layout.addStretch()
         self.tabs.addTab(tab, "LLM")
 
     def _setup_agenda_tab(self):
         tab = QWidget()
-        form = QFormLayout(tab)
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.addWidget(
+            self._create_info_box(
+                "Essas informações ajudam o planner a montar uma rotina inicial"
+                "com sono, refeições e revisão semanal."
+            )
+        )
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
 
         self.sleep_start_input = QLineEdit()
         self.sleep_end_input = QLineEdit()
@@ -224,11 +331,21 @@ class OnboardingDialog(QDialog):
         form.addRow("Jantar:", self.dinner_time_input)
         form.addRow("Revisão semanal (hora):", self.weekly_review_time_input)
         form.addRow("Duração revisão semanal:", self.weekly_review_duration_spin)
+        tab_layout.addLayout(form)
+        tab_layout.addStretch()
         self.tabs.addTab(tab, "Agenda")
 
     def _setup_pomodoro_review_tab(self):
         tab = QWidget()
-        form = QFormLayout(tab)
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.addWidget(
+            self._create_info_box(
+                "Defina seu ritmo de foco e como o sistema deve interromper com perguntas "
+                "durante suas revisões."
+            )
+        )
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
 
         self.pomodoro_work_spin = QSpinBox()
         self.pomodoro_work_spin.setRange(1, 180)
@@ -256,11 +373,19 @@ class OnboardingDialog(QDialog):
         form.addRow("", self.review_prompt_enabled_check)
         form.addRow("Intervalo de perguntas:", self.review_question_interval_spin)
         form.addRow("Passo das setas no mapa:", self.review_arrow_pan_step_spin)
+        tab_layout.addLayout(form)
+        tab_layout.addStretch()
         self.tabs.addTab(tab, "Pomodoro e Review")
 
     def _setup_features_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.addWidget(
+            self._create_info_box(
+                "Ative apenas os módulos que você realmente quer usar agora.\n"
+                "Você pode alterar isso depois em Configurações."
+            )
+        )
         self.feature_llm = QCheckBox("Habilitar LLM")
         self.feature_obsidian = QCheckBox("Habilitar sincronização Obsidian")
         self.feature_pomodoro = QCheckBox("Habilitar Pomodoro")
@@ -368,16 +493,104 @@ class OnboardingDialog(QDialog):
             self.llm_model_path_input.setText(selected)
             self._refresh_model_catalog()
 
+    @staticmethod
+    def _format_size_bytes(size_bytes: int) -> str:
+        value = float(max(0, int(size_bytes or 0)))
+        units = ["B", "KB", "MB", "GB", "TB"]
+        idx = 0
+        while value >= 1024.0 and idx < len(units) - 1:
+            value /= 1024.0
+            idx += 1
+        return f"{value:.2f} {units[idx]}"
+
+    def _download_selected_models(self):
+        selection = str(self.llm_download_choice_combo.currentData() or "none")
+        if selection == "none":
+            QMessageBox.information(
+                self,
+                "Download de modelos",
+                "Selecione TinyLlama, Qwen3 4B ou ambos para iniciar o download.",
+            )
+            return
+
+        models_dir = self.models_dir_input.text().strip() or self.settings_model.paths.models_dir
+        self.llm_download_button.setEnabled(False)
+        self.llm_download_status_label.setText("Status de download: iniciando...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+
+        def _on_progress(file_name: str, downloaded: int, total: int):
+            if total > 0:
+                pct = (downloaded / total) * 100.0
+                text = (
+                    f"Status de download: {file_name} "
+                    f"{pct:5.1f}% - {self._format_size_bytes(downloaded)} / {self._format_size_bytes(total)}"
+                )
+            else:
+                text = f"Status de download: {file_name} {self._format_size_bytes(downloaded)}"
+            self.llm_download_status_label.setText(text)
+            QApplication.processEvents()
+
+        try:
+            report = install_models(
+                selection=selection,
+                models_dir=models_dir,
+                force=False,
+                dry_run=False,
+                progress_callback=_on_progress,
+            )
+            results = list(report.get("results", []))
+            downloaded = [item for item in results if item.get("status") == "downloaded"]
+            skipped = [item for item in results if item.get("status") == "skipped"]
+
+            self._refresh_model_catalog()
+            if not self.llm_model_path_input.text().strip():
+                for item in downloaded + skipped:
+                    path = str(item.get("path", "")).strip()
+                    if path:
+                        self.llm_model_path_input.setText(path)
+                        break
+
+            self.llm_download_status_label.setText(
+                f"Status de download: concluído. Baixados={len(downloaded)} | já existentes={len(skipped)}"
+            )
+            QMessageBox.information(
+                self,
+                "Download concluído",
+                (
+                    f"Modelos processados em:\n{report.get('models_dir')}\n\n"
+                    f"Baixados: {len(downloaded)}\n"
+                    f"Já existentes: {len(skipped)}"
+                ),
+            )
+        except ModelInstallError as e:
+            self.llm_download_status_label.setText("Status de download: falha.")
+            QMessageBox.critical(
+                self,
+                "Falha no download",
+                f"Não foi possível baixar os modelos:\n{e}",
+            )
+        except Exception as e:
+            self.llm_download_status_label.setText("Status de download: falha inesperada.")
+            QMessageBox.critical(
+                self,
+                "Falha no download",
+                f"Ocorreu um erro inesperado:\n{e}",
+            )
+        finally:
+            self.llm_download_button.setEnabled(True)
+            QApplication.restoreOverrideCursor()
+
     def _refresh_model_catalog(self):
         models_dir = self.models_dir_input.text().strip() or self.settings_model.paths.models_dir
         current_path = self.llm_model_path_input.text().strip()
         catalog = discover_gguf_models(models_dir)
         self.llm_model_combo.blockSignals(True)
         self.llm_model_combo.clear()
-        self.llm_model_combo.addItem("(manual) manter caminho atual", "")
+        self.llm_model_combo.addItem("Manual - manter caminho atual", "")
         selected_idx = 0
         for i, item in enumerate(catalog, start=1):
-            label = f"{item.get('name')} ({item.get('size_mb', 0)} MB)"
+            label = f"{item.get('name')} - {item.get('size_mb', 0)} MB"
             model_path = str(item.get("path", ""))
             self.llm_model_combo.addItem(label, model_path)
             if current_path and Path(current_path).resolve() == Path(model_path).resolve():
@@ -401,7 +614,7 @@ class OnboardingDialog(QDialog):
             idx = int(gpu.get("index", i))
             name = str(gpu.get("name", "GPU"))
             mem_mb = int(gpu.get("memory_total_mb", 0))
-            self.llm_gpu_combo.addItem(f"GPU {idx}: {name} ({mem_mb} MB)", idx)
+            self.llm_gpu_combo.addItem(f"GPU {idx}: {name} - {mem_mb} MB", idx)
             if idx == selected_index:
                 preferred_idx = i
         self.llm_gpu_combo.setCurrentIndex(preferred_idx)
@@ -498,10 +711,16 @@ class OnboardingDialog(QDialog):
 
             self.config_manager.theme = selected_theme
             self.config_manager.set("ui/show_onboarding_dialog", show_on_start)
+            self.config_manager.set("ui/onboarding_preference_set", True)
+            self.config_manager.set("ui/onboarding_dialog_version", "tutorial_v2")
 
             payload = updated_settings.model_dump()
             payload["theme"] = selected_theme
-            payload["ui"] = {"show_onboarding_dialog": show_on_start}
+            payload["ui"] = {
+                "show_onboarding_dialog": show_on_start,
+                "onboarding_preference_set": True,
+                "onboarding_dialog_version": "tutorial_v2",
+            }
             self.onboarding_preferences_saved.emit(payload)
             self.accept()
         except Exception as e:

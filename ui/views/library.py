@@ -423,7 +423,7 @@ class LibraryView(QWidget):
         self.books_shelves_layout.setSpacing(12)
         self.books_scroll.setWidget(books_widget)
 
-        self.empty_label = QLabel("Nenhum livro encontrado em `01-LEITURAS` ou `01- LEITURAS`.")
+        self.empty_label = QLabel("Sua biblioteca esta vazia, experimente adicionar novos livros")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("color: #8A94A6;")
 
@@ -484,9 +484,9 @@ class LibraryView(QWidget):
             settings_vault = str(getattr(getattr(core_settings, "paths", None), "vault", "") or "").strip()
             if settings_vault:
                 vault_paths.append(Path(settings_vault).expanduser())
-        vault_paths.append(Path.home() / "Documentos" / "Obsidian" / "Philosophy_Vault")
-        vault_paths.append(Path.home() / "Documents" / "Obsidian" / "Philosophy_Vault")
-        vault_paths.append(Path.home() / "Obsidian" / "Philosophy_Vault")
+        vault_paths.append(Path.home() / "Documentos" / "Obsidian" / "Planner")
+        vault_paths.append(Path.home() / "Documents" / "Obsidian" / "Planner")
+        vault_paths.append(Path.home() / "Obsidian" / "Planner")
 
         unique_vault_paths: list[Path] = []
         seen_vaults: set[Path] = set()
@@ -788,16 +788,12 @@ class LibraryView(QWidget):
         logger.info("Library refresh concluído | livros_total=%d | roots=%s", len(books), checked_roots)
         if self.empty_label:
             if books:
-                self.empty_label.setText("Nenhum livro encontrado em `01-LEITURAS` ou `01- LEITURAS`.")
+                self.empty_label.setText("Sua biblioteca esta vazia, experimente adicionar novos livros")
                 self.empty_label.setToolTip("")
                 self.empty_label.hide()
             else:
-                roots_text = " | ".join(checked_roots) if checked_roots else "nenhum root detectado"
-                self.empty_label.setText(
-                    "Nenhum livro encontrado.\n"
-                    f"Roots verificados: {roots_text}"
-                )
-                self.empty_label.setToolTip(roots_text)
+                self.empty_label.setText("Sua biblioteca esta vazia, experimente adicionar novos livros")
+                self.empty_label.setToolTip("")
                 self.empty_label.show()
         self._render_books_grid()
 

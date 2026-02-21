@@ -79,7 +79,8 @@ class LocalLLM:
                 cpu_threads = min(requested_threads, 2)
             else:
                 cpu_threads = min(requested_threads, 4)
-            gpu_devices = detect_nvidia_gpus()
+            force_cpu_only = device_mode == "cpu_only"
+            gpu_devices = [] if force_cpu_only else detect_nvidia_gpus()
             selected_gpu = None
             selected_gpu_name = ""
             if gpu_devices:
@@ -103,11 +104,11 @@ class LocalLLM:
             config = LlamaConfig(
                 model_path=str(model_path),
                 n_ctx=settings.llm.n_ctx,
-                n_gpu_layers=settings.llm.n_gpu_layers,
-                use_gpu=bool(getattr(settings.llm, "use_gpu", True)),
+                n_gpu_layers=0 if force_cpu_only else settings.llm.n_gpu_layers,
+                use_gpu=False if force_cpu_only else bool(getattr(settings.llm, "use_gpu", True)),
                 use_cpu=bool(getattr(settings.llm, "use_cpu", True)),
                 device_mode=str(getattr(settings.llm, "device_mode", "auto")),
-                gpu_index=int(getattr(settings.llm, "gpu_index", 0) or 0),
+                gpu_index=-1 if force_cpu_only else int(getattr(settings.llm, "gpu_index", 0) or 0),
                 vram_soft_limit_mb=int(getattr(settings.llm, "vram_soft_limit_mb", 0) or 0),
                 gpu_name=selected_gpu_name,
                 temperature=settings.llm.temperature,
@@ -119,6 +120,9 @@ class LocalLLM:
                 use_mlock=settings.llm.cpu.use_mlock,
                 verbose=False
             )
+            self.runtime_info["device_mode"] = config.device_mode
+            self.runtime_info["use_gpu"] = config.use_gpu
+            self.runtime_info["use_cpu"] = config.use_cpu
             
             # Vault structure
             vault_path = Path(settings.paths.vault).expanduser()
@@ -182,7 +186,7 @@ class LocalLLM:
     
     def _load_cache(self):
         """Carrega cache de respostas do disco"""
-        cache_path = Path("./data/cache/llm_responses.pkl")
+        cache_path = Path(settings.paths.cache_dir) / "llm_responses.pkl"
         if cache_path.exists():
             try:
                 with open(cache_path, 'rb') as f:
@@ -195,7 +199,7 @@ class LocalLLM:
     def _save_cache(self):
         """Salva cache de respostas no disco"""
         try:
-            cache_path = Path("./data/cache/llm_responses.pkl")
+            cache_path = Path(settings.paths.cache_dir) / "llm_responses.pkl"
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(cache_path, 'wb') as f:
@@ -287,12 +291,13 @@ class LocalLLM:
                 }
         
         if self.model is None:
+            models_dir_hint = str(getattr(settings.llm, "models_dir", settings.paths.models_dir))
             return {
-                "text": "LLM não disponível. Verifique se o modelo está instalado em data/models/",
+                "text": f"LLM não disponível. Verifique se o modelo está em: {models_dir_hint}",
                 "error": "Model not loaded",
                 "suggestions": [
                     "Baixe TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf",
-                    "Coloque em ./data/models/",
+                    f"Coloque o arquivo em: {models_dir_hint}",
                     "Verifique o caminho em config/settings.yaml"
                 ]
             }

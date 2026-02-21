@@ -18,6 +18,8 @@ import xml.etree.ElementTree as ET
 from difflib import SequenceMatcher
 from enum import Enum
 
+from core.config.settings import settings
+
 logger = logging.getLogger('GLaDOS.UI.BookController')
 
 
@@ -2086,7 +2088,7 @@ class BookController(QObject):
     def _save_history_to_file(self):
         """Salva histórico em arquivo"""
         try:
-            history_dir = Path("./data/history")
+            history_dir = Path(settings.paths.data_dir) / "history"
             history_dir.mkdir(parents=True, exist_ok=True)
             
             history_file = history_dir / "book_processing_history.json"

@@ -2,6 +2,7 @@
 Gerenciador de configurações da aplicação
 """
 import os
+import sys
 import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -25,7 +26,11 @@ class ConfigManager:
             
     def _load_default_config(self) -> Dict[str, Any]:
         """Carrega configurações padrão do arquivo YAML"""
-        config_path = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
+        runtime_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent.parent
+        config_path = runtime_root / "config" / "settings.yaml"
+        if not config_path.exists():
+            # Fallback útil para modo dev, caso o CWD esteja fora da raiz do projeto.
+            config_path = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
         
         if not config_path.exists():
             print(f"⚠️  Arquivo de configuração não encontrado: {config_path}")
@@ -48,18 +53,19 @@ class ConfigManager:
                 'log_level': 'INFO'
             },
             'paths': {
-                'vault': '~/Documentos/Obsidian/Philosophy_Vault',
-                'data_dir': './data',
-                'models_dir': './data/models',
-                'exports_dir': './data/exports'
+                'vault': '~/Documentos/Obsidian/Planner/',
+                'data_dir': 'data',
+                'models_dir': 'data/models',
+                'exports_dir': 'data/exports',
+                'cache_dir': 'data/cache'
             },
             'database': {
                 'url': 'sqlite:///data/database/philosophy.db',
                 'echo': False
             },
             'llm': {
-                'models_dir': './data/models',
-                'model_path': './data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf',
+                'models_dir': 'data/models',
+                'model_path': 'data/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf',
                 'use_gpu': True,
                 'use_cpu': True,
                 'device_mode': 'auto',
@@ -119,7 +125,7 @@ class ConfigManager:
     @property
     def vault_path(self) -> str:
         """Retorna o caminho do vault Obsidian"""
-        path = self.get('paths.vault', '~/Documentos/Obsidian/Philosophy_Vault')
+        path = self.get('paths.vault', '~/Documentos/Obsidian/Planner/')
         return os.path.expanduser(path)
     
     @vault_path.setter

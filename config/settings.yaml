@@ -4,7 +4,7 @@ app:
   debug: true
   log_level: INFO
 paths:
-  vault: ~/Documentos/Obsidian/Philosophy_Vault
+  vault: ~/Documentos/Obsidian/Planner/
   data_dir: ./data
   models_dir: ./data/models
   exports_dir: ./data/exports
@@ -32,7 +32,7 @@ llm:
     batch_size: 128
     use_mlock: true
   glados:
-    user_name: Hélio
+    user_name: Pindarolas
     glados_name: GLaDOS
     gender: feminino
     personality_intensity: 0.7

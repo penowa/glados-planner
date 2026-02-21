@@ -19,7 +19,7 @@ class PreferenceManager:
                 from ...config.settings import settings
                 vault_path = settings.paths.vault
             except Exception:
-                vault_path = os.path.expanduser("~/Documentos/Obsidian/Philosophy_Vault")
+                vault_path = os.path.expanduser("~/Documentos/Obsidian/Planner")
 
         base = Path(vault_path).expanduser() / "06-RECURSOS"
         self.preferences_file = base / "preferences.json"

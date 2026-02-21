@@ -151,7 +151,7 @@ class PhilosophyPlannerApp:
 
     def _resolve_custom_identity(self) -> tuple[str, str]:
         """Obtém nomes customizados (usuário/assistente) do YAML de configuração."""
-        user_name = "Usuario"
+        user_name = "Pindarolas"
         assistant_name = "GLaDOS"
         try:
             from core.config.settings import Settings
