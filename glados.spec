@@ -6,6 +6,8 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 hiddenimports = []
 hiddenimports += collect_submodules("sentence_transformers")
 hiddenimports += collect_submodules("transformers")
+hiddenimports += collect_submodules("core")
+hiddenimports += collect_submodules("ui")
 
 binaries = []
 binaries += collect_dynamic_libs("llama_cpp")
@@ -24,7 +26,7 @@ datas = [
 
 a = Analysis(
     ["run.py"],
-    pathex=["."],
+    pathex=[".", "./src", "./ui"],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

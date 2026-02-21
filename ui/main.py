@@ -34,15 +34,15 @@ from core.modules.agenda_manager import AgendaManager
 from core.config.settings import settings as core_settings
 from core.llm.local_llm import llm
 from core.vault.bootstrap import bootstrap_vault
-from utils.config_manager import ConfigManager
+from ui.utils.config_manager import ConfigManager
 
 # ============ IMPORTS DA UI ============
 
-from main_window import MainWindow
-from utils.theme_manager import ThemeManager
-from utils.animation import LoadingSplash
-from utils.responsive import ResponsiveManager
-from utils.shortcut_manager import ShortcutManager
+from ui.main_window import MainWindow
+from ui.utils.theme_manager import ThemeManager
+from ui.utils.animation import LoadingSplash
+from ui.utils.responsive import ResponsiveManager
+from ui.utils.shortcut_manager import ShortcutManager
 
 # ============ IMPORTS DO PyQt6 ============
 

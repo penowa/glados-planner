@@ -130,12 +130,13 @@ class ConfigManager:
     @property
     def theme(self) -> str:
         """Retorna o tema atual"""
-        return self.get('ui.theme', 'philosophy_dark')
+        theme_name = str(self.get('ui.theme', 'philosophy_dark') or 'philosophy_dark')
+        return 'philosophy_dark' if theme_name != 'philosophy_dark' else theme_name
     
     @theme.setter
     def theme(self, theme_name: str) -> None:
         """Define o tema"""
-        self.set('ui.theme', theme_name)
+        self.set('ui.theme', 'philosophy_dark')
     
     def get_window_geometry(self) -> Optional[bytes]:
         """Obtém geometria da janela"""

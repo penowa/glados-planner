@@ -5,6 +5,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 import os
 import json
+import sys
+from pathlib import Path
 
 class ThemeManager(QObject):
     """Gerencia temas da aplicação"""
@@ -22,12 +24,22 @@ class ThemeManager(QObject):
         super().__init__()
         self.current_theme = None
         self.themes = {}
-        self.themes_dir = os.path.join(os.path.dirname(__file__), '..', 'themes')
+        self.themes_dir = self._resolve_themes_dir()
         self.load_all_themes()
+
+    def _resolve_themes_dir(self) -> str:
+        """Resolve diretório de temas para dev e build PyInstaller."""
+        if getattr(sys, "frozen", False):
+            # No PyInstaller onedir, dados ficam sob sys._MEIPASS.
+            meipass = Path(getattr(sys, "_MEIPASS", Path.cwd()))
+            frozen_dir = meipass / "ui" / "themes"
+            return str(frozen_dir)
+        local_dir = Path(__file__).resolve().parent.parent / "themes"
+        return str(local_dir)
     
     def load_all_themes(self):
-        """Carrega todos os temas disponíveis"""
-        theme_files = ['philosophy_dark.qss', 'philosophy_light.qss', 'philosophy_night.qss']
+        """Carrega apenas o tema oficial da aplicação."""
+        theme_files = ["philosophy_dark.qss"]
         
         for theme_file in theme_files:
             theme_path = os.path.join(self.themes_dir, theme_file)
@@ -38,6 +50,8 @@ class ThemeManager(QObject):
     
     def load_theme(self, theme_name):
         """Carrega um tema específico"""
+        if theme_name != "philosophy_dark":
+            theme_name = "philosophy_dark"
         if theme_name in self.themes:
             app = QApplication.instance()
             if app:
@@ -49,6 +63,15 @@ class ThemeManager(QObject):
                 # Salvar preferência
                 self.save_preference(theme_name)
                 return True
+        # Se algo falhou ao carregar o QSS, mantém um fallback escuro mínimo.
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(
+                "QWidget { background-color: #1A1F2B; color: #E8EAF0; }"
+                "QLineEdit, QTextEdit, QPlainTextEdit, QListView, QTableView {"
+                "background-color: #232A38; color: #E8EAF0; border: 1px solid #3A4358; }"
+                "QPushButton { background-color: #2A3142; color: #E8EAF0; border: 1px solid #4A5674; padding: 4px; }"
+            )
         return False
     
     def get_theme_names(self):
@@ -76,7 +99,9 @@ class ThemeManager(QObject):
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
                     config = json.load(f)
-                    return config.get('theme', 'philosophy_dark')
+                    if config.get("theme") == "philosophy_dark":
+                        return "philosophy_dark"
+                    return "philosophy_dark"
         except:
             pass
         return 'philosophy_dark'

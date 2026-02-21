@@ -142,7 +142,7 @@ class MainWindow(QMainWindow):
         self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(config)
         
         # Estado interno
-        self.current_theme = config.get('theme', 'philosophy_dark')
+        self.current_theme = "philosophy_dark"
         self.current_view = 'dashboard'
         self.views = {}
         self.controllers = {}
@@ -351,7 +351,7 @@ class MainWindow(QMainWindow):
         self.theme_button = QPushButton(self.get_theme_icon())
         self.theme_button.setObjectName("theme_button")
         self.theme_button.setFixedSize(36, 36)
-        self.theme_button.setToolTip("Alternar tema (Ctrl+T)")
+        self.theme_button.setToolTip("Tema: Dark Academia")
         self.theme_button.clicked.connect(self.toggle_theme)
         controls_layout.addWidget(self.theme_button)
         
@@ -672,56 +672,20 @@ class MainWindow(QMainWindow):
         self.change_view("dashboard")
     
     def toggle_theme(self):
-        """Alterna entre temas com animação"""
-        themes = ['philosophy_dark', 'philosophy_light', 'philosophy_night']
-        current_index = themes.index(self.current_theme)
-        next_theme = themes[(current_index + 1) % len(themes)]
-        
-        # Animar transição
-        if self.animations_enabled:
-            self.fade_out_animation()
-        
-        # Aplicar novo tema
-        ThemeManager.instance().load_theme(next_theme)
-        self.current_theme = next_theme
-        
-        # Atualizar interface
+        """Mantém o único tema disponível (Dark Academia)."""
+        ThemeManager.instance().load_theme("philosophy_dark")
+        self.current_theme = "philosophy_dark"
         self.theme_button.setText(self.get_theme_icon())
-        self.theme_button.setToolTip(f"Tema: {self.get_theme_name(next_theme)}")
-        
-        if self.animations_enabled:
-            QTimer.singleShot(300, self.fade_in_animation)
-        
-        # Emitir sinal
-        self.theme_changed.emit(next_theme)
-        
-        # Log e notificação
-        theme_name = self.get_theme_name(next_theme)
-        logger.info(f"Tema alterado para: {theme_name}")
-        
-        self.event_bus.notification.emit(
-            'info',
-            'Tema alterado',
-            f'Tema definido para "{theme_name}"'
-        )
+        self.theme_button.setToolTip("Tema: Dark Academia")
+        self.theme_changed.emit("philosophy_dark")
     
     def get_theme_icon(self) -> str:
         """Retorna ícone para o tema atual"""
-        icons = {
-            'philosophy_dark': '🌙',
-            'philosophy_light': '☀️',
-            'philosophy_night': '🌚'
-        }
-        return icons.get(self.current_theme, '🎨')
+        return "🌙"
     
     def get_theme_name(self, theme_key: str) -> str:
         """Retorna nome amigável do tema"""
-        names = {
-            'philosophy_dark': 'Dark Academia',
-            'philosophy_light': 'Light Scholar',
-            'philosophy_night': 'Night Owl'
-        }
-        return names.get(theme_key, theme_key)
+        return "Dark Academia"
     
     # ============ NOVOS MÉTODOS PARA OS BOTÕES ============
     
@@ -790,14 +754,13 @@ class MainWindow(QMainWindow):
         self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(payload)
         self._apply_custom_identity_to_ui()
 
-        selected_theme = str((payload or {}).get("theme", "")).strip()
-        if selected_theme and selected_theme != self.current_theme:
-            ThemeManager.instance().load_theme(selected_theme)
-            self.current_theme = selected_theme
-            if hasattr(self, "theme_button"):
-                self.theme_button.setText(self.get_theme_icon())
-                self.theme_button.setToolTip(f"Tema: {self.get_theme_name(selected_theme)}")
-            self.theme_changed.emit(selected_theme)
+        selected_theme = "philosophy_dark"
+        ThemeManager.instance().load_theme(selected_theme)
+        self.current_theme = selected_theme
+        if hasattr(self, "theme_button"):
+            self.theme_button.setText(self.get_theme_icon())
+            self.theme_button.setToolTip("Tema: Dark Academia")
+        self.theme_changed.emit(selected_theme)
 
     def _resolve_custom_identity(self, source: Dict[str, Any] | None = None) -> tuple[str, str]:
         """Obtém nomes customizados (usuário/assistente) de config local ou YAML."""
@@ -1892,9 +1855,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def on_theme_changed(self, theme_name: str):
         """Atualiza interface quando tema muda"""
-        # Atualizar botão de tema
-        icons = {'philosophy_dark': '🌙', 'philosophy_light': '☀️', 'philosophy_night': '🌚'}
-        self.theme_button.setText(icons.get(theme_name, '🎨'))
+        self.theme_button.setText("🌙")
     
     @pyqtSlot(str)
     def on_view_changed(self, view_name: str):

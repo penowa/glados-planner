@@ -118,13 +118,9 @@ class OnboardingDialog(QDialog):
         form = QFormLayout(tab)
         self.user_name_input = QLineEdit()
         self.assistant_name_input = QLineEdit()
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem("Dark Academia", "philosophy_dark")
-        self.theme_combo.addItem("Light Scholar", "philosophy_light")
-        self.theme_combo.addItem("Night Owl", "philosophy_night")
         form.addRow("Seu nome:", self.user_name_input)
         form.addRow("Nome do assistente:", self.assistant_name_input)
-        form.addRow("Tema inicial:", self.theme_combo)
+        form.addRow("Tema inicial:", QLabel("Dark Academia (único disponível)"))
         self.tabs.addTab(tab, "Identidade")
 
     def _setup_paths_tab(self):
@@ -289,9 +285,7 @@ class OnboardingDialog(QDialog):
 
         self.user_name_input.setText(str(llm.glados.user_name or "").strip())
         self.assistant_name_input.setText(str(llm.glados.glados_name or "").strip())
-        current_theme = str(self.config_manager.theme or "philosophy_dark")
-        idx = self.theme_combo.findData(current_theme)
-        self.theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.config_manager.theme = "philosophy_dark"
 
         self.vault_path_input.setText(paths.vault)
         self.data_dir_input.setText(paths.data_dir)
@@ -449,7 +443,7 @@ class OnboardingDialog(QDialog):
         try:
             user_name = self.user_name_input.text().strip()
             assistant_name = self.assistant_name_input.text().strip()
-            selected_theme = str(self.theme_combo.currentData())
+            selected_theme = "philosophy_dark"
             show_on_start = not self.hide_on_start_check.isChecked()
             vault_path = self.vault_path_input.text().strip()
             if not vault_path:
