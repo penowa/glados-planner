@@ -1,0 +1,6 @@
+FROM /home/penowa/Glados/data/models/Qwen3-1.7B-Q8_0.gguf
+PARAMETER num_ctx 3000
+PARAMETER num_thread 2
+PARAMETER temperature 0.35
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.12

@@ -4,6 +4,10 @@ import os
 import time
 import logging
 import traceback
+import subprocess
+import shutil
+from urllib import request as urllib_request
+from urllib.parse import urlsplit, urlunsplit
 from pathlib import Path
 from typing import Dict, Any
 
@@ -32,7 +36,7 @@ from core.modules.book_processor import BookProcessor
 from core.modules.reading_manager import ReadingManager
 from core.modules.agenda_manager import AgendaManager
 from core.config.settings import settings as core_settings
-from core.llm.local_llm import llm
+from core.llm.backend_router import llm
 from core.vault.bootstrap import bootstrap_vault
 from ui.utils.config_manager import ConfigManager
 
@@ -89,6 +93,9 @@ class PhilosophyPlannerApp:
         self.backend_modules = {}
         self.controllers = {}
         self.config = self.load_config()
+        self.ollama_process = None
+        self._ollama_started_by_app = False
+        self._ollama_log_handle = None
         
     def load_config(self) -> Dict[str, Any]:
         """Carrega configuração do sistema"""
@@ -126,6 +133,7 @@ class PhilosophyPlannerApp:
             self.show_splash_screen()
             
             self.init_core_systems()
+            self.ensure_ollama_service_for_cloud_backend()
             self.init_backend_modules()
             
             ThemeManager.instance().load_theme(self.config['theme'])
@@ -140,6 +148,150 @@ class PhilosophyPlannerApp:
         except Exception as e:
             self.handle_fatal_error(e)
             return 1
+
+    @staticmethod
+    def _normalize_ollama_api_base(api_base: str) -> str:
+        value = str(api_base or "").strip().rstrip("/")
+        if not value:
+            return "http://127.0.0.1:11434"
+        try:
+            parsed = urlsplit(value)
+        except Exception:
+            return value
+        if not parsed.scheme:
+            return value
+        host = (parsed.hostname or "").strip().lower()
+        if host != "localhost":
+            return value
+        netloc = "127.0.0.1"
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
+
+    @staticmethod
+    def _is_ollama_cloud_backend_active() -> bool:
+        backend = str(getattr(core_settings.llm, "backend", "local") or "local").strip().lower()
+        if backend != "cloud":
+            return False
+        model = str(getattr(core_settings.llm.cloud, "model", "") or "").strip().lower()
+        return model.startswith("ollama/")
+
+    @staticmethod
+    def _is_ollama_reachable(api_base: str, timeout_seconds: float = 1.5) -> bool:
+        target = str(api_base or "").strip().rstrip("/")
+        if not target:
+            return False
+        url = f"{target}/api/tags"
+        req = urllib_request.Request(url, method="GET")
+        opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=max(0.5, float(timeout_seconds))) as resp:
+                return int(getattr(resp, "status", 0) or 0) == 200
+        except Exception:
+            return False
+
+    @staticmethod
+    def _find_ollama_binary() -> str | None:
+        candidates = []
+        env_bin = str(os.environ.get("OLLAMA_BIN", "") or "").strip()
+        if env_bin:
+            candidates.append(Path(env_bin).expanduser())
+        which_bin = shutil.which("ollama")
+        if which_bin:
+            candidates.append(Path(which_bin))
+        candidates.append(Path.home() / ".local" / "bin" / "ollama")
+        candidates.append(Path("/usr/bin/ollama"))
+
+        for candidate in candidates:
+            try:
+                path = candidate.expanduser().resolve()
+            except Exception:
+                path = candidate
+            if path.exists() and os.access(path, os.X_OK):
+                return str(path)
+        return None
+
+    def ensure_ollama_service_for_cloud_backend(self):
+        """Inicia `ollama serve` automaticamente quando backend cloud/ollama estiver ativo."""
+        if not self._is_ollama_cloud_backend_active():
+            return
+
+        api_base = self._normalize_ollama_api_base(
+            str(getattr(core_settings.llm.cloud, "api_base", "") or "")
+        )
+
+        if self._is_ollama_reachable(api_base):
+            self.logger.info("Ollama já está ativo em %s", api_base)
+            return
+
+        ollama_bin = self._find_ollama_binary()
+        if not ollama_bin:
+            self.logger.warning("Backend cloud=ollama ativo, mas binário 'ollama' não foi encontrado no PATH.")
+            return
+
+        try:
+            if self.splash:
+                self.splash.show_message("Inicializando serviço Ollama...")
+
+            logs_dir = Path(core_settings.paths.data_dir) / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = logs_dir / "ollama-serve.log"
+            self._ollama_log_handle = open(log_path, "a", encoding="utf-8")
+
+            env = os.environ.copy()
+            env["OLLAMA_HOST"] = api_base
+            self.ollama_process = subprocess.Popen(
+                [ollama_bin, "serve"],
+                stdout=self._ollama_log_handle,
+                stderr=self._ollama_log_handle,
+                env=env,
+            )
+            self._ollama_started_by_app = True
+            self.logger.info("Subprocesso do Ollama iniciado (pid=%s, host=%s)", self.ollama_process.pid, api_base)
+        except Exception as exc:
+            self.logger.error("Falha ao iniciar ollama serve automaticamente: %s", exc)
+            self._ollama_started_by_app = False
+            self.ollama_process = None
+            if self._ollama_log_handle:
+                self._ollama_log_handle.close()
+                self._ollama_log_handle = None
+            return
+
+        deadline = time.time() + 18.0
+        while time.time() < deadline:
+            if self._is_ollama_reachable(api_base):
+                self.logger.info("Ollama pronto em %s", api_base)
+                return
+            if self.ollama_process and self.ollama_process.poll() is not None:
+                break
+            time.sleep(0.4)
+
+        self.logger.warning("Ollama foi iniciado, mas não ficou pronto dentro do timeout inicial (%s).", api_base)
+
+    def stop_managed_ollama_service(self):
+        """Encerra o ollama iniciado pela aplicação."""
+        if not self._ollama_started_by_app or self.ollama_process is None:
+            if self._ollama_log_handle:
+                self._ollama_log_handle.close()
+                self._ollama_log_handle = None
+            return
+
+        try:
+            if self.ollama_process.poll() is None:
+                self.ollama_process.terminate()
+                try:
+                    self.ollama_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.ollama_process.kill()
+                    self.ollama_process.wait(timeout=3)
+        except Exception as exc:
+            self.logger.warning("Falha ao encerrar processo do Ollama gerenciado pela app: %s", exc)
+        finally:
+            self.ollama_process = None
+            self._ollama_started_by_app = False
+            if self._ollama_log_handle:
+                self._ollama_log_handle.close()
+                self._ollama_log_handle = None
     
     def show_splash_screen(self):
         """Exibe tela de carregamento"""
@@ -351,6 +503,8 @@ class PhilosophyPlannerApp:
         for name, module in self.backend_modules.items():
             if hasattr(module, 'cleanup'):
                 module.cleanup()
+
+        self.stop_managed_ollama_service()
         
         self.generate_shutdown_report()
         self.logger.info("Sistema encerrado com sucesso")

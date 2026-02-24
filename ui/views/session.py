@@ -1,5 +1,5 @@
 """
-View de sessão de leitura com Pomodoro e chat LLM.
+View de sessão de leitura com Pomodoro e assistente LLM.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -430,7 +430,7 @@ class ManualQuestionsDialog(QDialog):
 
 
 class SessionView(QWidget):
-    """Tela de sessão com leitura em dupla página, Pomodoro e chat LLM."""
+    """Tela de sessão com leitura em dupla página, Pomodoro e assistente LLM."""
 
     navigate_to = pyqtSignal(str)
     USER_NOTES_DIR = "02-ANOTAÇÕES"
@@ -484,6 +484,11 @@ class SessionView(QWidget):
         self._review_context_note_selection: list[Dict[str, str]] = []
         self._review_backend_metadata: Dict[str, Any] = {}
         self._review_summary_saved_in_run = False
+        self._search_matches: list[Dict[str, int]] = []
+        self._search_term = ""
+        self._search_current_index = -1
+        self._search_match_color = QColor("#FFE08A")
+        self._search_active_match_color = QColor("#FFB347")
         self.mindmap_review_module = MindmapReviewModule()
         self.review_system = self._resolve_review_system()
 
@@ -696,6 +701,27 @@ class SessionView(QWidget):
         nav.addWidget(self.next_pages_button)
         reading_layout.addWidget(self.nav_widget)
 
+        self.search_bar = QFrame()
+        self.search_bar.setObjectName("session_search_bar")
+        search_layout = QHBoxLayout(self.search_bar)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(6)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Pesquisar em toda a obra (Ctrl+F)...")
+        self.search_prev_button = QPushButton("◀ Anterior")
+        self.search_next_button = QPushButton("Próxima ▶")
+        self.search_counter_label = QLabel("0/0")
+        self.search_close_button = QPushButton("Fechar")
+        self.search_prev_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
+        search_layout.addWidget(self.search_input, 1)
+        search_layout.addWidget(self.search_prev_button)
+        search_layout.addWidget(self.search_next_button)
+        search_layout.addWidget(self.search_counter_label)
+        search_layout.addWidget(self.search_close_button)
+        self.search_bar.setVisible(False)
+        reading_layout.addWidget(self.search_bar)
+
         self.assistant_tabs = QTabWidget()
         self.assistant_tabs.setObjectName("session_assistant_tabs")
         self.assistant_tabs.setVisible(False)
@@ -720,16 +746,14 @@ class SessionView(QWidget):
 
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True)
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Pergunte algo sobre a leitura...")
         self.chat_preset_combo = QComboBox()
         self.chat_preset_combo.addItems(["Rápido", "Balanceado", "Qualidade"])
         self.chat_preset_combo.setCurrentText("Balanceado")
         self.chat_preset_combo.setFixedWidth(130)
+        self.chat_summary_button = QPushButton("Resumo + anotações")
         self.chat_mindmap_button = QPushButton("Mapa mental")
         self.chat_mindmap_button.setToolTip("Criar/atualizar mapa mental da obra")
         self.chat_mark_review_button = QPushButton("Marcar para revisão")
-        self.chat_send_button = QPushButton("Enviar")
         self.chat_status_label = QLabel("LLM pronta")
         self.review_step_label = QLabel("Revisão: inativa")
         self.review_overall_progress = QProgressBar()
@@ -743,11 +767,10 @@ class SessionView(QWidget):
         self.review_item_progress.setVisible(False)
 
         input_row = QHBoxLayout()
-        input_row.addWidget(self.chat_input, 1)
+        input_row.addStretch(1)
         input_row.addWidget(self.chat_preset_combo)
         input_row.addWidget(self.chat_mindmap_button)
         input_row.addWidget(self.chat_mark_review_button)
-        input_row.addWidget(self.chat_send_button)
 
         chat_layout.addWidget(self.chat_history, 1)
         chat_layout.addWidget(self.review_step_label)
@@ -765,6 +788,7 @@ class SessionView(QWidget):
         note_header = QHBoxLayout()
         self.note_title_input = QLineEdit()
         self.note_title_input.setPlaceholderText("Título da nota")
+        note_header.addWidget(self.chat_summary_button)
         self.note_save_button = QPushButton("Salvar")
         note_header.addWidget(self.note_title_input, 1)
         note_header.addWidget(self.note_save_button)
@@ -784,7 +808,6 @@ class SessionView(QWidget):
         note_layout.addWidget(self.note_capture_hint)
         note_layout.addWidget(self.note_editor, 1)
 
-        self.assistant_tabs.addTab(self.chat_panel, "Chat")
         self.assistant_tabs.addTab(self.note_panel, "Anotação")
         reading_layout.addWidget(self.assistant_tabs)
 
@@ -798,10 +821,6 @@ class SessionView(QWidget):
         self.action_pomodoro_start = self.controls_menu.addAction("Pomodoro: Iniciar")
         self.action_pomodoro_pause = self.controls_menu.addAction("Pomodoro: Pausar")
         self.action_pomodoro_config = self.controls_menu.addAction("Pomodoro: Configurar")
-        self.controls_menu.addSeparator()
-        self.action_chat_init = self.controls_menu.addAction("LLM: Inicializar Chat")
-        self.action_chat_toggle = self.controls_menu.addAction("LLM: Mostrar Chat")
-        self.action_chat_toggle.setCheckable(True)
 
         self.pomodoro_overlay = QFrame(self.reading_panel)
         self.pomodoro_overlay.setStyleSheet("background-color: rgba(10, 12, 18, 160);")
@@ -851,12 +870,16 @@ class SessionView(QWidget):
         self.shortcut_up = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
         self.shortcut_down = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
         self.shortcut_esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self.shortcut_find = QShortcut(QKeySequence.StandardKey.Find, self)
+        self.shortcut_find_ctrl = QShortcut(QKeySequence("Ctrl+F"), self)
         for shortcut in (
             self.shortcut_left,
             self.shortcut_right,
             self.shortcut_up,
             self.shortcut_down,
             self.shortcut_esc,
+            self.shortcut_find,
+            self.shortcut_find_ctrl,
         ):
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
@@ -870,26 +893,30 @@ class SessionView(QWidget):
         self.action_pomodoro_start.triggered.connect(self._start_pomodoro)
         self.action_pomodoro_pause.triggered.connect(self._pause_pomodoro)
         self.action_pomodoro_config.triggered.connect(self._open_pomodoro_config_dialog)
-        self.action_chat_init.triggered.connect(self._initialize_context_chat)
-        self.action_chat_toggle.toggled.connect(self._toggle_chat)
 
         self.prev_pages_button.clicked.connect(self._go_prev_pages)
         self.next_pages_button.clicked.connect(self._go_next_pages)
-        self.chat_send_button.clicked.connect(self._send_chat_message)
+        self.chat_summary_button.clicked.connect(self._request_summary_with_annotations)
         self.chat_mindmap_button.clicked.connect(self._handle_mindmap_button_clicked)
         self.chat_mark_review_button.clicked.connect(self._start_review_generation)
         self.chat_preset_combo.currentTextChanged.connect(self._apply_chat_preset)
-        self.chat_input.returnPressed.connect(self._send_chat_message)
         self.note_save_button.clicked.connect(self._save_note_from_tab)
         self.assistant_hide_button.clicked.connect(self._hide_assistant_panels)
         self.pomodoro_overlay_toggle_button.clicked.connect(self._toggle_pomodoro_from_timer)
         self.pomodoro_overlay_config_button.clicked.connect(self._open_pomodoro_config_dialog)
+        self.search_input.textChanged.connect(self._on_search_term_changed)
+        self.search_input.returnPressed.connect(self._go_to_next_search_match)
+        self.search_prev_button.clicked.connect(self._go_to_prev_search_match)
+        self.search_next_button.clicked.connect(self._go_to_next_search_match)
+        self.search_close_button.clicked.connect(self._hide_search_bar)
 
         self.shortcut_left.activated.connect(self._on_fullscreen_left)
         self.shortcut_right.activated.connect(self._on_fullscreen_right)
         self.shortcut_up.activated.connect(self._on_fullscreen_up)
         self.shortcut_down.activated.connect(self._on_fullscreen_down)
         self.shortcut_esc.activated.connect(self._on_fullscreen_escape)
+        self.shortcut_find.activated.connect(self._open_search_bar)
+        self.shortcut_find_ctrl.activated.connect(self._open_search_bar)
 
         if self.glados_controller:
             self.glados_controller.response_ready.connect(self._on_llm_response)
@@ -1021,10 +1048,12 @@ class SessionView(QWidget):
         left = max(self.left_page, 1)
         right = left + 1
 
+        left_text = self._sanitize_page_display_text(self._build_page_content(left))
+        right_text = self._sanitize_page_display_text(self._build_page_content(right))
         self.left_page_title.setText(f"Página {left}")
         self.right_page_title.setText(f"Página {right}")
-        self.left_page_text.setPlainText(self._sanitize_page_display_text(self._build_page_content(left)))
-        self.right_page_text.setPlainText(self._sanitize_page_display_text(self._build_page_content(right)))
+        self.left_page_text.setPlainText(left_text)
+        self.right_page_text.setPlainText(right_text)
 
         self.page_pair_label.setText(f"{left}-{right}")
         total_text = "?" if self.total_pages <= 0 else str(self.total_pages)
@@ -1040,12 +1069,20 @@ class SessionView(QWidget):
             self.next_pages_button.setEnabled(right < self.total_pages)
         else:
             self.next_pages_button.setEnabled(True)
+        self._apply_search_highlights()
         self._position_fullscreen_button()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_fullscreen_button()
         self._sync_fullscreen_overlays_geometry()
+
+    def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_F:
+            self._open_search_bar()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _position_fullscreen_button(self):
         viewport = self.left_page_text.viewport()
@@ -1366,6 +1403,158 @@ class SessionView(QWidget):
     def _toggle_fullscreen_mode(self):
         self._set_fullscreen_mode(not self._fullscreen_mode)
 
+    def _open_search_bar(self):
+        self.search_bar.setVisible(True)
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _hide_search_bar(self):
+        self.search_bar.setVisible(False)
+        self.search_input.clear()
+        self._search_term = ""
+        self._search_matches = []
+        self._search_current_index = -1
+        self._apply_search_highlights()
+
+    def _on_search_term_changed(self, text: str):
+        term = (text or "").strip()
+        self._search_term = term
+        self._search_matches = self._build_search_matches(term)
+        self._search_current_index = -1
+        if self._search_matches:
+            self._search_current_index = self._preferred_search_index()
+        self._update_search_controls()
+        self._apply_search_highlights()
+
+    def _build_search_matches(self, term: str) -> list[Dict[str, int]]:
+        if len(term) < 2:
+            return []
+
+        pattern = re.compile(re.escape(term), re.IGNORECASE)
+        matches: list[Dict[str, int]] = []
+        for page_number in self._iter_searchable_pages():
+            text = self._sanitize_page_display_text(self._build_page_content(page_number))
+            if not text or (text.startswith("[") and text.endswith("]")):
+                continue
+            for match in pattern.finditer(text):
+                matches.append(
+                    {
+                        "page": int(page_number),
+                        "start": int(match.start()),
+                        "end": int(match.end()),
+                    }
+                )
+        return matches
+
+    def _iter_searchable_pages(self) -> list[int]:
+        if self.page_contents:
+            return sorted(int(page) for page in self.page_contents.keys())
+        if self.total_pages > 0:
+            return list(range(1, int(self.total_pages) + 1))
+        return [max(1, self.left_page), max(1, self.left_page) + 1]
+
+    def _preferred_search_index(self) -> int:
+        if not self._search_matches:
+            return -1
+        for idx, match in enumerate(self._search_matches):
+            page = int(match.get("page", 0))
+            if page < self.current_page:
+                continue
+            return idx
+        return 0
+
+    def _go_to_next_search_match(self):
+        if not self._search_matches:
+            return
+        next_index = 0 if self._search_current_index < 0 else (self._search_current_index + 1) % len(self._search_matches)
+        self._go_to_search_index(next_index)
+
+    def _go_to_prev_search_match(self):
+        if not self._search_matches:
+            return
+        prev_index = len(self._search_matches) - 1 if self._search_current_index < 0 else (self._search_current_index - 1) % len(self._search_matches)
+        self._go_to_search_index(prev_index)
+
+    def _go_to_search_index(self, index: int):
+        if not self._search_matches:
+            return
+        bounded = max(0, min(index, len(self._search_matches) - 1))
+        self._search_current_index = bounded
+        match = self._search_matches[bounded]
+        target_page = int(match.get("page", self.current_page))
+        target_left = self._left_page_from_current(target_page)
+        if target_left != self.left_page:
+            self.left_page = target_left
+            self.current_page = target_page
+            self.current_chapter_path = self.page_chapter_map.get(self.current_page)
+            self.max_page_reached = max(self.max_page_reached, self.current_page)
+            self._refresh_pages()
+            self._sync_progress_realtime()
+        else:
+            self.current_page = target_page
+            self.current_chapter_path = self.page_chapter_map.get(self.current_page)
+            self._apply_search_highlights()
+        self._focus_current_search_match()
+        self._update_search_controls()
+
+    def _focus_current_search_match(self):
+        current = self._current_search_match()
+        if not current:
+            return
+        page = int(current["page"])
+        editor = self.left_page_text if page == self.left_page else self.right_page_text
+        cursor = editor.textCursor()
+        cursor.setPosition(int(current["start"]))
+        cursor.setPosition(int(current["end"]), QTextCursor.MoveMode.KeepAnchor)
+        editor.setTextCursor(cursor)
+        editor.ensureCursorVisible()
+
+    def _current_search_match(self) -> Optional[Dict[str, int]]:
+        if self._search_current_index < 0 or self._search_current_index >= len(self._search_matches):
+            return None
+        return self._search_matches[self._search_current_index]
+
+    def _apply_search_highlights(self):
+        self._apply_search_highlight_to_editor(self.left_page_text, self.left_page)
+        self._apply_search_highlight_to_editor(self.right_page_text, self.left_page + 1)
+        self._update_search_controls()
+
+    def _apply_search_highlight_to_editor(self, editor: QTextEdit, page_number: int):
+        if not self._search_matches:
+            editor.setExtraSelections([])
+            return
+
+        selections: list[QTextEdit.ExtraSelection] = []
+        current = self._current_search_match()
+        for match in self._search_matches:
+            if int(match.get("page", -1)) != int(page_number):
+                continue
+            selection = QTextEdit.ExtraSelection()
+            cursor = editor.textCursor()
+            cursor.setPosition(int(match["start"]))
+            cursor.setPosition(int(match["end"]), QTextCursor.MoveMode.KeepAnchor)
+            selection.cursor = cursor
+            char_format = QTextCharFormat()
+            is_active = bool(
+                current
+                and int(current.get("page", -1)) == int(match["page"])
+                and int(current.get("start", -1)) == int(match["start"])
+                and int(current.get("end", -1)) == int(match["end"])
+            )
+            char_format.setBackground(self._search_active_match_color if is_active else self._search_match_color)
+            char_format.setForeground(QColor("#111111"))
+            selection.format = char_format
+            selections.append(selection)
+        editor.setExtraSelections(selections)
+
+    def _update_search_controls(self):
+        total = len(self._search_matches)
+        current = self._search_current_index + 1 if self._search_current_index >= 0 and total else 0
+        self.search_counter_label.setText(f"{current}/{total}")
+        enabled = total > 0
+        self.search_prev_button.setEnabled(enabled)
+        self.search_next_button.setEnabled(enabled)
+
     def _set_fullscreen_mode(self, enabled: bool):
         main_window = self.window()
         if enabled and self._fullscreen_mode:
@@ -1505,26 +1694,11 @@ class SessionView(QWidget):
             self.assistant_tabs.setVisible(False)
         self._assistant_should_hide_after_animation = False
 
-    def _toggle_chat(self, checked: bool):
-        if self._fullscreen_mode:
-            if checked:
-                self.assistant_tabs.setCurrentWidget(self.chat_panel)
-            self._set_fullscreen_assistant_visible(checked, animate=True)
-        else:
-            self.assistant_tabs.setVisible(checked)
-            if checked:
-                self.assistant_tabs.setCurrentWidget(self.chat_panel)
-        self.action_chat_toggle.setText("LLM: Ocultar Chat" if checked else "LLM: Mostrar Chat")
-        if self.action_chat_toggle.isChecked() != checked:
-            self.action_chat_toggle.setChecked(checked)
-
     def _hide_assistant_panels(self):
         if self._fullscreen_mode:
             self._set_fullscreen_assistant_visible(False, animate=True)
-            if self.action_chat_toggle.isChecked():
-                self.action_chat_toggle.setChecked(False)
             return
-        self._toggle_chat(False)
+        self.assistant_tabs.setVisible(False)
 
     def _toggle_pomodoro_from_timer(self):
         if not self.pomodoro:
@@ -1546,8 +1720,7 @@ class SessionView(QWidget):
         self.glados_controller.set_generation_preset(preset_label)
 
     def _set_chat_locked(self, locked: bool):
-        self.chat_input.setEnabled(not locked)
-        self.chat_send_button.setEnabled(not locked)
+        self.chat_summary_button.setEnabled(not locked)
         self.chat_mindmap_button.setEnabled(not locked)
         self.chat_mark_review_button.setEnabled(not locked)
         self.chat_preset_combo.setEnabled(not locked)
@@ -1563,15 +1736,25 @@ class SessionView(QWidget):
             return
 
         if not canvas_path.exists():
-            self._create_base_mindmap_canvas(canvas_path)
+            self._create_base_mindmap_canvas(canvas_path, ask_confirmation=True, show_feedback=True)
             return
 
-        self._start_mindmap_incremental_generation(canvas_path)
+        self._start_mindmap_incremental_generation(
+            canvas_path,
+            ask_confirmation=True,
+            show_feedback=True,
+        )
 
-    def _create_base_mindmap_canvas(self, canvas_path: Path):
+    def _create_base_mindmap_canvas(
+        self,
+        canvas_path: Path,
+        ask_confirmation: bool = True,
+        show_feedback: bool = True,
+    ) -> bool:
         if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
-            QMessageBox.warning(self, "Sessão sem livro", "Não foi possível identificar o livro atual.")
-            return
+            if show_feedback:
+                QMessageBox.warning(self, "Sessão sem livro", "Não foi possível identificar o livro atual.")
+            return False
 
         progress = self._get_progress(self.current_book_id) if self.current_book_id else {}
         book_dir = self._find_book_directory(progress)
@@ -1599,23 +1782,25 @@ class SessionView(QWidget):
         if sources.pretext_note:
             details.extend(["  arquivo pré-texto:", f"  {self._display_relative_path(sources.pretext_note)}"])
 
-        confirm = QMessageBox.question(
-            self,
-            "Canvas base não encontrado",
-            "\n".join(details),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+        if ask_confirmation:
+            confirm = QMessageBox.question(
+                self,
+                "Canvas base não encontrado",
+                "\n".join(details),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return False
 
         if not sources.book_note and not sources.pretext_note:
-            QMessageBox.warning(
-                self,
-                "Arquivos ausentes",
-                "Não encontrei nota do livro nem nota de pré-texto para criar o canvas base.",
-            )
-            return
+            if show_feedback:
+                QMessageBox.warning(
+                    self,
+                    "Arquivos ausentes",
+                    "Não encontrei nota do livro nem nota de pré-texto para criar o canvas base.",
+                )
+            return False
 
         vault_root = Path(self.reading_controller.reading_manager.vault_path)
         canvas_payload = self.mindmap_review_module.build_base_canvas(
@@ -1633,21 +1818,29 @@ class SessionView(QWidget):
             overwrite_existing=True,
         )
         if not note_path:
-            QMessageBox.warning(
-                self,
-                "Erro ao criar canvas",
-                "Não foi possível salvar o canvas base no diretório de mapas mentais.",
-            )
-            return
+            if show_feedback:
+                QMessageBox.warning(
+                    self,
+                    "Erro ao criar canvas",
+                    "Não foi possível salvar o canvas base no diretório de mapas mentais.",
+                )
+            return False
 
         self.chat_history.append(f"Sistema: canvas base criado em {note_path.name}.")
-        QMessageBox.information(
-            self,
-            "Canvas base criado",
-            f"Canvas salvo em {self.MINDMAPS_DIR}/{note_path.name}.",
-        )
+        if show_feedback:
+            QMessageBox.information(
+                self,
+                "Canvas base criado",
+                f"Canvas salvo em {self.MINDMAPS_DIR}/{note_path.name}.",
+            )
+        return True
 
-    def _start_mindmap_incremental_generation(self, canvas_path: Path):
+    def _start_mindmap_incremental_generation(
+        self,
+        canvas_path: Path,
+        ask_confirmation: bool = True,
+        show_feedback: bool = True,
+    ) -> bool:
         active_chapter_path = self._resolve_active_chapter_path()
         user_notes = self._collect_chapter_user_notes(active_chapter_path, max_items=4, max_chars=320)
         summary_path, _summary_text = self._load_summary_note_for_current_chapter(max_chars=900)
@@ -1680,31 +1873,34 @@ class SessionView(QWidget):
             status_lines.append("")
         status_lines.append("Deseja continuar com a atualização do mapa mental?")
 
-        confirm = QMessageBox.question(
-            self,
-            "Atualizar mapa mental da obra",
-            "\n".join(status_lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+        if ask_confirmation:
+            confirm = QMessageBox.question(
+                self,
+                "Atualizar mapa mental da obra",
+                "\n".join(status_lines),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return False
 
         if not chapter_exists and not user_notes_exists and not summary_exists:
-            QMessageBox.warning(
-                self,
-                "Sem conteúdo novo",
-                "Nenhum dos arquivos necessários foi encontrado para atualizar o mapa mental.",
-            )
-            return
+            if show_feedback:
+                QMessageBox.warning(
+                    self,
+                    "Sem conteúdo novo",
+                    "Nenhum dos arquivos necessários foi encontrado para atualizar o mapa mental.",
+                )
+            return False
 
         self.chat_status_label.setText("Atualizando mapa mental localmente...")
         self.chat_history.append("Sistema: atualização de mapa mental iniciada (modo local, sem LLM).")
 
         if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
-            QMessageBox.warning(self, "Vault indisponível", "Não foi possível localizar o diretório do vault.")
+            if show_feedback:
+                QMessageBox.warning(self, "Vault indisponível", "Não foi possível localizar o diretório do vault.")
             self.chat_status_label.setText("Falha ao atualizar mapa mental")
-            return
+            return False
 
         vault_root = Path(self.reading_controller.reading_manager.vault_path)
         existing_payload = self.mindmap_review_module.load_canvas_payload(canvas_path)
@@ -1725,19 +1921,47 @@ class SessionView(QWidget):
             overwrite_existing=True,
         )
         if not saved_path:
-            QMessageBox.warning(
-                self,
-                "Erro ao atualizar canvas",
-                "Não foi possível salvar a atualização local do mapa mental.",
-            )
+            if show_feedback:
+                QMessageBox.warning(
+                    self,
+                    "Erro ao atualizar canvas",
+                    "Não foi possível salvar a atualização local do mapa mental.",
+                )
             self.chat_status_label.setText("Falha ao atualizar mapa mental")
-            return
+            return False
 
         self.chat_history.append(
             "Sistema: mapa mental atualizado localmente "
             f"(+{merge_result.added_nodes} nó(s), +{merge_result.added_edges} conexão(ões))."
         )
         self.chat_status_label.setText("Mapa mental atualizado")
+        return True
+
+    def _auto_update_mindmap(self, reason: str):
+        if self._review_generation_active:
+            self.chat_history.append(
+                f"Sistema: atualização automática do mapa mental adiada ({reason}) porque a revisão está ativa."
+            )
+            return
+
+        canvas_path = self._review_target_path("mapa-mental-canva", self.MINDMAPS_DIR)
+        if not canvas_path:
+            return
+
+        if not canvas_path.exists():
+            created = self._create_base_mindmap_canvas(
+                canvas_path,
+                ask_confirmation=False,
+                show_feedback=False,
+            )
+            if not created:
+                return
+
+        self._start_mindmap_incremental_generation(
+            canvas_path,
+            ask_confirmation=False,
+            show_feedback=False,
+        )
 
     def _collect_chapter_user_notes(
         self,
@@ -1961,21 +2185,6 @@ class SessionView(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         return dialog.get_values()
-
-    def _build_contextual_chat_prompt(self, question: str) -> str:
-        chapter_context = self._build_chapter_context(
-            max_current_chars=850,
-            max_prev_chapters=1,
-            max_prev_chars=260,
-        )
-        if not chapter_context:
-            return question
-        prompt = (
-            "Use o contexto de leitura abaixo para responder a pergunta do usuário.\n\n"
-            f"{chapter_context}\n\n"
-            f"Pergunta do usuário: {question}"
-        )
-        return self._trim_prompt_for_context_window(prompt, hard_limit_chars=1800)
 
     def _resolve_active_chapter_path(self) -> Optional[Path]:
         if self.current_chapter_path and self.current_chapter_path.exists():
@@ -2305,6 +2514,7 @@ class SessionView(QWidget):
             self._append_note_link_to_current_chapter(note_path)
             self._register_manual_questions_with_review_system(entries, note_path)
             self.chat_history.append(f"Sistema: perguntas manuais salvas em {note_path.name}")
+            self._auto_update_mindmap("novo material de perguntas manuais")
             QMessageBox.information(
                 self,
                 "Perguntas salvas",
@@ -2413,52 +2623,6 @@ class SessionView(QWidget):
     def _hide_review_done_toast(self):
         if self.review_done_toast.isVisible():
             self.review_done_toast.hide()
-
-    def _send_chat_message(self):
-        if self._review_generation_active:
-            return
-        question = self.chat_input.text().strip()
-        if not question:
-            return
-
-        self.chat_history.append(f"Você: {question}")
-        self.chat_input.clear()
-
-        if not self.glados_controller:
-            self.chat_history.append("GLaDOS: Controller indisponível.")
-            return
-
-        self._apply_chat_preset(self.chat_preset_combo.currentText())
-        prompt = self._build_contextual_chat_prompt(question)
-        self.glados_controller.ask_glados(prompt, False, "Helio")
-
-    def _initialize_context_chat(self):
-        if self._review_generation_active:
-            self.chat_history.append("Sistema: aguarde a revisão terminar para iniciar novo chat contextual.")
-            return
-        if not self.glados_controller:
-            self.chat_history.append("GLaDOS: Controller indisponível.")
-            return
-
-        context = self._build_chapter_context(
-            max_current_chars=1200,
-            max_prev_chapters=2,
-            max_prev_chars=500,
-        )
-        if not context:
-            self.chat_history.append("GLaDOS: Não encontrei contexto de capítulos para iniciar.")
-            return
-
-        self._toggle_chat(True)
-        self.chat_history.append("Sistema: Contexto de leitura enviado para GLaDOS.")
-        prompt = (
-            "Contextualize-se para me apoiar nesta sessão de leitura.\n\n"
-            f"{context}\n\n"
-            "Responda com um resumo curto do contexto e 3 pontos de atenção para esta sessão."
-        )
-        self._apply_chat_preset(self.chat_preset_combo.currentText())
-        prompt = self._trim_prompt_for_context_window(prompt, hard_limit_chars=1500)
-        self.glados_controller.ask_glados(prompt, False, "Helio")
 
     def _on_llm_response(self, payload: Dict[str, Any]):
         text = payload.get("text", "")
@@ -2602,6 +2766,7 @@ class SessionView(QWidget):
         if note_path:
             self._append_note_link_to_current_chapter(note_path)
             self.chat_history.append(f"Sistema: {task['title']} salvo em {note_path.name}")
+            self._auto_update_mindmap(f"novo material de revisão: {task['title']}")
             if task["slug"] == "resumo":
                 self._review_summary_saved_in_run = True
                 self._register_chapter_difficulty(note_path)
@@ -2696,7 +2861,7 @@ class SessionView(QWidget):
 
     def _show_notes_menu(self):
         menu = QMenu(self)
-        action_summary = menu.addAction("Gerar resumo da sessão (LLM)")
+        action_summary = menu.addAction("Gerar resumo + anotações (LLM)")
         menu.addSeparator()
         action_tpl_reading = menu.addAction("Nova nota com template: Reading")
         action_tpl_concept = menu.addAction("Nova nota com template: Concept")
@@ -2704,7 +2869,7 @@ class SessionView(QWidget):
 
         selected = menu.exec(self.controls_menu_button.mapToGlobal(self.controls_menu_button.rect().bottomLeft()))
         if selected == action_summary:
-            self._request_llm_generated_note("resumo")
+            self._request_summary_with_annotations()
         elif selected == action_tpl_reading:
             self._create_template_note("reading_note.md", "reading_template")
         elif selected == action_tpl_concept:
@@ -2729,8 +2894,6 @@ class SessionView(QWidget):
             self.note_editor.setPlaceholderText("Escreva sua anotação aqui...")
 
     def _open_note_tab(self, excerpt_capture_mode: bool = False):
-        if not self.action_chat_toggle.isChecked():
-            self.action_chat_toggle.setChecked(True)
         if self._fullscreen_mode:
             self._set_fullscreen_assistant_visible(True, animate=True)
         else:
@@ -2749,15 +2912,6 @@ class SessionView(QWidget):
 
         self.note_editor.setPlainText("Gerando template com contexto da sessão...")
         self._request_note_draft_from_llm()
-
-    def _open_chat_tab(self):
-        if not self.action_chat_toggle.isChecked():
-            self.action_chat_toggle.setChecked(True)
-        if self._fullscreen_mode:
-            self._set_fullscreen_assistant_visible(True, animate=True)
-        else:
-            self._toggle_chat(True)
-        self.assistant_tabs.setCurrentWidget(self.chat_panel)
 
     def _request_note_draft_from_llm(self):
         if self._review_generation_active:
@@ -2877,6 +3031,7 @@ class SessionView(QWidget):
         self._set_excerpt_note_capture_mode(False)
 
         self.chat_history.append(f"Sistema: Nota salva em {note_path.name}")
+        self._auto_update_mindmap("nova anotação manual")
         QMessageBox.information(
             self,
             "Anotação salva",
@@ -2909,7 +3064,10 @@ class SessionView(QWidget):
         text = re.sub(r"\s+", " ", selected_text.replace("\u2029", " ")).strip()
         return text[:max_len].strip()
 
-    def _request_llm_generated_note(self, mode: str):
+    def _request_summary_with_annotations(self):
+        self._request_llm_generated_note("resumo", include_annotations=True)
+
+    def _request_llm_generated_note(self, mode: str, include_annotations: bool = False):
         if self._review_generation_active:
             QMessageBox.information(self, "Revisão em andamento", "Aguarde a revisão terminar.")
             return
@@ -2930,13 +3088,44 @@ class SessionView(QWidget):
             "Gere um resumo estruturado da sessão atual com: síntese, conceitos-chave, "
             "3 insights e 2 conexões com capítulos anteriores."
         )
+        annotation_context = ""
+        if mode == "resumo" and include_annotations:
+            annotation_context = self._build_annotation_context_for_summary(max_items=8, max_chars=360)
+            if annotation_context:
+                instruction += (
+                    "\nIntegre explicitamente as anotações do usuário, destacando onde elas reforçam, "
+                    "completam ou corrigem a leitura do capítulo."
+                )
 
         self._pending_note_request = {"mode": mode}
-        prompt = f"{instruction}\n\n{context}"
+        prompt_parts = [instruction, context]
+        if annotation_context:
+            prompt_parts.append(annotation_context)
+        prompt = "\n\n".join(part for part in prompt_parts if part)
         self.chat_history.append(f"Sistema: Solicitação de nota ({mode}) enviada para GLaDOS.")
         self._apply_chat_preset(self.chat_preset_combo.currentText())
         prompt = self._trim_prompt_for_context_window(prompt, hard_limit_chars=1600)
         self.glados_controller.ask_glados(prompt, False, "Helio")
+
+    def _build_annotation_context_for_summary(self, max_items: int = 8, max_chars: int = 360) -> str:
+        related_entries = self._load_related_note_entries_for_current_chapter(
+            max_items=max_items,
+            max_chars=max_chars,
+        )
+        if not related_entries:
+            return ""
+
+        lines = ["Anotações do usuário para integrar ao resumo:"]
+        for note in related_entries:
+            title = (note.get("title") or "Anotação").strip()
+            content = (note.get("content") or "").strip()
+            if not content:
+                continue
+            lines.append(f"- {title}:")
+            lines.append(content)
+        if len(lines) <= 1:
+            return ""
+        return "\n".join(lines)
 
     def _build_chapter_context(
         self,
@@ -3229,6 +3418,7 @@ class SessionView(QWidget):
         if note_path:
             self._append_note_link_to_current_chapter(note_path)
             self.chat_history.append(f"Sistema: Nota criada em {note_path.name}")
+            self._auto_update_mindmap("novo resumo LLM")
             self._clear_llm_cache_after_material("Resumo")
 
     def _create_template_note(self, template_name: str, note_type: str):
@@ -3249,6 +3439,7 @@ class SessionView(QWidget):
         if note_path:
             self._append_note_link_to_current_chapter(note_path)
             self.chat_history.append(f"Sistema: Nota de template criada em {note_path.name}")
+            self._auto_update_mindmap("nova nota de template")
 
     def _render_template(self, template_text: str, title: str) -> str:
         replacements = {
@@ -3828,6 +4019,8 @@ class SessionView(QWidget):
         if self._session_closed:
             return
         self._session_closed = True
+
+        self._auto_update_mindmap("encerramento da sessão")
 
         resume_page = self._compute_resume_page()
         self._save_progress_absolute(

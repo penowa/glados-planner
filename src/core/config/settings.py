@@ -31,6 +31,15 @@ class CpuConfig(BaseModel):
     batch_size: int = 128
     use_mlock: bool = True
 
+class LlmCloudConfig(BaseModel):
+    model: str = "ollama/qwen2.5:1.5b"
+    api_key: str = ""
+    api_base: str = "http://127.0.0.1:11434"
+    api_version: str = ""
+    organization: str = ""
+    timeout_seconds: int = 120
+    max_retries: int = 1
+
 class GladosAreaBehavior(BaseModel):
     sarcasm_level: float = 0.5
     formality: float = 0.8
@@ -51,6 +60,7 @@ class GladosPersonalityConfig(BaseModel):
     response: GladosResponseConfig = GladosResponseConfig()
 
 class LlmConfig(BaseModel):
+    backend: Literal["local", "cloud"] = "local"
     model_name: str = "Mistral-7B-GGUF-Q4K"
     model_path: str = "data/models/mistral-7b-GGUF-Q4K.gguf"
     models_dir: str = "data/models"
@@ -65,7 +75,9 @@ class LlmConfig(BaseModel):
     top_p: float = 0.9
     repeat_penalty: float = 1.12
     max_tokens: int = 384
+    use_semantic_search: bool = True
     cpu: CpuConfig = CpuConfig()
+    cloud: LlmCloudConfig = LlmCloudConfig()
     glados: GladosPersonalityConfig = GladosPersonalityConfig()
 
 class ObsidianConfig(BaseModel):

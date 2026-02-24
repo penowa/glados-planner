@@ -5,19 +5,20 @@ app:
   log_level: INFO
 paths:
   vault: ~/Documentos/Obsidian/Planner/
-  data_dir: ./data
-  models_dir: ./data/models
-  exports_dir: ./data/exports
-  cache_dir: ./data/cache
+  data_dir: /home/penowa/Glados/data
+  models_dir: /home/penowa/Glados/data/models
+  exports_dir: /home/penowa/Glados/data/exports
+  cache_dir: /home/penowa/Glados/data/cache
 database:
-  url: sqlite:///data/database/philosophy.db
+  url: sqlite:////home/penowa/Glados/data/database/philosophy.db
   echo: false
 llm:
-  model_name: Qwen3-4B-UD-Q4_K_XL.gguf
-  model_path: /home/penowa/Glados/data/models/Qwen3-4B-UD-Q4_K_XL.gguf
-  models_dir: ./data/models
-  n_ctx: 3500
-  n_gpu_layers: 18
+  backend: cloud
+  model_name: Qwen3-1.7B-Q8_0.gguf
+  model_path: /home/penowa/Glados/data/models/Qwen3-1.7B-Q8_0.gguf
+  models_dir: /home/penowa/Glados/data/models
+  n_ctx: 3000
+  n_gpu_layers: 0
   use_gpu: true
   use_cpu: false
   device_mode: gpu_only
@@ -26,11 +27,20 @@ llm:
   temperature: 0.35
   top_p: 0.9
   repeat_penalty: 1.12
-  max_tokens: 1000
+  max_tokens: 256
+  use_semantic_search: true
   cpu:
-    threads: 4
-    batch_size: 128
+    threads: 2
+    batch_size: 80
     use_mlock: true
+  cloud:
+    model: ollama/qwen3.5:cloud
+    api_key: ''
+    api_base: http://127.0.0.1:11434
+    api_version: ''
+    organization: ''
+    timeout_seconds: 180
+    max_retries: 1
   glados:
     user_name: Pindarolas
     glados_name: GLaDOS

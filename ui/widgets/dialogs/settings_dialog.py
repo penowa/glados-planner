@@ -22,6 +22,10 @@ class SettingsDialog(QDialog):
     """Dialog para controle de configurações do sistema."""
 
     settings_saved = pyqtSignal(dict)
+    BACKEND_LABELS = [
+        ("LLM local (GGUF)", "local"),
+        ("LLM em nuvem (LiteLLM)", "cloud"),
+    ]
     DEVICE_MODE_LABELS = [
         ("Automático (recomendado)", "auto"),
         ("Somente CPU (mais compatível)", "cpu_only"),
@@ -34,6 +38,9 @@ class SettingsDialog(QDialog):
         self.settings_path = settings_path
         self.settings_model = Settings.from_yaml(settings_path)
         self.config_manager = ConfigManager.instance()
+        self._llm_form = None
+        self._llm_local_rows = []
+        self._llm_cloud_rows = []
 
         self.setWindowTitle("Configurações do Sistema")
         self.setMinimumSize(760, 560)
@@ -135,7 +142,14 @@ class SettingsDialog(QDialog):
     def _setup_llm_tab(self):
         tab = QWidget()
         form = QFormLayout(tab)
+        self._llm_form = form
+        self._llm_local_rows = []
+        self._llm_cloud_rows = []
 
+        self.llm_backend_combo = QComboBox()
+        for label, value in self.BACKEND_LABELS:
+            self.llm_backend_combo.addItem(label, value)
+        self.llm_backend_combo.currentIndexChanged.connect(self._sync_llm_mode_controls)
         self.llm_user_name_input = QLineEdit()
         self.llm_assistant_name_input = QLineEdit()
         self.llm_model_path_input = QLineEdit()
@@ -161,6 +175,19 @@ class SettingsDialog(QDialog):
         self.llm_top_p_spin.setSingleStep(0.01)
         self.llm_max_tokens_spin = QSpinBox()
         self.llm_max_tokens_spin.setRange(64, 4096)
+        self.llm_cloud_model_input = QLineEdit()
+        self.llm_cloud_model_input.setPlaceholderText("ollama/qwen2.5:1.5b ou openai/gpt-4o-mini")
+        self.llm_cloud_api_base_input = QLineEdit()
+        self.llm_cloud_api_base_input.setPlaceholderText("http://127.0.0.1:11434")
+        self.llm_cloud_api_version_input = QLineEdit()
+        self.llm_cloud_organization_input = QLineEdit()
+        self.llm_cloud_api_key_input = QLineEdit()
+        self.llm_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.llm_cloud_timeout_spin = QSpinBox()
+        self.llm_cloud_timeout_spin.setRange(5, 600)
+        self.llm_cloud_timeout_spin.setSuffix(" s")
+        self.llm_cloud_max_retries_spin = QSpinBox()
+        self.llm_cloud_max_retries_spin.setRange(0, 10)
         llm_help = QLabel(
             "Dica rápida: use 'Automático' e ajuste apenas se souber o que está fazendo."
         )
@@ -185,21 +212,45 @@ class SettingsDialog(QDialog):
         gpu_refresh_btn.clicked.connect(self._refresh_gpu_catalog)
         gpu_layout.addWidget(gpu_refresh_btn)
 
-        form.addRow("Nome do usuário (dashboard):", self.llm_user_name_input)
-        form.addRow("Nome do assistente:", self.llm_assistant_name_input)
-        form.addRow("", llm_help)
-        form.addRow("Modelos encontrados (.gguf):", model_catalog_layout)
-        form.addRow("Arquivo do modelo:", model_path_layout)
-        form.addRow("Como rodar o modelo:", self.llm_device_mode_combo)
-        form.addRow("GPU disponível:", gpu_layout)
-        form.addRow("Tamanho de contexto (n_ctx):", self.llm_n_ctx_spin)
-        form.addRow("Camadas na GPU (n_gpu_layers):", self.llm_n_gpu_layers_spin)
-        form.addRow("Threads de CPU (somente CPU):", self.llm_cpu_threads_spin)
-        form.addRow("Criatividade (temperature):", self.llm_temperature_spin)
-        form.addRow("Foco na resposta (top-p):", self.llm_top_p_spin)
-        form.addRow("Limite de tokens por resposta:", self.llm_max_tokens_spin)
+        cloud_model_layout = QHBoxLayout()
+        cloud_model_layout.addWidget(self.llm_cloud_model_input)
+        self.llm_cloud_ollama_preset_button = QPushButton("Preset Ollama local")
+        self.llm_cloud_ollama_preset_button.clicked.connect(self._apply_ollama_cloud_preset)
+        cloud_model_layout.addWidget(self.llm_cloud_ollama_preset_button)
+
+        self._add_llm_row("Nome do usuário (dashboard):", self.llm_user_name_input)
+        self._add_llm_row("Nome do assistente:", self.llm_assistant_name_input)
+        self._add_llm_row("Backend da LLM:", self.llm_backend_combo)
+        self._add_llm_row("", llm_help)
+        self._add_llm_row("Modelos encontrados (.gguf):", model_catalog_layout, scope="local")
+        self._add_llm_row("Arquivo do modelo:", model_path_layout, scope="local")
+        self._add_llm_row("Como rodar o modelo:", self.llm_device_mode_combo, scope="local")
+        self._add_llm_row("GPU disponível:", gpu_layout, scope="local")
+        self._add_llm_row("Tamanho de contexto (n_ctx):", self.llm_n_ctx_spin, scope="local")
+        self._add_llm_row("Camadas na GPU (n_gpu_layers):", self.llm_n_gpu_layers_spin, scope="local")
+        self._add_llm_row("Threads de CPU (somente CPU):", self.llm_cpu_threads_spin, scope="local")
+        self._add_llm_row("Criatividade (temperature):", self.llm_temperature_spin)
+        self._add_llm_row("Foco na resposta (top-p):", self.llm_top_p_spin)
+        self._add_llm_row("Limite de tokens por resposta:", self.llm_max_tokens_spin)
+        self._add_llm_row("Modelo cloud (LiteLLM):", cloud_model_layout, scope="cloud")
+        self._add_llm_row("API base cloud (opcional):", self.llm_cloud_api_base_input, scope="cloud")
+        self._add_llm_row("API version cloud (opcional):", self.llm_cloud_api_version_input, scope="cloud")
+        self._add_llm_row("Organization cloud (opcional):", self.llm_cloud_organization_input, scope="cloud")
+        self._add_llm_row("API key cloud (opcional):", self.llm_cloud_api_key_input, scope="cloud")
+        self._add_llm_row("Timeout cloud:", self.llm_cloud_timeout_spin, scope="cloud")
+        self._add_llm_row("Tentativas cloud:", self.llm_cloud_max_retries_spin, scope="cloud")
 
         self.tabs.addTab(tab, "LLM")
+
+    def _add_llm_row(self, label: str, field, scope: str = "common"):
+        if self._llm_form is None:
+            return
+        row = self._llm_form.rowCount()
+        self._llm_form.addRow(label, field)
+        if scope == "local":
+            self._llm_local_rows.append(row)
+        elif scope == "cloud":
+            self._llm_cloud_rows.append(row)
 
     def _setup_obsidian_tab(self):
         tab = QWidget()
@@ -279,6 +330,9 @@ class SettingsDialog(QDialog):
         self.cache_dir_input.setText(paths.cache_dir)
 
         self.llm_model_path_input.setText(llm.model_path)
+        backend_value = str(getattr(llm, "backend", "local") or "local")
+        backend_idx = self.llm_backend_combo.findData(backend_value)
+        self.llm_backend_combo.setCurrentIndex(max(0, backend_idx))
         self._set_device_mode(getattr(llm, "device_mode", self._infer_device_mode(llm)))
         self.llm_n_ctx_spin.setValue(llm.n_ctx)
         self.llm_n_gpu_layers_spin.setValue(llm.n_gpu_layers)
@@ -286,6 +340,14 @@ class SettingsDialog(QDialog):
         self.llm_temperature_spin.setValue(llm.temperature)
         self.llm_top_p_spin.setValue(llm.top_p)
         self.llm_max_tokens_spin.setValue(llm.max_tokens)
+        cloud_cfg = getattr(llm, "cloud", None)
+        self.llm_cloud_model_input.setText(str(getattr(cloud_cfg, "model", "ollama/qwen2.5:1.5b") or ""))
+        self.llm_cloud_api_base_input.setText(str(getattr(cloud_cfg, "api_base", "") or ""))
+        self.llm_cloud_api_version_input.setText(str(getattr(cloud_cfg, "api_version", "") or ""))
+        self.llm_cloud_organization_input.setText(str(getattr(cloud_cfg, "organization", "") or ""))
+        self.llm_cloud_api_key_input.setText(str(getattr(cloud_cfg, "api_key", "") or ""))
+        self.llm_cloud_timeout_spin.setValue(int(getattr(cloud_cfg, "timeout_seconds", 120) or 120))
+        self.llm_cloud_max_retries_spin.setValue(int(getattr(cloud_cfg, "max_retries", 1) or 1))
         self.llm_user_name_input.setText(llm.glados.user_name)
         self.llm_assistant_name_input.setText(llm.glados.glados_name)
         self._refresh_model_catalog()
@@ -323,6 +385,7 @@ class SettingsDialog(QDialog):
             self.settings_model.llm.model_name = Path(self.llm_model_path_input.text().strip()).name
             self.settings_model.llm.models_dir = self.models_dir_input.text().strip()
             self.settings_model.llm.model_path = self.llm_model_path_input.text().strip()
+            self.settings_model.llm.backend = str(self.llm_backend_combo.currentData() or "local")
             mode_value = str(self.llm_device_mode_combo.currentData() or "auto")
             self.settings_model.llm.device_mode = mode_value
             self.settings_model.llm.use_gpu, self.settings_model.llm.use_cpu = self._derive_device_flags(mode_value)
@@ -333,6 +396,13 @@ class SettingsDialog(QDialog):
             self.settings_model.llm.temperature = self.llm_temperature_spin.value()
             self.settings_model.llm.top_p = self.llm_top_p_spin.value()
             self.settings_model.llm.max_tokens = self.llm_max_tokens_spin.value()
+            self.settings_model.llm.cloud.model = self.llm_cloud_model_input.text().strip()
+            self.settings_model.llm.cloud.api_base = self.llm_cloud_api_base_input.text().strip()
+            self.settings_model.llm.cloud.api_version = self.llm_cloud_api_version_input.text().strip()
+            self.settings_model.llm.cloud.organization = self.llm_cloud_organization_input.text().strip()
+            self.settings_model.llm.cloud.api_key = self.llm_cloud_api_key_input.text().strip()
+            self.settings_model.llm.cloud.timeout_seconds = self.llm_cloud_timeout_spin.value()
+            self.settings_model.llm.cloud.max_retries = self.llm_cloud_max_retries_spin.value()
             self.settings_model.llm.glados.user_name = self.llm_user_name_input.text().strip()
             self.settings_model.llm.glados.glados_name = self.llm_assistant_name_input.text().strip()
 
@@ -355,7 +425,7 @@ class SettingsDialog(QDialog):
                 self.show_onboarding_check.isChecked()
             )
             self.config_manager.set("ui/onboarding_preference_set", True)
-            self.config_manager.set("ui/onboarding_dialog_version", "tutorial_v2")
+            self.config_manager.set("ui/onboarding_dialog_version", "tutorial_v3")
 
             self.settings_model.save_yaml(self.settings_path)
             updated = reload_settings(self.settings_path)
@@ -363,7 +433,7 @@ class SettingsDialog(QDialog):
             payload["ui"] = {
                 "show_onboarding_dialog": self.show_onboarding_check.isChecked(),
                 "onboarding_preference_set": True,
-                "onboarding_dialog_version": "tutorial_v2",
+                "onboarding_dialog_version": "tutorial_v3",
             }
             self.settings_saved.emit(payload)
             self.accept()
@@ -435,10 +505,46 @@ class SettingsDialog(QDialog):
         self.llm_device_mode_combo.setCurrentIndex(max(0, idx))
         self._sync_llm_mode_controls()
 
+    def _apply_ollama_cloud_preset(self):
+        cloud_idx = self.llm_backend_combo.findData("cloud")
+        if cloud_idx >= 0:
+            self.llm_backend_combo.setCurrentIndex(cloud_idx)
+        self.llm_cloud_model_input.setText("ollama/qwen2.5:1.5b")
+        self.llm_cloud_api_base_input.setText("http://127.0.0.1:11434")
+        self.llm_cloud_api_version_input.clear()
+        self.llm_cloud_organization_input.clear()
+        self.llm_cloud_api_key_input.clear()
+        if self.llm_cloud_timeout_spin.value() < 60:
+            self.llm_cloud_timeout_spin.setValue(120)
+        if self.llm_cloud_max_retries_spin.value() < 1:
+            self.llm_cloud_max_retries_spin.setValue(1)
+        self._sync_llm_mode_controls()
+
     def _sync_llm_mode_controls(self):
+        backend = str(self.llm_backend_combo.currentData() or "local")
         mode = str(self.llm_device_mode_combo.currentData() or "auto")
         cpu_only = mode == "cpu_only"
-        self.llm_cpu_threads_spin.setEnabled(cpu_only)
+        local_enabled = backend == "local"
+        if self._llm_form is not None:
+            for row in self._llm_local_rows:
+                self._llm_form.setRowVisible(row, local_enabled)
+            for row in self._llm_cloud_rows:
+                self._llm_form.setRowVisible(row, not local_enabled)
+        self.llm_model_combo.setEnabled(local_enabled)
+        self.llm_model_path_input.setEnabled(local_enabled)
+        self.llm_n_ctx_spin.setEnabled(local_enabled)
+        self.llm_n_gpu_layers_spin.setEnabled(local_enabled)
+        self.llm_device_mode_combo.setEnabled(local_enabled)
+        self.llm_gpu_combo.setEnabled(local_enabled)
+        self.llm_cpu_threads_spin.setEnabled(local_enabled and cpu_only)
+        self.llm_cloud_model_input.setEnabled(not local_enabled)
+        self.llm_cloud_ollama_preset_button.setEnabled(not local_enabled)
+        self.llm_cloud_api_base_input.setEnabled(not local_enabled)
+        self.llm_cloud_api_version_input.setEnabled(not local_enabled)
+        self.llm_cloud_organization_input.setEnabled(not local_enabled)
+        self.llm_cloud_api_key_input.setEnabled(not local_enabled)
+        self.llm_cloud_timeout_spin.setEnabled(not local_enabled)
+        self.llm_cloud_max_retries_spin.setEnabled(not local_enabled)
 
     @staticmethod
     def _derive_device_flags(mode_value: str) -> tuple[bool, bool]:

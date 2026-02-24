@@ -19,10 +19,10 @@ class LLMBridge:
     def llm(self):
         if self._llm is None:
             try:
-                from src.core.llm.local_llm import LocalLLM
-                self._llm = LocalLLM()
+                from core.llm.backend_router import llm as backend_llm
+                self._llm = backend_llm
             except ImportError as e:
-                logger.error(f"LocalLLM não disponível: {e}")
+                logger.error(f"Backend LLM não disponível: {e}")
                 self._llm = None
         return self._llm
     
@@ -38,12 +38,15 @@ class LLMBridge:
             return "Sistema de LLM não disponível. Por favor, inicialize o backend."
         
         try:
-            return self.llm.generate(
+            result = self.llm.generate(
                 query=question,
                 user_name=user_name,
                 use_semantic=True,
                 context=context
             )
+            if isinstance(result, dict):
+                return str(result.get("text") or result.get("response") or "")
+            return str(result)
         except Exception as e:
             return f"Erro ao consultar LLM: {str(e)}"
     
@@ -97,12 +100,15 @@ class LLMBridge:
             return "Sistema de LLM não disponível."
         
         try:
-            return self.llm.generate(
+            result = self.llm.generate(
                 query=question,
                 user_name=user_name,
                 use_semantic=False,
                 max_tokens=256
             )
+            if isinstance(result, dict):
+                return str(result.get("text") or result.get("response") or "")
+            return str(result)
         except Exception as e:
             return f"Erro ao consultar LLM: {str(e)}"
     
@@ -175,22 +181,24 @@ class LLMBridge:
             "is_fallback": True
         }
     
-    # Atualização do método _format_response no llm_bridge.py
     def _format_response(self, response: Any, question: str) -> Dict[str, Any]:
- 
-    # Se a resposta já tiver estrutura esperada
+        # Se a resposta já tiver estrutura esperada
         if isinstance(response, dict):
+            response_text = (
+                response.get("response")
+                or response.get("text")
+                or str(response)
+            )
             return {
-                "response": response.get("response", str(response)),
+                "response": str(response_text),
                 "sources": response.get("sources", []),
                 "concepts": response.get("concepts", []),
                 "is_fallback": False
             }
     
-    # Se for string, tentar extrair fontes do backend Obsidian
+        # Se for string, tentar extrair fontes do backend Obsidian
         response_text = str(response)
         sources = []
-        concepts = []
     
         try:
             # Tentar buscar fontes relacionadas da pergunta
@@ -203,7 +211,7 @@ class LLMBridge:
                             "score": 0.7,  # Score padrão para busca textual
                             "title": note.get("title", "")
                         })
-        except:
+        except Exception:
             pass
     
         # Extrair conceitos (palavras-chave da pergunta)

@@ -6,10 +6,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QStackedWidget, QSizePolicy, QFrame, QLabel, 
     QPushButton, QToolBar, QStatusBar, QMessageBox,
-    QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox
+    QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox,
+    QToolButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint
-from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QPen
+from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QPen, QResizeEvent
 
 # Sistemas centrais
 from core.communication.event_bus import GlobalEventBus
@@ -113,6 +114,9 @@ class AdHocReadingDialog(QDialog):
 
 class MainWindow(QMainWindow):
     """Janela principal com todos os sistemas integrados"""
+
+    LAYOUT_BREAKPOINT_COMPACT = 1060
+    LAYOUT_BREAKPOINT_MEDIUM = 1320
     
     # Sinais
     theme_changed = pyqtSignal(str)
@@ -147,6 +151,10 @@ class MainWindow(QMainWindow):
         self.views = {}
         self.controllers = {}
         self.widgets = {}
+        self._header_spacing_layout: QHBoxLayout | None = None
+        self._header_actions_layout: QHBoxLayout | None = None
+        self._header_extra_actions_layout: QHBoxLayout | None = None
+        self._compact_action_map: Dict[str, QAction] = {}
         
         # Configurações de UI
         self.animations_enabled = True
@@ -270,9 +278,10 @@ class MainWindow(QMainWindow):
         
         # Carrega o tema atual
         ThemeManager.instance().load_theme(self.current_theme)
+        QTimer.singleShot(0, self._apply_adaptive_layout)
     
     def setup_title_bar(self):
-        """Configura barra de título personalizada - ATUALIZADA COM NOVOS BOTÕES"""
+        """Configura barra superior com hierarquia visual e ações agrupadas."""
         self.title_bar = QWidget()
         self.title_bar.setObjectName("title_bar")
         self.title_bar.setFixedHeight(60)
@@ -280,6 +289,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(self.title_bar)
         layout.setContentsMargins(20, 0, 20, 0)
         layout.setSpacing(15)
+        self._header_spacing_layout = layout
         
         # Logo/título da aplicação
         self.app_logo = QLabel(self._get_view_title("dashboard"))
@@ -302,14 +312,18 @@ class MainWindow(QMainWindow):
         
         # Spacer
         layout.addStretch(1)
+
+        primary_actions = QHBoxLayout()
+        primary_actions.setSpacing(6)
+        self._header_actions_layout = primary_actions
         
         # Sistema de notificações
         self.setup_notification_indicator()
-        layout.addWidget(self.notification_widget)
+        primary_actions.addWidget(self.notification_widget)
         
         # Sistema de performance
         self.setup_performance_indicator()
-        layout.addWidget(self.performance_widget)
+        primary_actions.addWidget(self.performance_widget)
 
         # Acesso rápido à sessão de leitura
         self.session_quick_button = QPushButton("📖")
@@ -317,7 +331,7 @@ class MainWindow(QMainWindow):
         self.session_quick_button.setFixedSize(36, 36)
         self.session_quick_button.setToolTip("Abrir sessão de leitura")
         self.session_quick_button.clicked.connect(self.open_session_quick_access)
-        layout.addWidget(self.session_quick_button)
+        primary_actions.addWidget(self.session_quick_button)
 
         # Acesso à view de contexto (Vault + GLaDOS)
         self.vault_glados_button = QPushButton("🔍")
@@ -325,7 +339,7 @@ class MainWindow(QMainWindow):
         self.vault_glados_button.setFixedSize(36, 36)
         self.vault_glados_button.setToolTip(f"Abrir Vault + {self.custom_assistant_name}")
         self.vault_glados_button.clicked.connect(lambda: self.change_view("vault_glados"))
-        layout.addWidget(self.vault_glados_button)
+        primary_actions.addWidget(self.vault_glados_button)
 
         # Acesso à Agenda
         self.agenda_button = QPushButton("📅")
@@ -333,7 +347,7 @@ class MainWindow(QMainWindow):
         self.agenda_button.setFixedSize(36, 36)
         self.agenda_button.setToolTip("Abrir Agenda")
         self.agenda_button.clicked.connect(lambda: self.change_view("agenda"))
-        layout.addWidget(self.agenda_button)
+        primary_actions.addWidget(self.agenda_button)
 
         # Acesso à Biblioteca
         self.library_button = QPushButton("📚")
@@ -341,11 +355,24 @@ class MainWindow(QMainWindow):
         self.library_button.setFixedSize(36, 36)
         self.library_button.setToolTip("Abrir Biblioteca")
         self.library_button.clicked.connect(lambda: self.change_view("library"))
-        layout.addWidget(self.library_button)
+        primary_actions.addWidget(self.library_button)
+
+        layout.addLayout(primary_actions)
+
+        self.more_actions_button = QToolButton()
+        self.more_actions_button.setObjectName("more_actions_button")
+        self.more_actions_button.setText("⋯")
+        self.more_actions_button.setFixedSize(36, 36)
+        self.more_actions_button.setToolTip("Mais ações")
+        self.more_actions_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._build_compact_actions_menu()
+        self.more_actions_button.setVisible(False)
+        layout.addWidget(self.more_actions_button)
         
         # Controles da janela
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(5)  # Menor espaçamento
+        self._header_extra_actions_layout = controls_layout
         
         # Botão de tema
         self.theme_button = QPushButton(self.get_theme_icon())
@@ -372,6 +399,26 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.quit_button)
         
         layout.addLayout(controls_layout)
+
+    def _build_compact_actions_menu(self):
+        """Menu de disclosure progressivo para layouts compactos."""
+        compact_menu = QMenu(self)
+        actions = [
+            ("Abrir sessão de leitura", self.open_session_quick_access, "session"),
+            (f"Abrir Vault + {self.custom_assistant_name}", lambda: self.change_view("vault_glados"), "vault"),
+            ("Abrir Agenda", lambda: self.change_view("agenda"), "agenda"),
+            ("Abrir Biblioteca", lambda: self.change_view("library"), "library"),
+            ("Revisão semanal", lambda: self.change_view("weekly_review"), "review"),
+            ("Configurações", self.show_settings, "settings"),
+            ("Encerrar aplicação", self.close_application, "quit"),
+        ]
+
+        self._compact_action_map.clear()
+        for text, callback, key in actions:
+            action = compact_menu.addAction(text)
+            action.triggered.connect(callback)
+            self._compact_action_map[key] = action
+        self.more_actions_button.setMenu(compact_menu)
     
     def setup_notification_indicator(self):
         """Configura indicador de notificações"""
@@ -424,13 +471,56 @@ class MainWindow(QMainWindow):
             'memory': QLabel("💾 Memória: --"),
         }
         
-        for indicator in self.status_indicators.values():
-            self.status_bar.addWidget(indicator)
+        self.status_bar.addWidget(self.status_indicators['system'])
+        self.status_bar.addPermanentWidget(self.status_indicators['vault'])
+        self.status_bar.addPermanentWidget(self.status_indicators['llm'])
+        self.status_bar.addPermanentWidget(self.status_indicators['memory'])
         
         # Timer para atualizar status
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.update_status_bar)
         self.status_timer.start(5000)  # 5 segundos
+
+    def _set_widget_visibility(self, widget: QWidget, visible: bool):
+        if widget is not None and widget.isVisible() != visible:
+            widget.setVisible(visible)
+
+    def _apply_adaptive_layout(self):
+        """Aplica layout responsivo para manter clareza em diferentes larguras."""
+        width = self.width()
+        is_compact = width < self.LAYOUT_BREAKPOINT_COMPACT
+        is_medium = self.LAYOUT_BREAKPOINT_COMPACT <= width < self.LAYOUT_BREAKPOINT_MEDIUM
+
+        if self._header_spacing_layout:
+            if is_compact:
+                self._header_spacing_layout.setContentsMargins(10, 0, 10, 0)
+                self._header_spacing_layout.setSpacing(8)
+            elif is_medium:
+                self._header_spacing_layout.setContentsMargins(14, 0, 14, 0)
+                self._header_spacing_layout.setSpacing(10)
+            else:
+                self._header_spacing_layout.setContentsMargins(20, 0, 20, 0)
+                self._header_spacing_layout.setSpacing(15)
+
+        self._set_widget_visibility(self.performance_widget, not is_compact)
+        self._set_widget_visibility(self.session_book_label, self.current_view == "session" and not is_compact)
+        self._set_widget_visibility(self.session_quick_button, not is_compact)
+        self._set_widget_visibility(self.vault_glados_button, not is_compact)
+        self._set_widget_visibility(self.agenda_button, not is_compact)
+        self._set_widget_visibility(self.library_button, not is_compact)
+        self._set_widget_visibility(self.settings_button, not is_compact)
+        self._set_widget_visibility(self.quit_button, not is_compact)
+        self._set_widget_visibility(self.more_actions_button, is_compact)
+
+        if is_compact:
+            self.app_logo.setText(self.custom_assistant_name)
+            self.status_indicators['memory'].setVisible(False)
+        elif is_medium:
+            self.app_logo.setText(self._get_view_title(self.current_view))
+            self.status_indicators['memory'].setVisible(False)
+        else:
+            self.app_logo.setText(self._get_view_title(self.current_view))
+            self.status_indicators['memory'].setVisible(True)
     
     def setup_toolbar(self):
         """Configura toolbar customizada - REMOVIDA"""
@@ -646,6 +736,7 @@ class MainWindow(QMainWindow):
             current_view.on_view_activated()
 
         self._update_session_book_indicator()
+        self._apply_adaptive_layout()
 
     def _update_session_book_indicator(self):
         """Atualiza rótulo discreto com livro atual na view de sessão."""
@@ -666,6 +757,7 @@ class MainWindow(QMainWindow):
 
         self.session_book_label.setText(f"• {book_title}")
         self.session_book_label.setVisible(True)
+        self._apply_adaptive_layout()
 
     def _on_logo_clicked(self, _event):
         """Atalho de navegação: logo sempre retorna ao dashboard."""
@@ -836,6 +928,8 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "vault_glados_button"):
             self.vault_glados_button.setToolTip(f"Abrir Vault + {self.custom_assistant_name}")
+        if hasattr(self, "more_actions_button"):
+            self._build_compact_actions_menu()
 
         if hasattr(self, "app_logo"):
             self.app_logo.setText(self._get_view_title(self.current_view))
@@ -847,6 +941,7 @@ class MainWindow(QMainWindow):
         vault_glados_view = self.views.get("vault_glados") if isinstance(getattr(self, "views", None), dict) else None
         if vault_glados_view and hasattr(vault_glados_view, "update_identity"):
             vault_glados_view.update_identity(self.custom_user_name, self.custom_assistant_name)
+        self._apply_adaptive_layout()
     
     def close_application(self):
         """Fecha a aplicação com confirmação"""
@@ -1940,6 +2035,11 @@ class MainWindow(QMainWindow):
         
         # Aceitar fechamento
         event.accept()
+
+    def resizeEvent(self, event: QResizeEvent):
+        """Recalcula layout quando tamanho da janela muda."""
+        super().resizeEvent(event)
+        self._apply_adaptive_layout()
     
     def has_unsaved_changes(self) -> bool:
         """Verifica se há alterações não salvas"""

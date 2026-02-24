@@ -29,7 +29,7 @@ try:
     from core.modules.obsidian.vault_manager import ObsidianVaultManager
     
     # LLM e Personalidade
-    from core.llm.local_llm import LocalLLM
+    from core.llm.backend_router import llm as backend_llm
     from core.llm.glados.personality.glados_voice import GladosVoice
     
     # Database
@@ -58,6 +58,7 @@ except ImportError as e:
     class LocalLLM:
         def generate(self, query, user_name="Usuário", use_semantic=True):
             return {"text": f"Resposta mock: {query}"}
+    backend_llm = LocalLLM()
 
 class AppEvent(Enum):
     """Eventos da aplicação para sistema pub/sub"""
@@ -157,7 +158,7 @@ class BackendIntegration:
             self._modules['vault'] = ObsidianVaultManager(vault_path)
             
             # 4. LLM com personalidade GLaDOS
-            self._modules['llm'] = LocalLLM()
+            self._modules['llm'] = backend_llm
             
             # 5. Personalidade GLaDOS
             self._modules['glados_voice'] = GladosVoice()

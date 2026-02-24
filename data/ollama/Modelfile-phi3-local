@@ -1,0 +1,5 @@
+FROM /home/penowa/Glados/data/models/Phi-3-Context-Obedient-RAG.Q6_K.gguf
+PARAMETER num_ctx 3000
+PARAMETER temperature 0.35
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.12

@@ -23,7 +23,7 @@ from core.modules.preference_manager import PreferenceManager
 from core.modules.smart_allocator import SmartAllocator
 
 from core.vault.vault_manager import VaultManager
-from core.llm.local_llm import LocalLLM
+from core.llm.backend_router import llm
 
 # =========================
 # App initialization
@@ -51,7 +51,6 @@ agenda_manager = AgendaManager()
 reading_manager = ReadingManager()
 preference_manager = PreferenceManager()
 vault_manager = VaultManager()
-llm = LocalLLM()
 
 # =========================
 # Helpers

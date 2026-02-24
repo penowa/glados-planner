@@ -69,14 +69,15 @@ class LocalLLM:
         try:
             # Configuração de threads por modo:
             # - cpu_only: respeita integralmente o valor configurado pelo usuário.
-            # - gpu_only: limita a 2 threads para reduzir uso de CPU auxiliar.
+            # - gpu_only: mantém CPU auxiliar mínima quando use_cpu=False.
             # - demais modos: mantém teto conservador de 4.
             device_mode = str(getattr(settings.llm, "device_mode", "auto") or "auto").lower()
             requested_threads = max(1, int(getattr(settings.llm.cpu, "threads", 4) or 4))
             if device_mode == "cpu_only":
                 cpu_threads = requested_threads
             elif device_mode == "gpu_only":
-                cpu_threads = min(requested_threads, 2)
+                cpu_enabled = bool(getattr(settings.llm, "use_cpu", True))
+                cpu_threads = max(1, requested_threads) if cpu_enabled else 1
             else:
                 cpu_threads = min(requested_threads, 4)
             force_cpu_only = device_mode == "cpu_only"
@@ -219,6 +220,8 @@ class LocalLLM:
             "Responda no estilo GLaDOS:",
             "[CONSULTA AO CÉREBRO DE GLaDOS",
             "[FIM DA CONSULTA AO CÉREBRO]",
+            "You are a GLaDOS character",
+            "your responses should be concise",
         ):
             if marker in value:
                 before, _after = value.split(marker, 1)
@@ -228,12 +231,29 @@ class LocalLLM:
 
         lines = []
         for line in value.splitlines():
+            normalized = re.sub(r"\s+", " ", line).strip().lower()
+            if normalized.startswith("the provided context does not cover"):
+                continue
+            if normalized.startswith("therefore, it is not possible to answer"):
+                continue
+            if normalized == "o contexto fornecido não cobre este ponto.":
+                continue
             if re.match(r"^\s*\d+\.\s*(Seja útil academicamente|Use tom sarcástico.*|Baseie-se no contexto acima|Seja conciso.*|Assine como GLaDOS)\s*$", line, flags=re.IGNORECASE):
+                continue
+            if re.match(r"^\s*You are a GLaDOS character.*$", line, flags=re.IGNORECASE):
+                continue
+            if re.match(r"^\s*Your responses should be concise.*$", line, flags=re.IGNORECASE):
                 continue
             lines.append(line)
 
         value = "\n".join(lines).strip()
+        value = re.sub(r"\bThe provided context does not cover[^.?!]*[.?!]?", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\bTherefore, it is not possible to answer[^.?!]*[.?!]?", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\bO contexto fornecido não cobre este ponto\.?\b", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\s{2,}", " ", value).strip()
         value = re.sub(r"\n{3,}", "\n\n", value)
+        if not value:
+            return "Não encontrei essa informação nas notas selecionadas."
         return value
 
     def set_generation_params(
@@ -358,9 +378,14 @@ class LocalLLM:
                 self.query_history = self.query_history[-100:]
             
             # Salvar no cache
+            model_label = "Unknown"
+            try:
+                model_label = Path(str(self.model.config.model_path)).name
+            except Exception:
+                pass
             result = {
                 "text": self._sanitize_response_text(response),
-                "model": "TinyLlama-1.1B",
+                "model": model_label,
                 "status": "success",
                 "semantic_context_used": use_semantic and bool(semantic_context),
                 "timestamp": datetime.now().isoformat(),

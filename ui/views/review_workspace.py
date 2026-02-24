@@ -6,26 +6,32 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from PyQt6.QtCore import QPoint, QPointF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt, QTimer, QMimeData, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
+    QDrag,
     QIcon,
     QKeySequence,
+    QMouseEvent,
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QShortcut,
 )
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
+    QGraphicsItem,
     QFrame,
     QGraphicsPathItem,
     QGraphicsRectItem,
@@ -40,10 +46,12 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
     QSpinBox,
+    QApplication,
 )
 
 from core.modules.mindmap_review_module import MindmapReviewModule
@@ -166,6 +174,72 @@ class ReviewQuestionDialog(QDialog):
         self.show_answer_button.setEnabled(False)
 
 
+class CanvasActionDragButton(QPushButton):
+    """Botão que inicia ação por drag-and-drop para o canvas."""
+
+    MIME_TYPE = "application/x-glados-review-canvas-action"
+
+    def __init__(self, action_key: str, parent=None, enable_drag: bool = False):
+        super().__init__(parent)
+        self.action_key = str(action_key or "").strip()
+        self.enable_drag = bool(enable_drag)
+        self._drag_start_pos: Optional[QPoint] = None
+        if self.enable_drag:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if not self.enable_drag:
+            super().mousePressEvent(event)
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            local = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self._drag_start_pos = local
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if not self.enable_drag:
+            super().mouseReleaseEvent(event)
+            return
+        self._drag_start_pos = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if not self.enable_drag:
+            super().mouseMoveEvent(event)
+            return
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if self._drag_start_pos is None:
+            return
+
+        local = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        distance = (local - self._drag_start_pos).manhattanLength()
+        start_distance = max(6, int(QApplication.startDragDistance()))
+        if distance < start_distance:
+            return
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self.MIME_TYPE, self.action_key.encode("utf-8"))
+        mime.setText(self.action_key)
+        drag.setMimeData(mime)
+
+        icon_size = max(22, min(self.width(), self.height()) - 12)
+        pixmap = self.icon().pixmap(icon_size, icon_size)
+        if not pixmap.isNull():
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(icon_size // 2, icon_size // 2))
+
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._drag_start_pos = None
+        drag.exec(Qt.DropAction.CopyAction)
+        event.accept()
+
+
 class MindmapCanvasView(QGraphicsView):
     """View gráfica com zoom por scroll e pan por arrasto."""
 
@@ -180,6 +254,10 @@ class MindmapCanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self._zoom_factor = 1.0
+        self._drop_handler = None
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.viewport().installEventFilter(self)
 
     def wheelEvent(self, event):
         if event.angleDelta().y() > 0:
@@ -205,6 +283,69 @@ class MindmapCanvasView(QGraphicsView):
         hbar.setValue(hbar.value() + int(dx))
         vbar.setValue(vbar.value() + int(dy))
 
+    def set_drop_handler(self, handler):
+        self._drop_handler = handler
+
+    def _supports_drop(self, mime) -> bool:
+        return bool(mime and (mime.hasFormat(CanvasActionDragButton.MIME_TYPE) or mime.hasUrls()))
+
+    def _dispatch_drop(self, event) -> bool:
+        if not callable(self._drop_handler):
+            return False
+
+        scene_pos = self.mapToScene(event.position().toPoint())
+        mime = event.mimeData()
+
+        if mime.hasFormat(CanvasActionDragButton.MIME_TYPE):
+            raw = bytes(mime.data(CanvasActionDragButton.MIME_TYPE)).decode("utf-8", errors="ignore").strip()
+            if raw:
+                self._drop_handler(raw, scene_pos, None)
+                return True
+
+        if mime.hasUrls():
+            for url in mime.urls():
+                if not url.isLocalFile():
+                    continue
+                path = Path(url.toLocalFile())
+                if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}:
+                    continue
+                self._drop_handler("image_from_file", scene_pos, str(path))
+                return True
+
+        return False
+
+    def eventFilter(self, watched, event):
+        if watched is self.viewport():
+            event_type = event.type()
+            if event_type in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                if self._supports_drop(event.mimeData()):
+                    event.acceptProposedAction()
+                    return True
+            elif event_type == QEvent.Type.Drop:
+                if self._dispatch_drop(event):
+                    event.acceptProposedAction()
+                    return True
+        return super().eventFilter(watched, event)
+
+    def dragEnterEvent(self, event):
+        if self._supports_drop(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._supports_drop(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if self._dispatch_drop(event):
+            event.acceptProposedAction()
+            return
+
+        super().dropEvent(event)
+
 
 class MindmapNodeItem(QGraphicsRectItem):
     """Item de card para nós do canvas."""
@@ -216,6 +357,11 @@ class MindmapNodeItem(QGraphicsRectItem):
         on_left_click,
         on_right_click,
         on_position_changed,
+        on_size_changed=None,
+        on_connector_drag_started=None,
+        on_connector_drag_moved=None,
+        on_connector_drag_finished=None,
+        image_path_resolver=None,
     ):
         width = max(120, int(float(node_data.get("width", 220) or 220)))
         height = max(64, int(float(node_data.get("height", 90) or 90)))
@@ -225,6 +371,11 @@ class MindmapNodeItem(QGraphicsRectItem):
         self._on_left_click = on_left_click
         self._on_right_click = on_right_click
         self._on_position_changed = on_position_changed
+        self._on_size_changed = on_size_changed
+        self._on_connector_drag_started = on_connector_drag_started
+        self._on_connector_drag_moved = on_connector_drag_moved
+        self._on_connector_drag_finished = on_connector_drag_finished
+        self._image_path_resolver = image_path_resolver
 
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -246,8 +397,14 @@ class MindmapNodeItem(QGraphicsRectItem):
         self.favorite_badge.setBrush(QColor("#FFE082"))
         self.favorite_badge.setPos(width - 20, 4)
 
+        self._image_pixmap = QPixmap()
         self._hovered = False
         self._press_scene_pos: Optional[QPointF] = None
+        self._resizing = False
+        self._resize_start_scene_pos: Optional[QPointF] = None
+        self._resize_start_width = float(width)
+        self._resize_start_height = float(height)
+        self._connector_drag_side: Optional[str] = None
         self.refresh_style()
 
     def _label_text(self) -> str:
@@ -257,6 +414,14 @@ class MindmapNodeItem(QGraphicsRectItem):
             if file_ref:
                 return Path(file_ref).stem
             return "Arquivo"
+        if node_type == "image":
+            caption = str(self.node_data.get("caption") or "").strip()
+            if caption:
+                return caption
+            image_ref = str(self.node_data.get("image") or "").strip()
+            if image_ref:
+                return Path(image_ref).stem
+            return "Imagem"
         text = str(self.node_data.get("text") or "").strip()
         if not text:
             return str(self.node_data.get("id") or "Nó")
@@ -264,6 +429,92 @@ class MindmapNodeItem(QGraphicsRectItem):
 
     def is_favorite(self) -> bool:
         return bool(self.node_data.get("favorite", False))
+
+    def is_image_card(self) -> bool:
+        return str(self.node_data.get("type") or "").strip().lower() == "image"
+
+    def _min_width(self) -> int:
+        return 190 if self.is_image_card() else 120
+
+    def _min_height(self) -> int:
+        return 140 if self.is_image_card() else 64
+
+    def _connector_centers(self) -> Dict[str, QPointF]:
+        rect = self.rect()
+        return {
+            "left": QPointF(rect.left(), rect.center().y()),
+            "right": QPointF(rect.right(), rect.center().y()),
+            "top": QPointF(rect.center().x(), rect.top()),
+            "bottom": QPointF(rect.center().x(), rect.bottom()),
+        }
+
+    def _connector_side_at(self, pos: QPointF) -> Optional[str]:
+        threshold = 9.0
+        for side, center in self._connector_centers().items():
+            if (center - pos).manhattanLength() <= threshold:
+                return side
+        return None
+
+    def connector_scene_pos(self, side: str) -> QPointF:
+        center = self._connector_centers().get(str(side or "right").strip().lower())
+        if not center:
+            center = self._connector_centers()["right"]
+        return self.mapToScene(center)
+
+    def closest_side_for_scene_pos(self, scene_pos: QPointF) -> str:
+        local = self.mapFromScene(scene_pos)
+        points = self._connector_centers()
+        best_side = "left"
+        best_dist = float("inf")
+        for side, center in points.items():
+            distance = (center - local).manhattanLength()
+            if distance < best_dist:
+                best_dist = distance
+                best_side = side
+        return best_side
+
+    def _is_on_resize_handle(self, pos: QPointF) -> bool:
+        rect = self.rect()
+        handle = 14.0
+        return (
+            pos.x() >= rect.right() - handle
+            and pos.y() >= rect.bottom() - handle
+        )
+
+    def refresh_content(self):
+        width = max(self._min_width(), int(float(self.node_data.get("width", self.rect().width()) or self.rect().width())))
+        height = max(self._min_height(), int(float(self.node_data.get("height", self.rect().height()) or self.rect().height())))
+        self.setRect(0, 0, width, height)
+
+        self.title.setTextWidth(max(40.0, float(width - 16)))
+        self.title.setPlainText(self._label_text())
+        self.favorite_badge.setPos(width - 20, 4)
+
+        if self.is_image_card():
+            caption = str(self.node_data.get("caption") or "").strip()
+            self.title.setVisible(bool(caption))
+            self.title.setPos(8, max(6, height - 28))
+        else:
+            self.title.setVisible(True)
+            self.title.setPos(8, 8)
+
+        self._load_image_pixmap()
+        self.update()
+
+    def _load_image_pixmap(self):
+        self._image_pixmap = QPixmap()
+        if not self.is_image_card() or not callable(self._image_path_resolver):
+            return
+        try:
+            image_path = self._image_path_resolver(self.node_data)
+        except Exception:
+            image_path = None
+        if not image_path:
+            return
+        pixmap = QPixmap(str(image_path))
+        if pixmap.isNull():
+            return
+        self._image_pixmap = pixmap
 
     def refresh_style(self):
         color_id = str(self.node_data.get("color") or "0")
@@ -276,6 +527,7 @@ class MindmapNodeItem(QGraphicsRectItem):
 
         self._brush = fill
         self.favorite_badge.setVisible(self.is_favorite())
+        self.refresh_content()
         self.update()
 
     def mousePressEvent(self, event):
@@ -290,11 +542,67 @@ class MindmapNodeItem(QGraphicsRectItem):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._is_on_resize_handle(event.pos()):
+                self._resizing = True
+                self._resize_start_scene_pos = event.scenePos()
+                self._resize_start_width = float(self.rect().width())
+                self._resize_start_height = float(self.rect().height())
+                self.setSelected(True)
+                event.accept()
+                return
+
+            side = self._connector_side_at(event.pos())
+            if side and callable(self._on_connector_drag_started):
+                self._connector_drag_side = side
+                self.setSelected(True)
+                self._on_connector_drag_started(self, side, event.scenePos())
+                event.accept()
+                return
             self._press_scene_pos = event.scenePos()
         self.setSelected(True)
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event):
+        if self._resizing:
+            if self._resize_start_scene_pos is None:
+                event.accept()
+                return
+            delta_x = float(event.scenePos().x()) - float(self._resize_start_scene_pos.x())
+            delta_y = float(event.scenePos().y()) - float(self._resize_start_scene_pos.y())
+            width = max(self._min_width(), int(self._resize_start_width + delta_x))
+            height = max(self._min_height(), int(self._resize_start_height + delta_y))
+            self.node_data["width"] = int(width)
+            self.node_data["height"] = int(height)
+            self.refresh_content()
+            if callable(self._on_size_changed):
+                self._on_size_changed(self)
+            event.accept()
+            return
+
+        if self._connector_drag_side:
+            if callable(self._on_connector_drag_moved):
+                self._on_connector_drag_moved(event.scenePos())
+            event.accept()
+            return
+
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event):
+        if self._resizing:
+            self._resizing = False
+            self._resize_start_scene_pos = None
+            if callable(self._on_size_changed):
+                self._on_size_changed(self)
+            event.accept()
+            return
+
+        if self._connector_drag_side:
+            if callable(self._on_connector_drag_finished):
+                self._on_connector_drag_finished(event.scenePos())
+            self._connector_drag_side = None
+            event.accept()
+            return
+
         super().mouseReleaseEvent(event)
         if event.button() != Qt.MouseButton.LeftButton:
             return
@@ -317,8 +625,18 @@ class MindmapNodeItem(QGraphicsRectItem):
         self.update()
         super().hoverEnterEvent(event)
 
+    def hoverMoveEvent(self, event):
+        if self._is_on_resize_handle(event.pos()):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif self._connector_side_at(event.pos()):
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().hoverMoveEvent(event)
+
     def hoverLeaveEvent(self, event):
         self._hovered = False
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
         super().hoverLeaveEvent(event)
 
@@ -339,6 +657,38 @@ class MindmapNodeItem(QGraphicsRectItem):
         painter.setPen(pen)
         painter.setBrush(brush_color)
         painter.drawRoundedRect(self.rect(), 10, 10)
+
+        if self.is_image_card() and not self._image_pixmap.isNull():
+            image_rect = self.rect().adjusted(8, 8, -8, -8)
+            if self.title.isVisible():
+                image_rect.setBottom(image_rect.bottom() - 28)
+            if image_rect.width() > 8 and image_rect.height() > 8:
+                scaled = self._image_pixmap.scaled(
+                    int(image_rect.width()),
+                    int(image_rect.height()),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                x = image_rect.left() + (image_rect.width() - scaled.width()) / 2.0
+                y = image_rect.top() + (image_rect.height() - scaled.height()) / 2.0
+                painter.drawPixmap(int(x), int(y), scaled)
+
+        if self._hovered or self.isSelected():
+            painter.setPen(QPen(QColor("#697388"), 1.0))
+            painter.setBrush(QColor("#E6ECF9"))
+            for center in self._connector_centers().values():
+                painter.drawEllipse(center, 3.6, 3.6)
+
+            rect = self.rect()
+            painter.setPen(QPen(QColor("#D7DEED"), 1.2))
+            painter.drawLine(
+                QPointF(rect.right() - 11, rect.bottom() - 4),
+                QPointF(rect.right() - 4, rect.bottom() - 11),
+            )
+            painter.drawLine(
+                QPointF(rect.right() - 8, rect.bottom() - 4),
+                QPointF(rect.right() - 4, rect.bottom() - 8),
+            )
         painter.restore()
 
 
@@ -443,6 +793,12 @@ class ReviewWorkspaceView(QWidget):
         self._edge_items: list[MindmapEdgeItem] = []
         self._edges_by_node: Dict[str, list[MindmapEdgeItem]] = {}
         self._opened_node_id: str = ""
+        self._edge_drag_source_item: Optional[MindmapNodeItem] = None
+        self._edge_drag_source_side: str = "right"
+        self._edge_drag_preview: Optional[QGraphicsPathItem] = None
+        self._editing_card_node_id: str = ""
+        self._editing_card_mode: str = "text"
+        self._isolated_spawn_index: int = 0
 
         self._fullscreen_active = False
         self._window_was_maximized = False
@@ -593,6 +949,52 @@ class ReviewWorkspaceView(QWidget):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(4)
 
+        self.editor_mode_label = QLabel("Editor")
+        self.editor_mode_label.setStyleSheet("font-weight: 700;")
+
+        self.editor_stack = QStackedWidget()
+
+        self.card_editor_page = QWidget()
+        card_layout = QVBoxLayout(self.card_editor_page)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(4)
+
+        self.card_title_input = QLineEdit()
+        self.card_title_input.setPlaceholderText("Título do card")
+
+        self.card_body_label = QLabel("Conteúdo")
+        self.card_body_editor = QTextEdit()
+        self.card_body_editor.setPlaceholderText("Escreva o conteúdo do card...")
+        self.card_body_editor.setStyleSheet(
+            "background-color: #11161F; border: 1px solid #2C3648; border-radius: 6px;"
+        )
+
+        self.card_image_row = QWidget()
+        image_row_layout = QHBoxLayout(self.card_image_row)
+        image_row_layout.setContentsMargins(0, 0, 0, 0)
+        image_row_layout.setSpacing(6)
+        self.card_image_path_input = QLineEdit()
+        self.card_image_path_input.setPlaceholderText("Imagem do card")
+        self.card_pick_image_button = QPushButton("Selecionar")
+        image_row_layout.addWidget(self.card_image_path_input, 1)
+        image_row_layout.addWidget(self.card_pick_image_button)
+
+        self.card_save_button = QPushButton("Salvar card")
+        self.card_feedback_label = QLabel("")
+        self.card_feedback_label.setStyleSheet("color: #8FBF7F;")
+
+        card_layout.addWidget(self.card_title_input)
+        card_layout.addWidget(self.card_body_label)
+        card_layout.addWidget(self.card_body_editor, 1)
+        card_layout.addWidget(self.card_image_row)
+        card_layout.addWidget(self.card_save_button)
+        card_layout.addWidget(self.card_feedback_label)
+
+        self.note_editor_page = QWidget()
+        note_layout = QVBoxLayout(self.note_editor_page)
+        note_layout.setContentsMargins(0, 0, 0, 0)
+        note_layout.setSpacing(4)
+
         self.new_note_title_input = QLineEdit()
         self.new_note_title_input.setPlaceholderText("Título da nota")
         self.new_note_editor = QTextEdit()
@@ -604,11 +1006,18 @@ class ReviewWorkspaceView(QWidget):
         self.save_note_feedback = QLabel("")
         self.save_note_feedback.setStyleSheet("color: #8FBF7F;")
 
-        editor_layout.addWidget(QLabel("Nova anotação"))
-        editor_layout.addWidget(self.new_note_title_input)
-        editor_layout.addWidget(self.new_note_editor, 1)
-        editor_layout.addWidget(self.save_note_button)
-        editor_layout.addWidget(self.save_note_feedback)
+        note_layout.addWidget(QLabel("Nova anotação"))
+        note_layout.addWidget(self.new_note_title_input)
+        note_layout.addWidget(self.new_note_editor, 1)
+        note_layout.addWidget(self.save_note_button)
+        note_layout.addWidget(self.save_note_feedback)
+
+        self.editor_stack.addWidget(self.card_editor_page)
+        self.editor_stack.addWidget(self.note_editor_page)
+        self.editor_stack.setCurrentWidget(self.note_editor_page)
+
+        editor_layout.addWidget(self.editor_mode_label)
+        editor_layout.addWidget(self.editor_stack, 1)
 
         self.side_splitter.addWidget(viewer_container)
         self.side_splitter.addWidget(editor_container)
@@ -625,6 +1034,49 @@ class ReviewWorkspaceView(QWidget):
 
         root.addWidget(self.main_splitter, 1)
 
+        self.bottom_actions_bar = QWidget()
+        bottom_layout = QHBoxLayout(self.bottom_actions_bar)
+        bottom_layout.setContentsMargins(0, 4, 0, 10)
+        bottom_layout.setSpacing(0)
+        bottom_layout.addStretch(1)
+
+        dock = QWidget()
+        dock_layout = QHBoxLayout(dock)
+        dock_layout.setContentsMargins(0, 0, 0, 0)
+        dock_layout.setSpacing(10)
+
+        self.add_text_card_button = CanvasActionDragButton("add_text_card", self, enable_drag=False)
+        self.add_text_card_button.setToolTip("Criar novo card")
+        self.add_text_card_button.setFixedSize(46, 46)
+        self.add_text_card_button.setIcon(self._build_plus_icon())
+        self.add_text_card_button.setIconSize(QSize(22, 22))
+        self.add_text_card_button.setStyleSheet(
+            "QPushButton {"
+            "background-color: #1B202C; border: 1px solid #596276; border-radius: 8px;"
+            "}"
+            "QPushButton:hover { background-color: #242B39; border-color: #8995AB; }"
+            "QPushButton:pressed { background-color: #151A24; }"
+        )
+
+        self.add_image_card_button = CanvasActionDragButton("add_image_card", self, enable_drag=False)
+        self.add_image_card_button.setToolTip("Criar card de imagem")
+        self.add_image_card_button.setFixedSize(46, 46)
+        self.add_image_card_button.setIcon(self._build_image_icon())
+        self.add_image_card_button.setIconSize(QSize(22, 22))
+        self.add_image_card_button.setStyleSheet(
+            "QPushButton {"
+            "background-color: #1B202C; border: 1px solid #596276; border-radius: 8px;"
+            "}"
+            "QPushButton:hover { background-color: #242B39; border-color: #8995AB; }"
+            "QPushButton:pressed { background-color: #151A24; }"
+        )
+
+        dock_layout.addWidget(self.add_text_card_button)
+        dock_layout.addWidget(self.add_image_card_button)
+        bottom_layout.addWidget(dock)
+        bottom_layout.addStretch(1)
+        root.addWidget(self.bottom_actions_bar, 0)
+
         self.shortcut_escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self.shortcut_escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
@@ -633,6 +1085,7 @@ class ReviewWorkspaceView(QWidget):
         self.shortcut_up = QShortcut(QKeySequence(Qt.Key.Key_Up), self.canvas_view)
         self.shortcut_down = QShortcut(QKeySequence(Qt.Key.Key_Down), self.canvas_view)
 
+        self._activate_note_editor()
         self._set_editor_visible(False)
         self._close_side_panel()
 
@@ -641,16 +1094,45 @@ class ReviewWorkspaceView(QWidget):
         self.zoom_in_button.clicked.connect(lambda: self.canvas_view.zoom_by(1.12))
         self.zoom_out_button.clicked.connect(lambda: self.canvas_view.zoom_by(0.88))
         self.zoom_reset_button.clicked.connect(self.canvas_view.reset_zoom)
+        self.add_text_card_button.clicked.connect(self._create_text_card_isolated)
+        self.add_image_card_button.clicked.connect(self._create_image_card_isolated)
 
         self.capture_selection_button.clicked.connect(lambda: self._capture_selection_to_note(show_empty_feedback=True))
         self.note_viewer.customContextMenuRequested.connect(self._on_note_viewer_context_menu)
         self.save_note_button.clicked.connect(self._save_user_note)
+        self.card_save_button.clicked.connect(self._save_active_card)
+        self.card_pick_image_button.clicked.connect(self._pick_image_for_editor)
         self.shortcut_escape.activated.connect(self._on_escape_pressed)
 
         self.shortcut_left.activated.connect(lambda: self.canvas_view.pan_by(-self._question_pan_step, 0))
         self.shortcut_right.activated.connect(lambda: self.canvas_view.pan_by(self._question_pan_step, 0))
         self.shortcut_up.activated.connect(lambda: self.canvas_view.pan_by(0, -self._question_pan_step))
         self.shortcut_down.activated.connect(lambda: self.canvas_view.pan_by(0, self._question_pan_step))
+
+    def _build_plus_icon(self) -> QIcon:
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor("#E8EEF9"), 2.2))
+        painter.drawLine(12, 5, 12, 19)
+        painter.drawLine(5, 12, 19, 12)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _build_image_icon(self) -> QIcon:
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor("#E8EEF9"), 1.8))
+        painter.drawRoundedRect(4, 6, 16, 12, 2, 2)
+        painter.drawEllipse(7, 8, 3, 3)
+        painter.drawLine(6, 16, 11, 12)
+        painter.drawLine(11, 12, 15, 15)
+        painter.drawLine(15, 15, 18, 12)
+        painter.end()
+        return QIcon(pixmap)
 
     def _load_review_settings(self):
         try:
@@ -805,12 +1287,18 @@ class ReviewWorkspaceView(QWidget):
 
         self.current_canvas_payload = self.mindmap_module.load_canvas_payload(self.current_canvas_path)
         self._render_canvas(self.current_canvas_payload)
+        self._isolated_spawn_index = 0
         self._opened_node_id = ""
         self.current_source_note_path = None
         self.viewer_title_label.setText("Conteúdo do card")
         self.note_viewer.clear()
         self.new_note_title_input.clear()
         self.new_note_editor.clear()
+        self.card_title_input.clear()
+        self.card_body_editor.clear()
+        self.card_image_path_input.clear()
+        self.card_feedback_label.clear()
+        self._activate_note_editor()
         self._set_editor_visible(False)
         self._close_side_panel()
 
@@ -823,6 +1311,28 @@ class ReviewWorkspaceView(QWidget):
         if source_event:
             logger.debug("Review workspace aberto com payload: %s", source_event)
         return True
+
+    def _next_isolated_spawn_point(self, card_width: int, card_height: int) -> QPointF:
+        """Retorna posição de criação em coluna isolada à direita do mapa atual."""
+        if self._node_items:
+            right_edge = max(
+                float(item.pos().x()) + float(item.rect().width())
+                for item in self._node_items.values()
+            )
+            top_edge = min(float(item.pos().y()) for item in self._node_items.values())
+            base_x = right_edge + 240.0
+            base_y = top_edge - 10.0
+        else:
+            base_x = 380.0
+            base_y = -120.0
+
+        row = self._isolated_spawn_index % 6
+        col = self._isolated_spawn_index // 6
+        self._isolated_spawn_index += 1
+
+        x = base_x + (col * (card_width + 42.0))
+        y = base_y + (row * (card_height + 30.0))
+        return QPointF(x, y)
 
     def _color_for_id(self, color_id: str) -> QColor:
         raw = str(color_id or "").strip()
@@ -865,6 +1375,8 @@ class ReviewWorkspaceView(QWidget):
         node_type = str(node.get("type") or "").strip().lower()
         if node_type == "text":
             return "4"
+        if node_type == "image":
+            return "6"
 
         file_ref = self._normalize_token(str(node.get("file") or ""))
         node_id = self._normalize_token(str(node.get("id") or ""))
@@ -889,6 +1401,137 @@ class ReviewWorkspaceView(QWidget):
         self._update_scene_bounds()
         self.persist_move_timer.start()
 
+    def _on_node_size_changed(self, item: MindmapNodeItem):
+        node_id = str(item.node_data.get("id") or "").strip()
+        if not node_id:
+            return
+        item.node_data["width"] = int(item.rect().width())
+        item.node_data["height"] = int(item.rect().height())
+        self._update_edges_for_node(node_id)
+        self._update_scene_bounds()
+        self.persist_move_timer.start()
+
+    def _on_connector_drag_started(self, item: MindmapNodeItem, side: str, scene_pos: QPointF):
+        self._edge_drag_source_item = item
+        self._edge_drag_source_side = str(side or "right").strip().lower()
+
+        if self._edge_drag_preview is None:
+            self._edge_drag_preview = QGraphicsPathItem()
+            self._edge_drag_preview.setPen(QPen(QColor("#A5B1C8"), 1.4, Qt.PenStyle.DashLine))
+            self._edge_drag_preview.setZValue(3)
+            self.scene.addItem(self._edge_drag_preview)
+        self._update_edge_drag_preview(scene_pos)
+
+    def _on_connector_drag_moved(self, scene_pos: QPointF):
+        self._update_edge_drag_preview(scene_pos)
+
+    def _on_connector_drag_finished(self, scene_pos: QPointF):
+        try:
+            self._finalize_edge_drag(scene_pos)
+        finally:
+            self._clear_edge_drag_preview()
+            self._edge_drag_source_item = None
+            self._edge_drag_source_side = "right"
+
+    def _update_edge_drag_preview(self, scene_pos: QPointF):
+        source = self._edge_drag_source_item
+        if not source or self._edge_drag_preview is None:
+            return
+
+        start = source.connector_scene_pos(self._edge_drag_source_side)
+        end = QPointF(scene_pos)
+        horizontal_delta = abs(end.x() - start.x())
+        control_dx = max(54.0, horizontal_delta * 0.42)
+        if end.x() >= start.x():
+            c1 = QPointF(start.x() + control_dx, start.y())
+            c2 = QPointF(end.x() - control_dx, end.y())
+        else:
+            c1 = QPointF(start.x() - control_dx, start.y())
+            c2 = QPointF(end.x() + control_dx, end.y())
+
+        path = QPainterPath(start)
+        path.cubicTo(c1, c2, end)
+        self._edge_drag_preview.setPath(path)
+
+    def _clear_edge_drag_preview(self):
+        if self._edge_drag_preview is None:
+            return
+        try:
+            self.scene.removeItem(self._edge_drag_preview)
+        except Exception:
+            pass
+        self._edge_drag_preview = None
+
+    def _find_node_item_at(self, scene_pos: QPointF) -> Optional[MindmapNodeItem]:
+        for obj in self.scene.items(scene_pos):
+            item: Optional[QGraphicsItem] = obj
+            while item is not None:
+                if isinstance(item, MindmapNodeItem):
+                    return item
+                item = item.parentItem()
+        return None
+
+    def _finalize_edge_drag(self, scene_pos: QPointF):
+        source = self._edge_drag_source_item
+        if source is None:
+            return
+
+        target = self._find_node_item_at(scene_pos)
+        if target is None or target is source:
+            return
+
+        from_id = str(source.node_data.get("id") or "").strip()
+        to_id = str(target.node_data.get("id") or "").strip()
+        if not from_id or not to_id:
+            return
+
+        to_side = target.closest_side_for_scene_pos(scene_pos)
+        from_side = str(self._edge_drag_source_side or "right")
+
+        edges = self.current_canvas_payload.get("edges")
+        if not isinstance(edges, list):
+            edges = []
+            self.current_canvas_payload["edges"] = edges
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if str(edge.get("fromNode") or "").strip() != from_id:
+                continue
+            if str(edge.get("toNode") or "").strip() != to_id:
+                continue
+            if str(edge.get("fromSide") or "right").strip().lower() != from_side:
+                continue
+            if str(edge.get("toSide") or "left").strip().lower() != to_side:
+                continue
+            return
+
+        edge_payload = {
+            "id": self._generate_unique_edge_id(),
+            "fromNode": from_id,
+            "toNode": to_id,
+            "fromSide": from_side,
+            "toSide": to_side,
+            "color": str(source.node_data.get("color") or "6"),
+        }
+        edges.append(edge_payload)
+
+        edge_item = MindmapEdgeItem(
+            from_item=source,
+            to_item=target,
+            color=self._edge_color_for_id(str(edge_payload.get("color") or "")),
+            from_side=from_side,
+            to_side=to_side,
+            label="",
+        )
+        self.scene.addItem(edge_item)
+        self._edge_items.append(edge_item)
+        self._edges_by_node.setdefault(from_id, []).append(edge_item)
+        self._edges_by_node.setdefault(to_id, []).append(edge_item)
+
+        self._persist_canvas_payload()
+        self.status_label.setText("Conexão criada")
+
     def _update_edges_for_node(self, node_id: str):
         for edge_item in self._edges_by_node.get(str(node_id or "").strip(), []):
             edge_item.update_path()
@@ -901,11 +1544,13 @@ class ReviewWorkspaceView(QWidget):
         margin = 220
         self.scene.setSceneRect(bounds.adjusted(-margin, -margin, margin, margin))
 
-    def _render_canvas(self, payload: Dict[str, Any]):
+    def _render_canvas(self, payload: Dict[str, Any], reset_zoom: bool = True):
         self.scene.clear()
         self._node_items.clear()
         self._edge_items.clear()
         self._edges_by_node.clear()
+        self._clear_edge_drag_preview()
+        self._edge_drag_source_item = None
         applied_default_colors = False
 
         nodes = payload.get("nodes") if isinstance(payload.get("nodes"), list) else []
@@ -927,6 +1572,11 @@ class ReviewWorkspaceView(QWidget):
                 on_left_click=self._on_node_left_click,
                 on_right_click=self._on_node_right_click,
                 on_position_changed=self._on_node_position_changed,
+                on_size_changed=self._on_node_size_changed,
+                on_connector_drag_started=self._on_connector_drag_started,
+                on_connector_drag_moved=self._on_connector_drag_moved,
+                on_connector_drag_finished=self._on_connector_drag_finished,
+                image_path_resolver=self._resolve_image_path_for_node,
             )
             self.scene.addItem(item)
             self._node_items[node_id] = item
@@ -957,7 +1607,8 @@ class ReviewWorkspaceView(QWidget):
             self._edges_by_node.setdefault(to_id, []).append(edge_item)
 
         self._update_scene_bounds()
-        self.canvas_view.reset_zoom()
+        if reset_zoom:
+            self.canvas_view.reset_zoom()
         if applied_default_colors:
             self._persist_canvas_payload()
 
@@ -993,6 +1644,223 @@ class ReviewWorkspaceView(QWidget):
 
         return None
 
+    def _resolve_image_path_for_node(self, node: Dict[str, Any]) -> Optional[Path]:
+        image_ref = str(node.get("image") or "").strip().replace("\\", "/")
+        if not image_ref:
+            return None
+
+        candidate = Path(image_ref)
+        if candidate.is_absolute() and candidate.exists():
+            return candidate
+
+        vault_root = self._vault_root()
+        if not vault_root:
+            return None
+        resolved = vault_root / image_ref
+        if resolved.exists():
+            return resolved
+        return None
+
+    def _normalize_vault_reference(self, path: Path) -> str:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return str(path).replace("\\", "/")
+        try:
+            relative = path.relative_to(vault_root)
+            return str(relative).replace("\\", "/")
+        except Exception:
+            return str(path).replace("\\", "/")
+
+    def _generate_unique_node_id(self, prefix: str = "node-card") -> str:
+        nodes = self.current_canvas_payload.get("nodes")
+        if not isinstance(nodes, list):
+            nodes = []
+            self.current_canvas_payload["nodes"] = nodes
+        existing = {
+            str(node.get("id") or "").strip()
+            for node in nodes
+            if isinstance(node, dict)
+        }
+        if prefix not in existing:
+            return prefix
+        index = 2
+        while True:
+            candidate = f"{prefix}-{index}"
+            if candidate not in existing:
+                return candidate
+            index += 1
+
+    def _generate_unique_edge_id(self, prefix: str = "edge") -> str:
+        edges = self.current_canvas_payload.get("edges")
+        if not isinstance(edges, list):
+            edges = []
+            self.current_canvas_payload["edges"] = edges
+        existing = {
+            str(edge.get("id") or "").strip()
+            for edge in edges
+            if isinstance(edge, dict)
+        }
+        if prefix not in existing:
+            return prefix
+        index = 2
+        while True:
+            candidate = f"{prefix}-{index}"
+            if candidate not in existing:
+                return candidate
+            index += 1
+
+    def _review_assets_dir(self) -> Optional[Path]:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return None
+        assets = vault_root / self.REVIEW_DIR / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        return assets
+
+    def _import_image_to_assets(self, source_path: Path) -> Optional[str]:
+        source = Path(source_path)
+        if not source.exists() or not source.is_file():
+            return None
+
+        vault_root = self._vault_root()
+        if vault_root:
+            try:
+                return str(source.relative_to(vault_root)).replace("\\", "/")
+            except Exception:
+                pass
+
+        assets_dir = self._review_assets_dir()
+        if not assets_dir:
+            return None
+
+        stem = self._sanitize_filename(source.stem)
+        suffix = source.suffix.lower() or ".png"
+        target = assets_dir / f"{stem}{suffix}"
+        index = 2
+        while target.exists():
+            target = assets_dir / f"{stem}-{index}{suffix}"
+            index += 1
+
+        try:
+            shutil.copy2(source, target)
+        except Exception:
+            return None
+        return self._normalize_vault_reference(target)
+
+    def _add_node_to_canvas(self, node_data: Dict[str, Any]) -> Optional[MindmapNodeItem]:
+        nodes = self.current_canvas_payload.get("nodes")
+        if not isinstance(nodes, list):
+            nodes = []
+            self.current_canvas_payload["nodes"] = nodes
+        nodes.append(node_data)
+
+        item = MindmapNodeItem(
+            node_data=node_data,
+            color_lookup=self._color_for_id,
+            on_left_click=self._on_node_left_click,
+            on_right_click=self._on_node_right_click,
+            on_position_changed=self._on_node_position_changed,
+            on_size_changed=self._on_node_size_changed,
+            on_connector_drag_started=self._on_connector_drag_started,
+            on_connector_drag_moved=self._on_connector_drag_moved,
+            on_connector_drag_finished=self._on_connector_drag_finished,
+            image_path_resolver=self._resolve_image_path_for_node,
+        )
+        self.scene.addItem(item)
+        node_id = str(node_data.get("id") or "").strip()
+        if node_id:
+            self._node_items[node_id] = item
+
+        self._update_scene_bounds()
+        self._persist_canvas_payload()
+        return item
+
+    def _handle_canvas_drop_action(self, action_key: str, scene_pos: QPointF, payload: Optional[str]):
+        if not self.current_canvas_path:
+            self.status_label.setText("Abra uma revisão antes de criar cards")
+            return
+
+        action = str(action_key or "").strip().lower()
+        if action == "add_text_card":
+            self._create_text_card_at(scene_pos)
+            return
+        if action == "add_image_card":
+            self._create_image_card_at(scene_pos, None)
+            return
+        if action == "image_from_file":
+            self._create_image_card_at(scene_pos, payload)
+
+    def _create_text_card_isolated(self):
+        self._create_text_card_at(None)
+
+    def _create_image_card_isolated(self):
+        self._create_image_card_at(None, None)
+
+    def _create_text_card_at(self, scene_pos: Optional[QPointF] = None):
+        card_w = 220
+        card_h = 112
+        target = scene_pos if scene_pos is not None else self._next_isolated_spawn_point(card_w, card_h)
+        node_id = self._generate_unique_node_id("node-card")
+        node_data: Dict[str, Any] = {
+            "id": node_id,
+            "type": "text",
+            "text": "Novo card",
+            "x": round(float(target.x()), 2),
+            "y": round(float(target.y()), 2),
+            "width": card_w,
+            "height": card_h,
+            "color": "6",
+        }
+
+        item = self._add_node_to_canvas(node_data)
+        if not item:
+            return
+        self._open_card_editor_for_item(item, mode="text")
+        self.status_label.setText("Novo card criado")
+
+    def _create_image_card_at(self, scene_pos: Optional[QPointF], source_path: Optional[str]):
+        image_ref = ""
+        if source_path:
+            imported = self._import_image_to_assets(Path(source_path))
+            image_ref = imported or ""
+
+        if not image_ref:
+            selected, _ = QFileDialog.getOpenFileName(
+                self,
+                "Selecionar imagem",
+                "",
+                "Imagens (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;Todos os arquivos (*)",
+            )
+            if not selected:
+                return
+            imported = self._import_image_to_assets(Path(selected))
+            if not imported:
+                QMessageBox.warning(self, "Imagem", "Não foi possível importar a imagem.")
+                return
+            image_ref = imported
+
+        card_w = 280
+        card_h = 180
+        target = scene_pos if scene_pos is not None else self._next_isolated_spawn_point(card_w, card_h)
+        node_id = self._generate_unique_node_id("node-image")
+        node_data: Dict[str, Any] = {
+            "id": node_id,
+            "type": "image",
+            "image": image_ref,
+            "caption": "",
+            "x": round(float(target.x()), 2),
+            "y": round(float(target.y()), 2),
+            "width": card_w,
+            "height": card_h,
+            "color": "6",
+        }
+
+        item = self._add_node_to_canvas(node_data)
+        if not item:
+            return
+        self._open_card_editor_for_item(item, mode="image")
+        self.status_label.setText("Card de imagem criado")
+
     def _is_side_panel_visible(self) -> bool:
         sizes = self.main_splitter.sizes()
         return len(sizes) >= 2 and int(sizes[1]) > 32
@@ -1013,6 +1881,7 @@ class ReviewWorkspaceView(QWidget):
             total = max(int(self.width()), 1200)
         self.main_splitter.setSizes([total, 0])
         self._set_editor_visible(False)
+        self._editing_card_node_id = ""
 
     def _set_editor_visible(self, visible: bool):
         total = sum(int(s) for s in self.side_splitter.sizes())
@@ -1023,6 +1892,129 @@ class ReviewWorkspaceView(QWidget):
             self.side_splitter.setSizes([top, total - top])
         else:
             self.side_splitter.setSizes([total, 0])
+
+    def _activate_note_editor(self):
+        self.editor_mode_label.setText("Nova anotação")
+        self.editor_stack.setCurrentWidget(self.note_editor_page)
+        self._editing_card_node_id = ""
+
+    def _activate_card_editor(self, mode: str):
+        normalized = str(mode or "text").strip().lower()
+        self._editing_card_mode = "image" if normalized == "image" else "text"
+        self.editor_mode_label.setText("Editor de card")
+        self.editor_stack.setCurrentWidget(self.card_editor_page)
+
+        is_image = self._editing_card_mode == "image"
+        self.card_body_label.setVisible(not is_image)
+        self.card_body_editor.setVisible(not is_image)
+        self.card_image_row.setVisible(is_image)
+
+        if is_image:
+            self.card_title_input.setPlaceholderText("Legenda (opcional)")
+            self.card_save_button.setText("Salvar card de imagem")
+        else:
+            self.card_title_input.setPlaceholderText("Título do card")
+            self.card_save_button.setText("Salvar card")
+        self.card_feedback_label.clear()
+
+    def _pick_image_for_editor(self):
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar imagem",
+            "",
+            "Imagens (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;Todos os arquivos (*)",
+        )
+        if not selected:
+            return
+        imported = self._import_image_to_assets(Path(selected))
+        if not imported:
+            QMessageBox.warning(self, "Imagem", "Não foi possível importar a imagem.")
+            return
+        self.card_image_path_input.setText(imported)
+
+    def _open_card_editor_for_item(self, item: MindmapNodeItem, mode: Optional[str] = None):
+        node = item.node_data
+        node_id = str(node.get("id") or "").strip()
+        if not node_id:
+            return
+
+        node_type = str(mode or node.get("type") or "text").strip().lower()
+        self._editing_card_node_id = node_id
+        self._activate_card_editor(node_type)
+        self._open_side_panel()
+        self._set_editor_visible(True)
+        self._opened_node_id = node_id
+
+        if self._editing_card_mode == "image":
+            self.card_title_input.setText(str(node.get("caption") or "").strip())
+            self.card_image_path_input.setText(str(node.get("image") or "").strip())
+            self.card_body_editor.clear()
+            self.card_image_path_input.setFocus()
+        else:
+            full_text = str(node.get("text") or "").strip()
+            title = str(node.get("title") or "").strip()
+            body = full_text
+            if title and full_text.startswith(title):
+                remainder = full_text[len(title):].lstrip("\n")
+                body = remainder
+            self.card_title_input.setText(title)
+            self.card_body_editor.setPlainText(body)
+            self.card_image_path_input.clear()
+            self.card_body_editor.setFocus()
+
+        self.card_feedback_label.setText("Editando card")
+
+    def _save_active_card(self):
+        node_id = str(self._editing_card_node_id or "").strip()
+        if not node_id:
+            QMessageBox.information(self, "Card", "Selecione um card para editar.")
+            return
+
+        item = self._node_items.get(node_id)
+        if not item:
+            return
+
+        if self._editing_card_mode == "image":
+            image_ref = self.card_image_path_input.text().strip()
+            if not image_ref:
+                QMessageBox.information(self, "Imagem", "Selecione uma imagem para o card.")
+                return
+
+            path = Path(image_ref)
+            if path.exists() and path.is_file():
+                imported = self._import_image_to_assets(path)
+                if imported:
+                    image_ref = imported
+
+            item.node_data["type"] = "image"
+            item.node_data["image"] = image_ref
+            item.node_data["caption"] = self.card_title_input.text().strip()
+            item.node_data["width"] = max(240, int(item.rect().width()))
+            item.node_data["height"] = max(160, int(item.rect().height()))
+            item.refresh_style()
+            self.card_feedback_label.setText("Card de imagem atualizado")
+            self.status_label.setText("Card de imagem salvo")
+        else:
+            title = self.card_title_input.text().strip()
+            body = self.card_body_editor.toPlainText().strip()
+            if not title and not body:
+                QMessageBox.information(self, "Card", "Informe título ou conteúdo para o card.")
+                return
+
+            combined = title
+            if body:
+                combined = f"{title}\n{body}".strip() if title else body
+
+            item.node_data["type"] = "text"
+            item.node_data.pop("image", None)
+            item.node_data.pop("caption", None)
+            item.node_data["title"] = title
+            item.node_data["text"] = combined
+            item.refresh_style()
+            self.card_feedback_label.setText("Card atualizado")
+            self.status_label.setText("Card salvo")
+
+        self._persist_canvas_payload()
 
     def _selected_note_text(self) -> str:
         cursor = self.note_viewer.textCursor()
@@ -1079,14 +2071,37 @@ class ReviewWorkspaceView(QWidget):
             self.status_label.setText(f"Card aberto: {file_path.name}")
             return
 
+        if node_type == "image":
+            self.current_source_note_path = None
+            caption = str(node.get("caption") or "").strip()
+            self.viewer_title_label.setText(caption or str(node.get("id") or "Card de imagem"))
+            image_path = self._resolve_image_path_for_node(node)
+            if image_path and image_path.exists():
+                image_uri = image_path.resolve().as_uri()
+                html = (
+                    "<div style='padding: 4px;'>"
+                    f"<img src='{image_uri}' style='max-width: 100%; height: auto;'/>"
+                    "</div>"
+                )
+                self.note_viewer.setHtml(html)
+            else:
+                self.note_viewer.setPlainText("Imagem não encontrada para este card.")
+            self.status_label.setText("Card de imagem aberto")
+            return
+
         text = str(node.get("text") or "").strip() or "Card textual"
         self.current_source_note_path = None
-        self.viewer_title_label.setText(str(node.get("id") or "Card"))
+        label = str(node.get("title") or "").strip() or str(node.get("id") or "Card")
+        self.viewer_title_label.setText(label)
         self.note_viewer.setPlainText(text)
         self.status_label.setText("Card textual aberto")
 
     def _on_node_right_click(self, item: MindmapNodeItem, global_pos):
         menu = QMenu(self)
+
+        edit_action = menu.addAction("Editar card")
+        delete_action = menu.addAction("Excluir card")
+        menu.addSeparator()
 
         color_menu = menu.addMenu("Cor do card")
         actions_by_id: Dict[QAction, str] = {}
@@ -1106,6 +2121,22 @@ class ReviewWorkspaceView(QWidget):
 
         selected = menu.exec(global_pos)
         if not selected:
+            return
+
+        if selected == edit_action:
+            self._open_card_editor_for_item(item)
+            return
+
+        if selected == delete_action:
+            reply = QMessageBox.question(
+                self,
+                "Excluir card",
+                "Deseja excluir este card e suas conexões?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._delete_card_item(item)
             return
 
         if selected in actions_by_id:
@@ -1129,6 +2160,45 @@ class ReviewWorkspaceView(QWidget):
         pixmap.fill(color)
         return QIcon(pixmap)
 
+    def _delete_card_item(self, item: MindmapNodeItem):
+        node_id = str(item.node_data.get("id") or "").strip()
+        if not node_id:
+            return
+
+        nodes = self.current_canvas_payload.get("nodes")
+        if isinstance(nodes, list):
+            self.current_canvas_payload["nodes"] = [
+                node for node in nodes
+                if not (
+                    isinstance(node, dict)
+                    and str(node.get("id") or "").strip() == node_id
+                )
+            ]
+
+        edges = self.current_canvas_payload.get("edges")
+        if isinstance(edges, list):
+            self.current_canvas_payload["edges"] = [
+                edge for edge in edges
+                if not (
+                    isinstance(edge, dict)
+                    and (
+                        str(edge.get("fromNode") or "").strip() == node_id
+                        or str(edge.get("toNode") or "").strip() == node_id
+                    )
+                )
+            ]
+
+        self._render_canvas(self.current_canvas_payload, reset_zoom=False)
+        self._persist_canvas_payload()
+
+        if self._opened_node_id == node_id:
+            self._opened_node_id = ""
+            self.note_viewer.clear()
+            self.viewer_title_label.setText("Conteúdo do card")
+            self._close_side_panel()
+
+        self.status_label.setText("Card excluído")
+
     def _persist_canvas_payload(self):
         if not self.current_canvas_path:
             return
@@ -1146,6 +2216,8 @@ class ReviewWorkspaceView(QWidget):
             pos = item.pos()
             node["x"] = round(float(pos.x()), 2)
             node["y"] = round(float(pos.y()), 2)
+            node["width"] = int(item.rect().width())
+            node["height"] = int(item.rect().height())
 
         try:
             self.current_canvas_path.write_text(
@@ -1164,6 +2236,7 @@ class ReviewWorkspaceView(QWidget):
 
         self._open_side_panel()
         self._set_editor_visible(True)
+        self._activate_note_editor()
 
         current = self.new_note_editor.toPlainText().strip()
         block = f"> {selected}\n\n"

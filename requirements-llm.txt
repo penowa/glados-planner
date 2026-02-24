@@ -1,5 +1,6 @@
 # Dependências principais para o módulo LLM
 llama-cpp-python>=0.2.0
+litellm>=1.72.0
 python-frontmatter>=1.0.0
 PyYAML>=6.0.0
 rich>=13.0.0

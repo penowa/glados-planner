@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import json
 
 # Importações do backend completo
-from core.llm.local_llm import llm as backend_llm
+from core.llm.backend_router import llm as backend_llm
 from core.llm.glados.personality.glados_voice import GladosVoice
 from core.llm.glados.brain.vault_connector import VaultStructure
 from core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados

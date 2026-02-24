@@ -90,7 +90,7 @@ def main() -> int:
             models_dir=args.models_dir or None,
             force=bool(args.force),
             dry_run=bool(args.dry_run),
-            progress_callback=on_progress if not args.dry_run else None,
+            progress_callback=on_progress if (not args.dry_run and not args.json) else None,
         )
     except ModelInstallError as exc:
         print(f"Erro: {exc}", file=sys.stderr)
