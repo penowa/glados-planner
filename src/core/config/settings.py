@@ -5,6 +5,7 @@ Atualizado para incluir todas as novas configurações
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from typing import Dict, List, Optional, Any, Literal
+import shutil
 import yaml
 from pathlib import Path
 import sys
@@ -123,11 +124,32 @@ def _runtime_base_dir() -> Path:
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[3]
 
+def _bundled_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parents[3]
+
+def _seed_runtime_config_from_bundle(target_path: Path) -> None:
+    """No modo frozen, copia config padrão do bundle para área gravável ao lado do executável."""
+    if not getattr(sys, "frozen", False):
+        return
+    if target_path.exists():
+        return
+
+    bundled_candidate = _bundled_base_dir() / "config" / target_path.name
+    if not bundled_candidate.exists():
+        return
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(bundled_candidate, target_path)
+
 def _resolve_config_path(yaml_path: str) -> Path:
     target = Path(str(yaml_path or "config/settings.yaml")).expanduser()
     if target.is_absolute():
         return target
-    return _runtime_base_dir() / target
+    runtime_target = _runtime_base_dir() / target
+    _seed_runtime_config_from_bundle(runtime_target)
+    return runtime_target
 
 def _resolve_runtime_path(raw_path: str, base_dir: Path) -> Path:
     value = str(raw_path or "").strip()

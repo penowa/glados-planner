@@ -10,6 +10,7 @@ Fluxo:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -79,6 +80,67 @@ def find_ollama_binary() -> str | None:
         if resolved.exists() and os.access(resolved, os.X_OK):
             return str(resolved)
     return None
+
+
+def check_python_cloud_dependencies() -> dict:
+    required_modules = ("litellm", "openai", "backoff", "multipart")
+    missing: dict[str, str] = {}
+    for module_name in required_modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            missing[module_name] = str(exc)
+    return {
+        "ok": not missing,
+        "missing": missing,
+    }
+
+
+def install_python_dependencies(requirements_file: str) -> tuple[bool, str]:
+    req_path = Path(requirements_file or "").expanduser()
+    if not req_path.is_absolute():
+        req_path = Path(__file__).resolve().parents[1] / req_path
+    if not req_path.exists():
+        return False, f"Arquivo de dependencias nao encontrado: {req_path}"
+
+    install_commands = [
+        [sys.executable, "-m", "pip", "install", "-r", str(req_path)],
+        [sys.executable, "-m", "pip", "install", "--user", "-r", str(req_path)],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--user",
+            "--break-system-packages",
+            "-r",
+            str(req_path),
+        ],
+    ]
+
+    last_error = ""
+    for command in install_commands:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1"},
+        )
+        if proc.returncode == 0:
+            return True, ""
+
+        stderr = str(proc.stderr or "").strip()
+        stdout = str(proc.stdout or "").strip()
+        detail = stderr or stdout or f"codigo {proc.returncode}"
+        last_error = detail
+
+        lower_detail = detail.lower()
+        if "not recognized" in lower_detail and "--break-system-packages" in " ".join(command):
+            # pip antigo: ignora tentativa com flag nao suportada.
+            continue
+
+    return False, f"Falha ao instalar dependencias Python: {last_error}"
 
 
 def extract_connect_url(text: str) -> str:
@@ -240,6 +302,21 @@ def main() -> int:
     parser.add_argument("--skip-pull", action="store_true", help="Nao baixar modelo")
     parser.add_argument("--signin", action="store_true", help="Executa login no Ollama antes do pull")
     parser.add_argument("--no-start", action="store_true", help="Nao iniciar ollama serve automaticamente")
+    parser.add_argument(
+        "--install-python-deps",
+        action="store_true",
+        help="Instala dependencias cloud (litellm/openai) antes do setup",
+    )
+    parser.add_argument(
+        "--python-deps-file",
+        default="requirements-llm.txt",
+        help="Arquivo de dependencias para --install-python-deps",
+    )
+    parser.add_argument(
+        "--skip-python-deps-check",
+        action="store_true",
+        help="Nao valida dependencias Python do backend cloud",
+    )
     parser.add_argument("--json", action="store_true", help="Saida em JSON")
     args = parser.parse_args()
 
@@ -261,8 +338,43 @@ def main() -> int:
         "model_already_available": False,
         "model_pulled": False,
         "models_count": 0,
+        "python_deps_ok": True,
+        "python_deps_missing": [],
+        "python_deps_error": "",
         "error": "",
     }
+
+    if args.install_python_deps:
+        ok, install_error = install_python_dependencies(args.python_deps_file)
+        if not ok:
+            report["error"] = install_error
+            report["python_deps_ok"] = False
+            report["python_deps_error"] = install_error
+            if args.json:
+                to_stdout_json(report)
+            else:
+                print(f"Erro: {report['error']}", file=sys.stderr)
+            return 7
+
+    if not args.skip_python_deps_check:
+        deps_report = check_python_cloud_dependencies()
+        report["python_deps_ok"] = bool(deps_report.get("ok", False))
+        missing_map = deps_report.get("missing") or {}
+        report["python_deps_missing"] = sorted(list(missing_map.keys()))
+        if not report["python_deps_ok"]:
+            details = "; ".join(f"{name}: {err}" for name, err in missing_map.items())
+            report["python_deps_error"] = details
+            report["error"] = (
+                "Dependencias Python do backend cloud estao ausentes. "
+                "Execute: python -m pip install -r requirements-llm.txt"
+            )
+            if details:
+                report["error"] += f" ({details})"
+            if args.json:
+                to_stdout_json(report)
+            else:
+                print(f"Erro: {report['error']}", file=sys.stderr)
+            return 7
 
     if not model_name and not args.skip_pull:
         report["error"] = "Modelo Ollama invalido."

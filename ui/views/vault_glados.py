@@ -565,6 +565,8 @@ class VaultGladosView(QWidget):
         self._llm_inflight = True
         self._set_chat_locked(True)
         try:
+            pending = self._pending_llm_request or {}
+            kind = str(pending.get("kind") or "")
             self.glados_controller.ask_glados(
                 prompt,
                 use_semantic=False,
@@ -572,6 +574,9 @@ class VaultGladosView(QWidget):
                 request_metadata={
                     "view": "vault_glados_chat_only",
                     "flow_stage": self._stage,
+                    "prompt_kind": kind,
+                    # Evita respostas de fallback "Com base nas suas notas" mascarando falha real da LLM.
+                    "disable_sembrain_fallback": True,
                 },
             )
         except Exception as exc:
@@ -607,6 +612,47 @@ class VaultGladosView(QWidget):
             f"{instruction}\n\nPergunta do usuário: {user_question}"
         )
 
+    @staticmethod
+    def _is_sembrain_fallback_response(text: str, model_hint: str = "", status_hint: str = "") -> bool:
+        model = str(model_hint or "").strip().lower()
+        status = str(status_hint or "").strip().lower()
+        if "sembrain-fallback" in model or status == "fallback":
+            return True
+
+        raw = str(text or "").strip()
+        normalized = raw.lower()
+        if not normalized.startswith("com base nas suas notas"):
+            return False
+
+        listed_items = len(re.findall(r"(?m)^\s*\d+\.\s+\*\*.+\*\*", raw))
+        return listed_items >= 2
+
+    def _validate_summary_response(
+        self,
+        summary_text: str,
+        model_hint: str = "",
+        status_hint: str = "",
+    ) -> Tuple[bool, str]:
+        text = str(summary_text or "").strip()
+        if not text:
+            return False, "resposta vazia"
+
+        if self._is_sembrain_fallback_response(text, model_hint=model_hint, status_hint=status_hint):
+            return False, "fallback semântico da LLM"
+
+        if len(text) < 300:
+            return False, f"resumo curto demais ({len(text)} caracteres)"
+
+        sentence_count = len([s for s in re.split(r"[.!?]\s+", text) if len(s.strip()) >= 20])
+        if sentence_count < 3:
+            return False, "resumo pouco elaborado"
+
+        listed_items = len(re.findall(r"(?m)^\s*\d+\.\s+\*\*.+\*\*", text))
+        if listed_items >= 2:
+            return False, "resposta virou lista de notas"
+
+        return True, ""
+
     def _on_llm_processing_started(self, task_type: str, message: str):
         if self.status_label and task_type == "llm_generate":
             self.status_label.setText(message)
@@ -634,29 +680,48 @@ class VaultGladosView(QWidget):
         text = str(payload.get("text") or "").strip()
         if not text:
             text = "Sem conteúdo retornado."
+        metadata = payload.get("metadata") if isinstance(payload, dict) else {}
+        metadata = metadata if isinstance(metadata, dict) else {}
+        model_hint = str(metadata.get("model") or "").strip()
+        status_hint = str(metadata.get("status") or "").strip()
+        error_hint = str(metadata.get("error") or "").strip()
 
         pending = self._pending_llm_request or {}
         kind = str(pending.get("kind") or "")
 
         if kind == "summary":
             attempt = int(pending.get("attempt") or 1)
-            if len(text) < 300 and attempt < 5:
-                self._append_system("Resumo curto demais. Solicitando expansão...")
+            ok_summary, reason = self._validate_summary_response(
+                text,
+                model_hint=model_hint,
+                status_hint=status_hint,
+            )
+            if not ok_summary and attempt < 5:
+                self._append_system(f"Resumo rejeitado ({reason}). Solicitando nova tentativa...")
                 expand_prompt = self._build_contextual_prompt(
                     self._topic_query or "tema atual",
                     instruction=(
-                        f"A última resposta teve {len(text)} caracteres. "
-                        "Reescreva e expanda o resumo anterior. "
-                        "Obrigatório: no mínimo 300 caracteres."
+                        f"A resposta anterior foi rejeitada por: {reason}. "
+                        "Gere um resumo corrido, analítico e profundo do tema usando apenas as notas de contexto. "
+                        "Nao devolva lista de titulos de notas, bullets numerados ou trechos truncados. "
+                        "Obrigatorio: minimo de 450 caracteres e pelo menos 3 frases completas."
                     ),
                 )
                 self._pending_llm_request = {"kind": "summary", "attempt": attempt + 1}
                 self._dispatch_llm(expand_prompt)
                 return
-            if len(text) < 300:
+            if not ok_summary:
                 self._pending_llm_request = None
                 self._stage = self.STAGE_WAITING_SUMMARY_DECISION
-                self._append_system("Não consegui obter um resumo com 300+ caracteres após várias tentativas.")
+                self._append_system("Nao consegui obter um resumo confiavel apos varias tentativas.")
+                if self._is_sembrain_fallback_response(text, model_hint=model_hint, status_hint=status_hint):
+                    diagnostic = (
+                        "A LLM caiu em fallback semantico na build. "
+                        "Verifique backend cloud/local, login do Ollama e disponibilidade do LiteLLM."
+                    )
+                    if error_hint:
+                        diagnostic += f" Diagnostico: {error_hint}"
+                    self._append_system(diagnostic)
                 self._append_assistant("Você quer que eu te resume o que sei sobre esse assunto?")
                 return
 

@@ -24,10 +24,12 @@ try:
     from litellm import completion as litellm_completion
 
     LITELLM_AVAILABLE = True
+    LITELLM_IMPORT_ERROR = ""
 except Exception:
     litellm = None
     litellm_completion = None
     LITELLM_AVAILABLE = False
+    LITELLM_IMPORT_ERROR = str(sys.exc_info()[1] or "")
 
 
 class CloudLLM:
@@ -58,6 +60,7 @@ class CloudLLM:
             "backend": "cloud",
             "provider": self._provider_for_model(model_label),
             "available": bool(LITELLM_AVAILABLE),
+            "import_error": str(LITELLM_IMPORT_ERROR or ""),
             "model": model_label,
             "api_base": resolved_api_base,
             "max_retries": int(getattr(settings.llm.cloud, "max_retries", 2) or 2),
@@ -152,7 +155,8 @@ class CloudLLM:
         tags_url = f"{target_base}/api/tags"
         try:
             req = urllib_request.Request(tags_url, method="GET")
-            with urllib_request.urlopen(req, timeout=max(1, int(timeout_seconds))) as resp:
+            opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
+            with opener.open(req, timeout=max(1, int(timeout_seconds))) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
                 payload = json.loads(body or "{}")
             models = payload.get("models", []) if isinstance(payload, dict) else []
@@ -375,11 +379,6 @@ class CloudLLM:
         )
 
     def _call_litellm(self, prompt: str) -> str:
-        if not LITELLM_AVAILABLE or litellm_completion is None:
-            raise RuntimeError(
-                "litellm nao instalado. Instale com: pip install litellm"
-            )
-
         cloud_cfg = settings.llm.cloud
         model_name = str(getattr(cloud_cfg, "model", "") or "").strip()
         if not model_name:
@@ -389,6 +388,22 @@ class CloudLLM:
         self.runtime_info["provider"] = self._provider_for_model(model_name)
         self.runtime_info["model"] = model_name
         self.runtime_info["api_base"] = api_base
+
+        if is_ollama and (not LITELLM_AVAILABLE or litellm_completion is None):
+            probe = self._probe_ollama(
+                api_base=api_base,
+                timeout_seconds=max(1, min(3, int(getattr(cloud_cfg, "timeout_seconds", 120) or 120))),
+            )
+            if not probe.get("reachable", False):
+                raise RuntimeError(
+                    f"Ollama indisponivel em {probe.get('api_base', api_base)}. Inicie com: ollama serve"
+                )
+            return self._call_ollama_direct(prompt=prompt, model_name=model_name, api_base=api_base)
+
+        if not LITELLM_AVAILABLE or litellm_completion is None:
+            raise RuntimeError(
+                "litellm nao instalado. Instale com: pip install litellm"
+            )
 
         kwargs: Dict[str, Any] = {
             "model": model_name,
@@ -478,6 +493,78 @@ class CloudLLM:
             except Exception as exc:
                 raise RuntimeError(f"Resposta invalida do provedor cloud: {exc}") from exc
 
+    def _call_ollama_direct(self, prompt: str, model_name: str, api_base: str) -> str:
+        short_model = model_name.split("/", 1)[1] if "/" in model_name else model_name
+        payload: Dict[str, Any] = {
+            "model": short_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "options": {
+                "num_ctx": int(getattr(settings.llm, "n_ctx", 2048) or 2048),
+                "num_thread": int(self.OLLAMA_LOCKED_CPU_THREADS),
+            },
+        }
+        if self._is_qwen3_ollama_model(model_name):
+            payload["think"] = False
+
+        body = json.dumps(payload).encode("utf-8")
+        url = f"{self._normalize_ollama_api_base(api_base)}/api/chat"
+        req = urllib_request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
+
+        try:
+            with opener.open(req, timeout=max(5, int(getattr(settings.llm.cloud, "timeout_seconds", 120) or 120))) as resp:
+                raw_body = resp.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw_body or "{}")
+            if isinstance(parsed, dict):
+                message = parsed.get("message")
+                if isinstance(message, dict):
+                    content = str(message.get("content") or "").strip()
+                    if content:
+                        return content
+                response_text = str(parsed.get("response") or "").strip()
+                if response_text:
+                    return response_text
+                error_text = str(parsed.get("error") or "").strip()
+                if error_text:
+                    raise RuntimeError(error_text)
+            raise RuntimeError("Resposta invalida recebida do Ollama.")
+        except urllib_error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace").strip()
+            except Exception:
+                detail = ""
+            lowered = detail.lower()
+            if exc.code in (401, 403) or "unauthorized" in lowered:
+                raise RuntimeError("Ollama Cloud requer autenticacao. Execute: ollama signin") from exc
+            if exc.code == 404 or "not found" in lowered:
+                raise RuntimeError(
+                    f"Modelo '{short_model}' nao encontrado no Ollama. Execute: ollama pull {short_model}"
+                ) from exc
+            message = detail or f"HTTP {exc.code}"
+            raise RuntimeError(f"Falha ao consultar Ollama: {message}") from exc
+        except urllib_error.URLError as exc:
+            reason = str(getattr(exc, "reason", exc))
+            lowered = reason.lower()
+            if (
+                "connection refused" in lowered
+                or "127.0.0.1:11434" in lowered
+                or "localhost:11434" in lowered
+                or "failed to establish a new connection" in lowered
+            ):
+                raise RuntimeError(
+                    f"Ollama indisponivel em {api_base}. Inicie com: ollama serve"
+                ) from exc
+            raise RuntimeError(f"Falha de conexao com Ollama: {reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Erro na chamada direta ao Ollama: {exc}") from exc
+
     def set_generation_params(
         self,
         temperature: Optional[float] = None,
@@ -511,6 +598,7 @@ class CloudLLM:
         request_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         metadata = request_metadata or {}
+        strict_no_fallback = bool(metadata.get("disable_sembrain_fallback", False))
         cache_key = self._get_cache_key(query, user_name)
 
         if cache_key in self.response_cache:
@@ -631,6 +719,22 @@ class CloudLLM:
                         "status": "error",
                         "error": str(exc),
                     }
+            if strict_no_fallback:
+                import_hint = ""
+                if not bool(LITELLM_AVAILABLE):
+                    detail = str(LITELLM_IMPORT_ERROR or "indisponivel").strip()
+                    import_hint = f" LiteLLM indisponivel ({detail})."
+                return {
+                    "text": (
+                        "Nao consegui gerar resposta na LLM cloud. "
+                        "Fallback semantico desativado para manter qualidade."
+                        f"{import_hint}"
+                    ).strip(),
+                    "model": model_label,
+                    "status": "error",
+                    "error": str(exc),
+                    "request_metadata": metadata,
+                }
             if self.sembrain:
                 try:
                     results = self.sembrain.search(query, limit=3)
@@ -710,11 +814,11 @@ class CloudLLM:
         except Exception:
             notes_indexed = 0
 
-        available = bool(LITELLM_AVAILABLE)
+        available = bool(LITELLM_AVAILABLE) or bool(is_ollama)
         status_label = "loaded" if available else "error"
-        message = "LiteLLM pronto" if available else "LiteLLM nao instalado"
+        message = "LiteLLM pronto" if bool(LITELLM_AVAILABLE) else "LiteLLM nao instalado"
         ollama_probe: Dict[str, Any] = {}
-        if available and is_ollama:
+        if is_ollama:
             ollama_probe = self._probe_ollama(
                 api_base=api_base,
                 timeout_seconds=max(
@@ -729,9 +833,15 @@ class CloudLLM:
                     f"{ollama_probe.get('api_base', api_base)}"
                 )
             else:
-                message = (
-                    f"Ollama conectado ({ollama_probe.get('models_count', 0)} modelo(s) detectado(s))"
-                )
+                if bool(LITELLM_AVAILABLE):
+                    message = (
+                        f"Ollama conectado ({ollama_probe.get('models_count', 0)} modelo(s) detectado(s))"
+                    )
+                else:
+                    message = (
+                        "Ollama conectado em modo direto "
+                        f"({ollama_probe.get('models_count', 0)} modelo(s) detectado(s))"
+                    )
 
         return {
             "status": status_label,

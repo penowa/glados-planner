@@ -374,10 +374,13 @@ class GladosController(QObject):
                 "text": response_text,
                 "metadata": {
                     "model": result.get("model", "TinyLlama-1.1B"),
+                    "status": result.get("status", "success"),
+                    "error": result.get("error", ""),
                     "cached": result.get("cached", False),
                     "semantic_used": result.get("semantic_context_used", False),
                     "timestamp": result.get("timestamp", ""),
-                    "backend_operation": result.get("backend_operation", {})
+                    "backend_operation": result.get("backend_operation", {}),
+                    "request_metadata": result.get("request_metadata", {}),
                 },
                 "personality": {
                     "intensity": self.state.personality_intensity,

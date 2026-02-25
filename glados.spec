@@ -6,6 +6,7 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 hiddenimports = []
 hiddenimports += collect_submodules("sentence_transformers")
 hiddenimports += collect_submodules("transformers")
+hiddenimports += collect_submodules("litellm")
 hiddenimports += collect_submodules("core")
 hiddenimports += collect_submodules("ui")
 
@@ -14,9 +15,11 @@ binaries += collect_dynamic_libs("llama_cpp")
 
 datas = [
     ("config", "config"),
+    ("requirements-llm.txt", "."),
     ("ui/themes", "ui/themes"),
     ("ui/resources", "ui/resources"),
     ("src/cli/interactive/screens/glados_templates", "src/cli/interactive/screens/glados_templates"),
+    ("scripts/setup_ollama.py", "scripts"),
 ]
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QTabWidget, QWidget,
-    QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox
+    QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox, QSizePolicy
 )
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
@@ -84,6 +84,7 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         footer_layout.addWidget(buttons)
         layout.addLayout(footer_layout)
+        self._apply_compact_control_style()
 
     def _setup_app_tab(self):
         tab = QWidget()
@@ -251,6 +252,26 @@ class SettingsDialog(QDialog):
             self._llm_local_rows.append(row)
         elif scope == "cloud":
             self._llm_cloud_rows.append(row)
+
+    @staticmethod
+    def _set_compact_button(button: QPushButton, min_width: int = 90):
+        button.setMinimumHeight(28)
+        button.setMaximumHeight(32)
+        button.setMinimumWidth(min_width)
+        button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+    @staticmethod
+    def _set_compact_combo(combo: QComboBox):
+        combo.setMinimumHeight(28)
+        combo.setMaximumHeight(32)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _apply_compact_control_style(self):
+        for combo in self.findChildren(QComboBox):
+            self._set_compact_combo(combo)
+        for button in self.findChildren(QPushButton):
+            min_width = max(76, min(170, button.sizeHint().width()))
+            self._set_compact_button(button, min_width=min_width)
 
     def _setup_obsidian_tab(self):
         tab = QWidget()

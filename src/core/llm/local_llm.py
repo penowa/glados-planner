@@ -294,6 +294,7 @@ class LocalLLM:
     ) -> Dict[str, Any]:
         """Gera resposta para uma consulta com contexto semântico"""
         metadata = request_metadata or {}
+        strict_no_fallback = bool(metadata.get("disable_sembrain_fallback", False))
         
         # Verificar cache primeiro
         cache_key = self._get_cache_key(query, user_name)
@@ -419,6 +420,18 @@ class LocalLLM:
                     "model": "None",
                     "status": "error",
                     "error": str(e),
+                }
+
+            if strict_no_fallback:
+                return {
+                    "text": (
+                        "Nao consegui gerar resposta na LLM. "
+                        "Fallback semantico desativado para manter qualidade."
+                    ),
+                    "model": "None",
+                    "status": "error",
+                    "error": str(e),
+                    "request_metadata": metadata,
                 }
             
             # Fallback para resposta sem LLM

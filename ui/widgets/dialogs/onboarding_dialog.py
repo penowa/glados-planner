@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -129,6 +130,7 @@ class OnboardingDialog(QDialog):
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self._apply_compact_control_style()
 
     def _setup_welcome_tab(self):
         tab = QWidget()
@@ -166,15 +168,17 @@ class OnboardingDialog(QDialog):
         quick_title.setStyleSheet("font-size: 13px; font-weight: 600;")
         quick_layout.addWidget(quick_title)
 
-        buttons_layout = QHBoxLayout()
-        self.quick_local_preset_button = QPushButton("Usar LLM local recomendada")
-        self.quick_local_preset_button.clicked.connect(self._apply_local_quick_preset)
-        buttons_layout.addWidget(self.quick_local_preset_button)
-
-        self.quick_ollama_preset_button = QPushButton("Usar Ollama Cloud recomendado")
-        self.quick_ollama_preset_button.clicked.connect(self._apply_ollama_quick_preset)
-        buttons_layout.addWidget(self.quick_ollama_preset_button)
-        quick_layout.addLayout(buttons_layout)
+        preset_row = QHBoxLayout()
+        self.quick_preset_combo = QComboBox()
+        self.quick_preset_combo.addItem("Escolha um preset rapido", "none")
+        self.quick_preset_combo.addItem("LLM local recomendada", "local")
+        self.quick_preset_combo.addItem("Ollama Cloud recomendado", "ollama")
+        self.quick_apply_button = QPushButton("Aplicar")
+        self._set_compact_button(self.quick_apply_button, min_width=90)
+        self.quick_apply_button.clicked.connect(self._apply_selected_quick_preset)
+        preset_row.addWidget(self.quick_preset_combo, 1)
+        preset_row.addWidget(self.quick_apply_button)
+        quick_layout.addLayout(preset_row)
 
         self.quick_setup_status_label = QLabel("Status rapido: nenhum preset aplicado.")
         self.quick_setup_status_label.setWordWrap(True)
@@ -196,7 +200,8 @@ class OnboardingDialog(QDialog):
         )
 
         form = QFormLayout()
-        form.setVerticalSpacing(10)
+        form.setVerticalSpacing(5)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._llm_form = form
         self._llm_local_rows = []
         self._llm_cloud_rows = []
@@ -251,17 +256,20 @@ class OnboardingDialog(QDialog):
         for label, value in self.OLLAMA_PRESET_MODELS:
             self.ollama_model_combo.addItem(label, value)
 
-        self.llm_cloud_ollama_preset_button = QPushButton("Aplicar preset Ollama Cloud")
+        self.llm_cloud_ollama_preset_button = QPushButton("Aplicar preset")
         self.llm_cloud_ollama_preset_button.clicked.connect(self._apply_ollama_cloud_preset)
+        self._set_compact_button(self.llm_cloud_ollama_preset_button, min_width=110)
 
-        self.ollama_setup_button = QPushButton("Login no Ollama + baixar qwen3.5:cloud")
+        self.ollama_setup_button = QPushButton("Login + preparar modelo")
         self.ollama_setup_button.clicked.connect(self._setup_ollama_with_script)
+        self._set_compact_button(self.ollama_setup_button, min_width=170)
 
-        self.ollama_probe_button = QPushButton("Testar conexao Ollama")
+        self.ollama_probe_button = QPushButton("Testar")
         self.ollama_probe_button.clicked.connect(self._test_ollama_connection)
+        self._set_compact_button(self.ollama_probe_button, min_width=90)
 
         self.ollama_login_help_label = QLabel(
-            "Fluxo guiado: clique em 'Login no Ollama + baixar qwen3.5:cloud'. "
+            "Fluxo guiado: clique em 'Login + preparar modelo'. "
             "Se o navegador abrir para autenticacao, conclua o login e aguarde: o modelo "
             "qwen3.5:cloud sera preparado automaticamente."
         )
@@ -278,8 +286,9 @@ class OnboardingDialog(QDialog):
         self.llm_download_choice_combo.addItem("Baixar Qwen3 4B - 2.5 GB", "qwen4b")
         self.llm_download_choice_combo.addItem("Baixar ambos - 3.2 GB", "all")
 
-        self.llm_download_button = QPushButton("Baixar modelos GGUF")
+        self.llm_download_button = QPushButton("Baixar GGUF")
         self.llm_download_button.clicked.connect(self._download_selected_models)
+        self._set_compact_button(self.llm_download_button, min_width=120)
 
         self.llm_download_status_label = QLabel("Status de download: nenhum.")
         self.llm_download_status_label.setWordWrap(True)
@@ -289,29 +298,33 @@ class OnboardingDialog(QDialog):
         model_catalog_layout.addWidget(self.llm_model_combo)
         model_refresh_btn = QPushButton("Atualizar")
         model_refresh_btn.clicked.connect(self._refresh_model_catalog)
+        self._set_compact_button(model_refresh_btn, min_width=95)
         model_catalog_layout.addWidget(model_refresh_btn)
 
         model_path_layout = QHBoxLayout()
         model_path_layout.addWidget(self.llm_model_path_input)
         model_btn = QPushButton("Selecionar")
         model_btn.clicked.connect(self._select_model_path)
+        self._set_compact_button(model_btn, min_width=95)
         model_path_layout.addWidget(model_btn)
 
         gpu_layout = QHBoxLayout()
         gpu_layout.addWidget(self.llm_gpu_combo)
         gpu_refresh_btn = QPushButton("Detectar")
         gpu_refresh_btn.clicked.connect(self._refresh_gpu_catalog)
+        self._set_compact_button(gpu_refresh_btn, min_width=95)
         gpu_layout.addWidget(gpu_refresh_btn)
-
-        download_layout = QHBoxLayout()
-        download_layout.addWidget(self.llm_download_choice_combo, 1)
-        download_layout.addWidget(self.llm_download_button)
 
         cloud_model_layout = QHBoxLayout()
         cloud_model_layout.addWidget(self.llm_cloud_model_input)
         cloud_model_layout.addWidget(self.llm_cloud_ollama_preset_button)
 
+        download_layout = QHBoxLayout()
+        download_layout.addWidget(self.llm_download_choice_combo, 1)
+        download_layout.addWidget(self.llm_download_button)
+
         ollama_action_layout = QHBoxLayout()
+        ollama_action_layout.addStretch(1)
         ollama_action_layout.addWidget(self.ollama_setup_button)
         ollama_action_layout.addWidget(self.ollama_probe_button)
 
@@ -346,6 +359,26 @@ class OnboardingDialog(QDialog):
         tab_layout.addStretch()
         self.tabs.addTab(tab, "LLM")
 
+    @staticmethod
+    def _set_compact_button(button: QPushButton, min_width: int = 96):
+        button.setMinimumHeight(28)
+        button.setMaximumHeight(32)
+        button.setMinimumWidth(min_width)
+        button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+    @staticmethod
+    def _set_compact_combo(combo: QComboBox):
+        combo.setMinimumHeight(28)
+        combo.setMaximumHeight(32)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _apply_compact_control_style(self):
+        for combo in self.findChildren(QComboBox):
+            self._set_compact_combo(combo)
+        for button in self.findChildren(QPushButton):
+            min_width = max(76, min(170, button.sizeHint().width()))
+            self._set_compact_button(button, min_width=min_width)
+
     def _add_llm_row(self, label: str, field, scope: str = "common"):
         if self._llm_form is None:
             return
@@ -367,7 +400,7 @@ class OnboardingDialog(QDialog):
         )
 
         form = QFormLayout()
-        form.setVerticalSpacing(10)
+        form.setVerticalSpacing(5)
 
         self.vault_path_input = QLineEdit()
         self.data_dir_input = QLineEdit()
@@ -406,7 +439,7 @@ class OnboardingDialog(QDialog):
         )
 
         form = QFormLayout()
-        form.setVerticalSpacing(10)
+        form.setVerticalSpacing(5)
 
         self.sleep_start_input = QLineEdit()
         self.sleep_end_input = QLineEdit()
@@ -440,7 +473,7 @@ class OnboardingDialog(QDialog):
         )
 
         form = QFormLayout()
-        form.setVerticalSpacing(10)
+        form.setVerticalSpacing(5)
 
         self.pomodoro_work_spin = QSpinBox()
         self.pomodoro_work_spin.setRange(1, 180)
@@ -483,17 +516,17 @@ class OnboardingDialog(QDialog):
         layout = QVBoxLayout(tab)
         layout.addWidget(
             self._create_info_box(
-                "Opcional: ative somente os modulos que quer usar agora.\n"
-                "Voce pode mudar tudo depois em Configuracoes."
+                "Opcional: ative somente os módulos que quer usar agora.\n"
+                "Você pode mudar tudo depois em Configurações."
             )
         )
 
         self.feature_llm = QCheckBox("Habilitar LLM")
         self.feature_obsidian = QCheckBox("Habilitar sincronizacao Obsidian")
         self.feature_pomodoro = QCheckBox("Habilitar Pomodoro")
-        self.feature_translation = QCheckBox("Habilitar traducao")
+        self.feature_translation = QCheckBox("Habilitar tradução")
         self.feature_glados_personality = QCheckBox("Habilitar personalidade do assistente")
-        self.feature_vault_brain = QCheckBox("Habilitar vault como cerebro")
+        self.feature_vault_brain = QCheckBox("Habilitar vault como cérebro")
 
         layout.addWidget(self.feature_llm)
         layout.addWidget(self.feature_obsidian)
@@ -681,6 +714,18 @@ class OnboardingDialog(QDialog):
         if self.tabs.count() > 1:
             self.tabs.setCurrentIndex(1)
 
+    def _apply_selected_quick_preset(self):
+        selected = str(self.quick_preset_combo.currentData() or "none")
+        if selected == "local":
+            self._apply_local_quick_preset()
+            return
+        if selected == "ollama":
+            self._apply_ollama_quick_preset()
+            return
+        self.quick_setup_status_label.setText(
+            "Status rapido: selecione um preset para aplicar."
+        )
+
     def _apply_ollama_cloud_preset(self):
         self._set_backend_mode("cloud")
         self._set_ollama_model_selection_from_cloud_model(f"ollama/{self.OLLAMA_CLOUD_DEFAULT_MODEL}")
@@ -706,20 +751,38 @@ class OnboardingDialog(QDialog):
         QApplication.processEvents()
 
         try:
-            try:
-                report = self._run_script_json(
-                    "scripts/setup_ollama.py",
-                    [
-                        "--model",
-                        model_name,
-                        "--api-base",
-                        api_base,
-                        "--signin",
-                        "--json",
-                    ],
-                    timeout_seconds=3600,
+            # No app empacotado, evite executar script com Python externo.
+            # Use o fallback interno para garantir login/pull no mesmo runtime da UI.
+            if getattr(sys, "frozen", False):
+                report = self._setup_ollama_fallback(
+                    model_name=model_name,
+                    api_base=api_base,
+                    require_signin=True,
                 )
-            except FileNotFoundError:
+            else:
+                try:
+                    report = self._run_script_json(
+                        "scripts/setup_ollama.py",
+                        [
+                            "--model",
+                            model_name,
+                            "--api-base",
+                            api_base,
+                            "--signin",
+                            "--install-python-deps",
+                            "--python-deps-file",
+                            "requirements-llm.txt",
+                            "--json",
+                        ],
+                        timeout_seconds=4200,
+                    )
+                except FileNotFoundError:
+                    report = self._setup_ollama_fallback(
+                        model_name=model_name,
+                        api_base=api_base,
+                        require_signin=True,
+                    )
+            if not report:
                 report = self._setup_ollama_fallback(
                     model_name=model_name,
                     api_base=api_base,
@@ -730,6 +793,9 @@ class OnboardingDialog(QDialog):
                 signin_url = str(report.get("signin_url") or "").strip()
                 if signin_url:
                     detail += f"\n\nConclua o login da conta Ollama em:\n{signin_url}"
+                deps_error = str(report.get("python_deps_error") or "").strip()
+                if deps_error:
+                    detail += f"\n\nDependencias Python cloud:\n{deps_error}"
                 raise RuntimeError(detail)
 
             reachable = bool(report.get("service_reachable", False))
@@ -816,7 +882,7 @@ class OnboardingDialog(QDialog):
             "Ollama indisponivel",
             (
                 f"Nao foi possivel conectar ao Ollama em {result.get('api_base')}.\n"
-                "Use o botao 'Login no Ollama + baixar qwen3.5:cloud' ou inicie manualmente com: ollama serve"
+                "Use o botao 'Login + preparar modelo' ou inicie manualmente com: ollama serve"
             ),
         )
 
@@ -942,20 +1008,23 @@ class OnboardingDialog(QDialog):
         QApplication.processEvents()
 
         try:
-            try:
-                report = self._run_script_json(
-                    "scripts/install_llm_models.py",
-                    [
-                        "--model",
-                        selection,
-                        "--models-dir",
-                        models_dir,
-                        "--json",
-                    ],
-                    timeout_seconds=7200,
-                )
-            except FileNotFoundError:
+            if getattr(sys, "frozen", False):
                 report = self._download_models_fallback(selection=selection, models_dir=models_dir)
+            else:
+                try:
+                    report = self._run_script_json(
+                        "scripts/install_llm_models.py",
+                        [
+                            "--model",
+                            selection,
+                            "--models-dir",
+                            models_dir,
+                            "--json",
+                        ],
+                        timeout_seconds=7200,
+                    )
+                except FileNotFoundError:
+                    report = self._download_models_fallback(selection=selection, models_dir=models_dir)
 
             results = list(report.get("results", []))
             downloaded = [item for item in results if item.get("status") == "downloaded"]
@@ -1026,7 +1095,31 @@ class OnboardingDialog(QDialog):
         if not script_path.exists():
             raise FileNotFoundError(f"Script nao encontrado: {script_path}")
 
-        command = [sys.executable, str(script_path), *args]
+        command: list[str]
+        if getattr(sys, "frozen", False):
+            if os.access(str(script_path), os.X_OK):
+                command = [str(script_path), *args]
+            else:
+                exe_dir = Path(sys.executable).resolve().parent
+                candidate_bins = [
+                    exe_dir / "python3",
+                    exe_dir / "python",
+                ]
+                py_bin = ""
+                for candidate in candidate_bins:
+                    if candidate.exists() and os.access(str(candidate), os.X_OK):
+                        py_bin = str(candidate)
+                        break
+                if not py_bin:
+                    py_bin = shutil.which("python3") or shutil.which("python") or ""
+                if not py_bin:
+                    raise RuntimeError(
+                        "Nao foi possivel executar o script no pacote: interpretador Python nao encontrado."
+                    )
+                command = [py_bin, str(script_path), *args]
+        else:
+            command = [sys.executable, str(script_path), *args]
+
         proc = subprocess.run(
             command,
             cwd=str(self._project_root()),
@@ -1075,6 +1168,18 @@ class OnboardingDialog(QDialog):
         return None
 
     def _project_root(self) -> Path:
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates = []
+            meipass = getattr(sys, "_MEIPASS", "")
+            if meipass:
+                candidates.append(Path(meipass))
+            candidates.append(exe_dir)
+            candidates.append(exe_dir / "_internal")
+            for candidate in candidates:
+                if (candidate / "scripts" / "setup_ollama.py").exists():
+                    return candidate
+            return candidates[0] if candidates else exe_dir
         return Path(__file__).resolve().parents[3]
 
     @classmethod
