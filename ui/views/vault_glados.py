@@ -273,7 +273,7 @@ class VaultGladosView(QWidget):
         self.header_title_label = QLabel(f"💬 {self.assistant_name}")
         self.header_title_label.setFont(QFont("FiraCode Nerd Font Propo", 18, QFont.Weight.Medium))
         subtitle = QLabel("Pesquisa contextual e revisão assistida")
-        subtitle.setStyleSheet("color: #8A94A6;")
+        subtitle.setStyleSheet("color: #8F8F8F;")
         subtitle.setFont(QFont("FiraCode Nerd Font Propo", 10))
 
         left = QVBoxLayout()
@@ -294,7 +294,7 @@ class VaultGladosView(QWidget):
         root.addWidget(self.chat_widget, 1)
 
         self.status_label = QLabel("Pronto")
-        self.status_label.setStyleSheet("color: #8A94A6; font-size: 11px;")
+        self.status_label.setStyleSheet("color: #8F8F8F; font-size: 11px;")
         root.addWidget(self.status_label)
 
         row = QHBoxLayout()

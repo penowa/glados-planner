@@ -8,6 +8,15 @@ from PyQt6.QtCore import Qt, pyqtSignal, QDateTime
 from PyQt6.QtGui import QFont, QIcon
 import os
 import logging
+from pathlib import Path
+from typing import Optional
+
+from ui.utils.discipline_links import ensure_discipline_note, list_disciplines, resolve_vault_root
+
+try:
+    from core.config.settings import settings as core_settings
+except Exception:
+    core_settings = None
 
 logger = logging.getLogger('GLaDOS.UI.BookImportDialog')
 
@@ -24,6 +33,7 @@ class BookImportDialog(QDialog):
         self.initial_metadata = initial_metadata or {}
         self.field_confidence_labels = {}
         self.confidence_summary_label = None
+        self._vault_root = self._resolve_vault_root()
         
         self.setup_ui()
         self.load_initial_data()
@@ -313,6 +323,23 @@ class BookImportDialog(QDialog):
         
         location_group.setLayout(location_layout)
         layout.addWidget(location_group)
+
+        discipline_group = QGroupBox("Disciplina")
+        discipline_layout = QVBoxLayout()
+        selector_row = QHBoxLayout()
+        self.discipline_input = QComboBox()
+        self.discipline_input.setEditable(True)
+        self.discipline_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.discipline_input.setSizePolicy(self.discipline_input.sizePolicy().horizontalPolicy(), self.discipline_input.sizePolicy().verticalPolicy())
+        self._reload_disciplines()
+        self.new_discipline_button = QPushButton("Nova")
+        self.new_discipline_button.clicked.connect(self._create_selected_discipline)
+        selector_row.addWidget(self.discipline_input, 1)
+        selector_row.addWidget(self.new_discipline_button)
+        discipline_layout.addWidget(QLabel("Nome da disciplina (obrigatório para PDF):"))
+        discipline_layout.addLayout(selector_row)
+        discipline_group.setLayout(discipline_layout)
+        layout.addWidget(discipline_group)
         
         layout.addStretch()
         
@@ -440,6 +467,21 @@ class BookImportDialog(QDialog):
             QMessageBox.warning(self, "Atenção", "Por favor, insira um título para o livro.")
             self.title_input.setFocus()
             return
+
+        discipline_name = self._selected_discipline()
+
+        if str(self.file_path).lower().endswith(".pdf") and not discipline_name:
+            QMessageBox.warning(
+                self,
+                "Disciplina obrigatória",
+                "Para processar PDF, informe o nome da disciplina na aba de notas.",
+            )
+            self.tab_widget.setCurrentIndex(2)
+            self.discipline_input.setFocus()
+            return
+
+        if discipline_name:
+            self._ensure_discipline_exists(discipline_name)
             
         # Coletar todas as configurações
         config = {
@@ -463,6 +505,7 @@ class BookImportDialog(QDialog):
             "note_structure": "Automático: completo + capítulos + metadados",
             "note_template": self.template_combo.currentText(),
             "vault_location": self.vault_location_input.text().strip(),
+            "discipline": discipline_name,
             
             # Agendamento
             "auto_schedule": self.auto_schedule_checkbox.isChecked(),
@@ -479,6 +522,42 @@ class BookImportDialog(QDialog):
         # Emitir sinal com configurações
         self.import_confirmed.emit(config)
         self.accept()
+
+    def _resolve_vault_root(self):
+        candidates = [getattr(getattr(core_settings, "paths", None), "vault", "")]
+        return resolve_vault_root(*candidates)
+
+    def _reload_disciplines(self):
+        current = self._selected_discipline()
+        self.discipline_input.clear()
+        names = list_disciplines(self._vault_root) if self._vault_root else []
+        self.discipline_input.addItems(names)
+        if current:
+            idx = self.discipline_input.findText(current)
+            if idx >= 0:
+                self.discipline_input.setCurrentIndex(idx)
+            else:
+                self.discipline_input.setEditText(current)
+
+    def _selected_discipline(self) -> str:
+        return self.discipline_input.currentText().strip() if self.discipline_input else ""
+
+    def _ensure_discipline_exists(self, discipline: str) -> Optional[Path]:
+        if not self._vault_root:
+            return None
+        return ensure_discipline_note(self._vault_root, discipline)
+
+    def _create_selected_discipline(self):
+        name = self._selected_discipline()
+        if not name:
+            QMessageBox.information(self, "Disciplina", "Informe o nome da nova disciplina.")
+            self.discipline_input.setFocus()
+            return
+        created = self._ensure_discipline_exists(name)
+        if not created:
+            QMessageBox.warning(self, "Disciplina", "Não foi possível criar a nota da disciplina.")
+            return
+        self._reload_disciplines()
         
     def reject(self):
         """Cancelar importação"""

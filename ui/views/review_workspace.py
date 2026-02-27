@@ -10,7 +10,7 @@ import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt, QTimer, QMimeData, pyqtSignal
 from PyQt6.QtGui import (
@@ -786,6 +786,9 @@ class ReviewWorkspaceView(QWidget):
         self.current_book_id: str = ""
         self.current_book_title: str = "Revisão"
         self.current_book_dir: Optional[Path] = None
+        self.current_scope_type: str = "book"
+        self.current_discipline: str = ""
+        self.current_discipline_note_path: Optional[Path] = None
         self.current_canvas_path: Optional[Path] = None
         self.current_canvas_payload: Dict[str, Any] = {"nodes": [], "edges": []}
         self.current_source_note_path: Optional[Path] = None
@@ -889,12 +892,16 @@ class ReviewWorkspaceView(QWidget):
         self.status_label = QLabel("Selecione uma revisão para iniciar")
         self.status_label.setStyleSheet("color: #98A2B3;")
 
-        self.zoom_out_button = QPushButton("-")
-        self.zoom_reset_button = QPushButton("100%")
+        self.zoom_out_button = QPushButton("−")
+        self.zoom_out_button.setToolTip("Reduzir zoom")
+        self.zoom_reset_button = QPushButton("◎")
+        self.zoom_reset_button.setToolTip("Resetar zoom")
         self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setToolTip("Aumentar zoom")
         for button in (self.zoom_out_button, self.zoom_reset_button, self.zoom_in_button):
-            button.setFixedWidth(44)
-            button.setObjectName("secondary_button")
+            button.setObjectName("review_round_icon_button")
+            button.setFixedSize(38, 38)
+            self._apply_round_icon_button_style(button, radius=19)
 
         header_layout.addWidget(self.pomodoro_timer_button)
         header_layout.addWidget(self.book_label, 1)
@@ -1050,26 +1057,14 @@ class ReviewWorkspaceView(QWidget):
         self.add_text_card_button.setFixedSize(46, 46)
         self.add_text_card_button.setIcon(self._build_plus_icon())
         self.add_text_card_button.setIconSize(QSize(22, 22))
-        self.add_text_card_button.setStyleSheet(
-            "QPushButton {"
-            "background-color: #1B202C; border: 1px solid #596276; border-radius: 8px;"
-            "}"
-            "QPushButton:hover { background-color: #242B39; border-color: #8995AB; }"
-            "QPushButton:pressed { background-color: #151A24; }"
-        )
+        self._apply_round_icon_button_style(self.add_text_card_button, radius=23)
 
         self.add_image_card_button = CanvasActionDragButton("add_image_card", self, enable_drag=False)
         self.add_image_card_button.setToolTip("Criar card de imagem")
         self.add_image_card_button.setFixedSize(46, 46)
         self.add_image_card_button.setIcon(self._build_image_icon())
         self.add_image_card_button.setIconSize(QSize(22, 22))
-        self.add_image_card_button.setStyleSheet(
-            "QPushButton {"
-            "background-color: #1B202C; border: 1px solid #596276; border-radius: 8px;"
-            "}"
-            "QPushButton:hover { background-color: #242B39; border-color: #8995AB; }"
-            "QPushButton:pressed { background-color: #151A24; }"
-        )
+        self._apply_round_icon_button_style(self.add_image_card_button, radius=23)
 
         dock_layout.addWidget(self.add_text_card_button)
         dock_layout.addWidget(self.add_image_card_button)
@@ -1088,6 +1083,17 @@ class ReviewWorkspaceView(QWidget):
         self._activate_note_editor()
         self._set_editor_visible(False)
         self._close_side_panel()
+
+    def _apply_round_icon_button_style(self, button: QPushButton, radius: int = 18):
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton{"
+            "background-color:#1F1F1F; color:#D0D0D0; border:1px solid #333842; "
+            f"border-radius:{max(8, int(radius))}px;"
+            "}"
+            "QPushButton:hover{background-color:#2A2A2A; border-color:#535B6B; color:#F3F3F3;}"
+            "QPushButton:pressed{background-color:#171717;}"
+        )
 
     def _setup_connections(self):
         self.pomodoro_timer_button.clicked.connect(self._open_pomodoro_menu)
@@ -1237,6 +1243,33 @@ class ReviewWorkspaceView(QWidget):
         filename = f"{self._sanitize_filename(book_title)}.mapa-mental.canvas"
         return vault_root / self.MINDMAPS_DIR / filename
 
+    def _canvas_path_for_discipline(self, discipline: str) -> Optional[Path]:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return None
+        safe = self._sanitize_filename(f"disciplina-{discipline}")
+        filename = f"{safe}.mapa-mental.canvas"
+        return vault_root / self.MINDMAPS_DIR / filename
+
+    def _resolve_discipline_note_path(self, discipline: str) -> Optional[Path]:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return None
+        discipline_dir = vault_root / "05-DISCIPLINAS"
+        if not discipline_dir.exists():
+            return None
+
+        safe = self._sanitize_filename(discipline)
+        direct = discipline_dir / f"{safe}.md"
+        if direct.exists():
+            return direct
+
+        lowered = discipline.strip().lower()
+        for candidate in discipline_dir.glob("*.md"):
+            if candidate.stem.lower() == lowered:
+                return candidate
+        return None
+
     def _ensure_canvas_exists(self):
         if not self.current_canvas_path:
             return
@@ -1248,13 +1281,20 @@ class ReviewWorkspaceView(QWidget):
         if not vault_root:
             return
 
-        sources = self.mindmap_module.find_base_sources(self.current_book_dir)
-        payload = self.mindmap_module.build_base_canvas(
-            vault_root=vault_root,
-            book_title=self.current_book_title,
-            book_note=sources.book_note,
-            pretext_note=sources.pretext_note,
-        )
+        if self.current_scope_type == "discipline":
+            payload = self._build_discipline_base_canvas(
+                vault_root=vault_root,
+                discipline=self.current_discipline or self.current_book_title,
+                discipline_note=self.current_discipline_note_path,
+            )
+        else:
+            sources = self.mindmap_module.find_base_sources(self.current_book_dir)
+            payload = self.mindmap_module.build_base_canvas(
+                vault_root=vault_root,
+                book_title=self.current_book_title,
+                book_note=sources.book_note,
+                pretext_note=sources.pretext_note,
+            )
         try:
             self.current_canvas_path.write_text(
                 self.mindmap_module.dump_canvas_json(payload) + "\n",
@@ -1277,6 +1317,9 @@ class ReviewWorkspaceView(QWidget):
         self.current_book_id = normalized_id
         self.current_book_title = resolved_title
         self.current_book_dir = Path(book_dir) if book_dir else self._resolve_book_directory(normalized_id, resolved_title)
+        self.current_scope_type = "book"
+        self.current_discipline = ""
+        self.current_discipline_note_path = None
         self.current_canvas_path = self._canvas_path_for_book(resolved_title)
 
         if not self.current_canvas_path:
@@ -1311,6 +1354,658 @@ class ReviewWorkspaceView(QWidget):
         if source_event:
             logger.debug("Review workspace aberto com payload: %s", source_event)
         return True
+
+    def open_discipline_review(
+        self,
+        *,
+        discipline: str,
+        source_event: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        discipline_name = str(discipline or "").strip()
+        if not discipline_name:
+            self.status_label.setText("Disciplina inválida para revisão")
+            return False
+
+        self.current_book_id = ""
+        self.current_book_title = discipline_name
+        self.current_scope_type = "discipline"
+        self.current_discipline = discipline_name
+        self.current_discipline_note_path = self._resolve_discipline_note_path(discipline_name)
+        self.current_book_dir = self.current_discipline_note_path.parent if self.current_discipline_note_path else None
+        self.current_canvas_path = self._canvas_path_for_discipline(discipline_name)
+
+        if not self.current_canvas_path:
+            self.status_label.setText("Vault não disponível para revisão por disciplina")
+            return False
+
+        self._ensure_canvas_exists()
+        self.current_canvas_payload = self.mindmap_module.load_canvas_payload(self.current_canvas_path)
+        self._render_canvas(self.current_canvas_payload)
+        self._isolated_spawn_index = 0
+        self._opened_node_id = ""
+        self.current_source_note_path = None
+        self.viewer_title_label.setText("Conteúdo do card")
+        self.note_viewer.clear()
+        self.new_note_title_input.clear()
+        self.new_note_editor.clear()
+        self.card_title_input.clear()
+        self.card_body_editor.clear()
+        self.card_image_path_input.clear()
+        self.card_feedback_label.clear()
+        self._activate_note_editor()
+        self._set_editor_visible(False)
+        self._close_side_panel()
+
+        self.book_label.setText(f"Revisão: Disciplina {discipline_name}")
+        self.status_label.setText("Mapa mental da disciplina carregado")
+        self._schedule_next_question_prompt(reset=True)
+        if source_event:
+            logger.debug("Review workspace de disciplina aberto com payload: %s", source_event)
+        return True
+
+    def _build_discipline_base_canvas(
+        self,
+        *,
+        vault_root: Path,
+        discipline: str,
+        discipline_note: Optional[Path],
+    ) -> Dict[str, Any]:
+        root_title = f"Mapa da disciplina\n{discipline}"
+        root_w, root_h = self.mindmap_module._card_dimensions_for_title(root_title, is_text=True)
+        nodes: List[Dict[str, Any]] = [
+            {
+                "id": "node-disciplina",
+                "type": "text",
+                "text": root_title,
+                "x": 0,
+                "y": 0,
+                "width": root_w,
+                "height": root_h,
+                "color": "4",
+            }
+        ]
+        edges: List[Dict[str, Any]] = []
+
+        linked_files: List[str] = []
+        if discipline_note and discipline_note.exists():
+            note_rel = self.mindmap_module._to_relative_vault_path(discipline_note, vault_root)
+            linked_files.append(note_rel)
+            try:
+                text = discipline_note.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                text = ""
+            for link in re.findall(r"\[\[([^\]]+)\]\]", text):
+                target = link.split("|", 1)[0].strip()
+                if not target:
+                    continue
+                candidate = (vault_root / target).with_suffix(".md")
+                if candidate.exists():
+                    linked_files.append(self.mindmap_module._to_relative_vault_path(candidate, vault_root))
+                    continue
+                candidate = vault_root / target
+                if candidate.exists() and candidate.suffix.lower() == ".md":
+                    linked_files.append(self.mindmap_module._to_relative_vault_path(candidate, vault_root))
+
+        unique_files: List[str] = []
+        seen: set[str] = set()
+        for path in linked_files:
+            normalized = str(path).replace("\\", "/").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                unique_files.append(normalized)
+
+        base_x = 460
+        base_y = -140
+        step_y = 128
+        for index, rel_path in enumerate(unique_files):
+            label = Path(rel_path).stem
+            card_w, card_h = self.mindmap_module._card_dimensions_for_title(label)
+            node_id = f"node-disciplina-arquivo-{index + 1}"
+            nodes.append(
+                {
+                    "id": node_id,
+                    "type": "file",
+                    "file": rel_path,
+                    "x": base_x,
+                    "y": base_y + (index * step_y),
+                    "width": card_w,
+                    "height": card_h,
+                    "color": "2" if "01-LEITURAS/" in rel_path else "6",
+                }
+            )
+            edges.append(
+                {
+                    "id": f"edge-disciplina-arquivo-{index + 1}",
+                    "fromNode": "node-disciplina",
+                    "toNode": node_id,
+                    "fromSide": "right",
+                    "toSide": "left",
+                    "label": "referência",
+                    "color": "2",
+                }
+            )
+
+        return {"nodes": nodes, "edges": edges}
+
+    def ingest_discipline_image(
+        self,
+        *,
+        discipline: str,
+        image_path: str,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        if not self.open_discipline_review(discipline=discipline):
+            return {"ok": False, "error": "Não foi possível abrir mapa da disciplina."}
+
+        imported = self._import_image_to_assets(Path(image_path))
+        if not imported:
+            return {"ok": False, "error": "Não foi possível importar imagem para assets."}
+
+        card_w = 280
+        card_h = 180
+        target = self._next_isolated_spawn_point(card_w, card_h)
+        node_id = self._generate_unique_node_id("node-image")
+        image_node: Dict[str, Any] = {
+            "id": node_id,
+            "type": "image",
+            "image": imported,
+            "caption": str(description or "").strip(),
+            "text": str(description or "").strip(),
+            "x": round(float(target.x()), 2),
+            "y": round(float(target.y()), 2),
+            "width": card_w,
+            "height": card_h,
+            "color": "6",
+        }
+        item = self._add_node_to_canvas(image_node)
+        if not item:
+            return {"ok": False, "error": "Falha ao adicionar imagem ao canvas."}
+
+        if str(description or "").strip():
+            text_w, text_h = self.mindmap_module._card_dimensions_for_title(str(description)[:60], is_text=True)
+            text_id = self._generate_unique_node_id("node-descricao-imagem")
+            text_node: Dict[str, Any] = {
+                "id": text_id,
+                "type": "text",
+                "text": str(description).strip(),
+                "x": round(float(target.x()) + 330.0, 2),
+                "y": round(float(target.y()) + 15.0, 2),
+                "width": text_w,
+                "height": max(90, text_h),
+                "color": "1",
+            }
+            text_item = self._add_node_to_canvas(text_node)
+            if text_item:
+                self._create_edge_between(
+                    from_node=node_id,
+                    to_node=text_id,
+                    label="descrição",
+                    color_id="1",
+                )
+
+        anchor_id = "node-disciplina"
+        if anchor_id in self._node_items:
+            self._create_edge_between(
+                from_node=anchor_id,
+                to_node=node_id,
+                label="imagem contextual",
+                color_id="6",
+            )
+        self._persist_canvas_payload()
+        self.status_label.setText("Imagem adicionada ao mapa mental da disciplina")
+        return {
+            "ok": True,
+            "canvas_path": str(self.current_canvas_path) if self.current_canvas_path else "",
+            "image_ref": imported,
+            "node_id": node_id,
+        }
+
+    def integrate_existing_book_into_discipline(
+        self,
+        *,
+        discipline: str,
+        book_dir: str,
+        author: str = "",
+        work: str = "",
+    ) -> Dict[str, Any]:
+        if not self.open_discipline_review(discipline=discipline):
+            return {"ok": False, "error": "Não foi possível abrir o mapa da disciplina."}
+
+        vault_root = self._vault_root()
+        if not vault_root:
+            return {"ok": False, "error": "Vault indisponível para integração do livro."}
+
+        raw_dir = Path(str(book_dir or "").strip())
+        if not str(raw_dir):
+            return {"ok": False, "error": "Diretório do livro inválido."}
+        book_abs = raw_dir if raw_dir.is_absolute() else (vault_root / raw_dir)
+        book_abs = book_abs.resolve(strict=False)
+        if not book_abs.exists() or not book_abs.is_dir():
+            return {"ok": False, "error": f"Diretório do livro não encontrado: {book_abs}"}
+
+        work_title = str(work or book_abs.name).strip() or book_abs.name
+        author_name = str(author or book_abs.parent.name).strip() or "Sem autor"
+
+        nodes = self.current_canvas_payload.get("nodes")
+        edges = self.current_canvas_payload.get("edges")
+        if not isinstance(nodes, list):
+            nodes = []
+            self.current_canvas_payload["nodes"] = nodes
+        if not isinstance(edges, list):
+            edges = []
+            self.current_canvas_payload["edges"] = edges
+
+        anchor_id = "node-disciplina"
+        if anchor_id not in {
+            str(node.get("id") or "").strip()
+            for node in nodes
+            if isinstance(node, dict)
+        }:
+            root_title = f"Mapa da disciplina\n{discipline}"
+            root_w, root_h = self.mindmap_module._card_dimensions_for_title(root_title, is_text=True)
+            nodes.insert(
+                0,
+                {
+                    "id": anchor_id,
+                    "type": "text",
+                    "text": root_title,
+                    "x": 0,
+                    "y": 0,
+                    "width": root_w,
+                    "height": root_h,
+                    "color": "4",
+                },
+            )
+
+        existing_file_nodes: Dict[str, str] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("type") or "").strip().lower() != "file":
+                continue
+            node_id = str(node.get("id") or "").strip()
+            ref = str(node.get("file") or "").strip().replace("\\", "/")
+            if node_id and ref:
+                existing_file_nodes[ref] = node_id
+
+        right_edge = 0.0
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            try:
+                node_right = float(node.get("x", 0) or 0) + float(node.get("width", 220) or 220)
+            except Exception:
+                node_right = 0.0
+            right_edge = max(right_edge, node_right)
+        base_x = right_edge + 220.0
+        base_y = -140.0
+        step_y = 104.0
+
+        added_note_nodes = 0
+        added_note_edges = 0
+        linked_paths: List[str] = []
+        for index, note_abs in enumerate(self._list_book_markdown_files(book_abs)):
+            rel = self.mindmap_module._to_relative_vault_path(note_abs, vault_root).replace("\\", "/")
+            linked_paths.append(rel)
+            existing_id = existing_file_nodes.get(rel)
+            if existing_id:
+                if not self._has_edge_payload(edges, anchor_id, existing_id):
+                    edges.append(
+                        {
+                            "id": self._generate_unique_edge_id(),
+                            "fromNode": anchor_id,
+                            "toNode": existing_id,
+                            "fromSide": "right",
+                            "toSide": "left",
+                            "label": "material da obra",
+                            "color": "2",
+                        }
+                    )
+                    added_note_edges += 1
+                continue
+
+            node_id = self._generate_unique_node_id(f"node-livro-nota-{self._sanitize_filename(note_abs.stem)}")
+            card_w, card_h = self.mindmap_module._card_dimensions_for_title(note_abs.stem)
+            nodes.append(
+                {
+                    "id": node_id,
+                    "type": "file",
+                    "file": rel,
+                    "x": round(base_x, 2),
+                    "y": round(base_y + (index * step_y), 2),
+                    "width": card_w,
+                    "height": card_h,
+                    "color": "2",
+                }
+            )
+            existing_file_nodes[rel] = node_id
+            added_note_nodes += 1
+
+            if not self._has_edge_payload(edges, anchor_id, node_id):
+                edges.append(
+                    {
+                        "id": self._generate_unique_edge_id(),
+                        "fromNode": anchor_id,
+                        "toNode": node_id,
+                        "fromSide": "right",
+                        "toSide": "left",
+                        "label": "material da obra",
+                        "color": "2",
+                    }
+                )
+                added_note_edges += 1
+
+        canvas_merge = self._import_existing_book_canvas_into_discipline(
+            vault_root=vault_root,
+            anchor_id=anchor_id,
+            work_title=work_title,
+            author_name=author_name,
+            book_abs=book_abs,
+            nodes=nodes,
+            edges=edges,
+            existing_file_nodes=existing_file_nodes,
+        )
+        canvas_ref = str(canvas_merge.get("canvas_ref") or "").strip()
+        if canvas_ref:
+            linked_paths.append(canvas_ref)
+
+        discipline_update = self._append_links_to_discipline_note(
+            discipline=discipline,
+            linked_paths=linked_paths,
+        )
+
+        self.current_canvas_payload = {"nodes": nodes, "edges": edges}
+        self._render_canvas(self.current_canvas_payload, reset_zoom=False)
+        self._persist_canvas_payload()
+        self.status_label.setText(f"Livro {author_name}/{work_title} integrado à disciplina")
+
+        return {
+            "ok": True,
+            "added_note_nodes": added_note_nodes,
+            "added_note_edges": added_note_edges,
+            "imported_canvas_nodes": int(canvas_merge.get("added_nodes", 0) or 0),
+            "imported_canvas_edges": int(canvas_merge.get("added_edges", 0) or 0),
+            "discipline_links_added": int(discipline_update.get("added_links", 0) or 0),
+            "discipline_note_path": discipline_update.get("note_path", ""),
+            "book_dir": str(book_abs),
+        }
+
+    def _list_book_markdown_files(self, book_dir: Path) -> List[Path]:
+        files = [path for path in book_dir.rglob("*.md") if path.is_file()]
+        files.sort(key=lambda p: (len(p.relative_to(book_dir).parts), p.name.lower()))
+        return files
+
+    def _import_existing_book_canvas_into_discipline(
+        self,
+        *,
+        vault_root: Path,
+        anchor_id: str,
+        work_title: str,
+        author_name: str,
+        book_abs: Path,
+        nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+        existing_file_nodes: Dict[str, str],
+    ) -> Dict[str, Any]:
+        canvas_path = self._find_canvas_for_existing_book(vault_root=vault_root, work_title=work_title, book_abs=book_abs)
+        if not canvas_path or not canvas_path.exists():
+            return {"added_nodes": 0, "added_edges": 0, "canvas_ref": ""}
+
+        imported = self.mindmap_module.load_canvas_payload(canvas_path)
+        import_nodes = imported.get("nodes") if isinstance(imported.get("nodes"), list) else []
+        import_edges = imported.get("edges") if isinstance(imported.get("edges"), list) else []
+        if not import_nodes:
+            return {"added_nodes": 0, "added_edges": 0, "canvas_ref": ""}
+
+        right_edge = 0.0
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            try:
+                node_right = float(node.get("x", 0) or 0) + float(node.get("width", 220) or 220)
+            except Exception:
+                node_right = 0.0
+            right_edge = max(right_edge, node_right)
+
+        xs: List[float] = []
+        ys: List[float] = []
+        for node in import_nodes:
+            if not isinstance(node, dict):
+                continue
+            try:
+                xs.append(float(node.get("x", 0) or 0))
+                ys.append(float(node.get("y", 0) or 0))
+            except Exception:
+                continue
+        min_x = min(xs) if xs else 0.0
+        min_y = min(ys) if ys else 0.0
+        offset_x = right_edge + 360.0
+        offset_y = -120.0
+
+        added_nodes = 0
+        added_edges = 0
+        id_map: Dict[str, str] = {}
+        imported_root_id = ""
+
+        for raw in import_nodes:
+            if not isinstance(raw, dict):
+                continue
+            old_id = str(raw.get("id") or "").strip()
+            if not old_id:
+                continue
+
+            node_type = str(raw.get("type") or "").strip().lower()
+            if node_type == "file":
+                file_ref = str(raw.get("file") or "").strip().replace("\\", "/")
+                existing_id = existing_file_nodes.get(file_ref)
+                if file_ref and existing_id:
+                    id_map[old_id] = existing_id
+                    if not imported_root_id and old_id == "node-livro":
+                        imported_root_id = existing_id
+                    continue
+
+            new_node = dict(raw)
+            new_id = self._generate_unique_node_id(f"node-import-{self._sanitize_filename(work_title)}")
+            new_node["id"] = new_id
+
+            try:
+                source_x = float(raw.get("x", 0) or 0)
+            except Exception:
+                source_x = 0.0
+            try:
+                source_y = float(raw.get("y", 0) or 0)
+            except Exception:
+                source_y = 0.0
+            new_node["x"] = round((source_x - min_x) + offset_x, 2)
+            new_node["y"] = round((source_y - min_y) + offset_y, 2)
+
+            nodes.append(new_node)
+            id_map[old_id] = new_id
+            added_nodes += 1
+
+            if node_type == "file":
+                file_ref = str(new_node.get("file") or "").strip().replace("\\", "/")
+                if file_ref:
+                    existing_file_nodes[file_ref] = new_id
+
+            if not imported_root_id:
+                text_norm = self._normalize_token(str(new_node.get("text") or ""))
+                if old_id == "node-livro" or "mapa base da obra" in text_norm:
+                    imported_root_id = new_id
+
+        if not imported_root_id and id_map:
+            imported_root_id = next(iter(id_map.values()))
+
+        for raw_edge in import_edges:
+            if not isinstance(raw_edge, dict):
+                continue
+            from_old = str(raw_edge.get("fromNode") or "").strip()
+            to_old = str(raw_edge.get("toNode") or "").strip()
+            from_new = id_map.get(from_old, "")
+            to_new = id_map.get(to_old, "")
+            if not from_new or not to_new or from_new == to_new:
+                continue
+
+            from_side = str(raw_edge.get("fromSide") or "right").strip().lower() or "right"
+            to_side = str(raw_edge.get("toSide") or "left").strip().lower() or "left"
+            if self._has_edge_payload(edges, from_new, to_new, from_side, to_side):
+                continue
+
+            edges.append(
+                {
+                    "id": self._generate_unique_edge_id(),
+                    "fromNode": from_new,
+                    "toNode": to_new,
+                    "fromSide": from_side,
+                    "toSide": to_side,
+                    "label": str(raw_edge.get("label") or "").strip(),
+                    "color": str(raw_edge.get("color") or "2"),
+                }
+            )
+            added_edges += 1
+
+        if imported_root_id and not self._has_edge_payload(edges, anchor_id, imported_root_id):
+            edges.append(
+                {
+                    "id": self._generate_unique_edge_id(),
+                    "fromNode": anchor_id,
+                    "toNode": imported_root_id,
+                    "fromSide": "right",
+                    "toSide": "left",
+                    "label": f"obra: {author_name}/{work_title}",
+                    "color": "2",
+                }
+            )
+            added_edges += 1
+
+        return {
+            "added_nodes": added_nodes,
+            "added_edges": added_edges,
+            "canvas_ref": self.mindmap_module._to_relative_vault_path(canvas_path, vault_root),
+        }
+
+    def _find_canvas_for_existing_book(self, *, vault_root: Path, work_title: str, book_abs: Path) -> Optional[Path]:
+        direct = self._canvas_path_for_book(work_title)
+        if direct and direct.exists():
+            return direct
+
+        from_dir_name = self._canvas_path_for_book(book_abs.name)
+        if from_dir_name and from_dir_name.exists():
+            return from_dir_name
+
+        maps_dir = vault_root / self.MINDMAPS_DIR
+        if not maps_dir.exists():
+            return None
+
+        target = self._normalize_token(work_title)
+        best: Optional[Path] = None
+        best_score: Optional[int] = None
+        for candidate in sorted(maps_dir.glob("*.canvas")):
+            stem_norm = self._normalize_token(candidate.stem)
+            if not target:
+                continue
+            if target not in stem_norm and stem_norm not in target:
+                continue
+            score = abs(len(stem_norm) - len(target))
+            if best is None or best_score is None or score < best_score:
+                best = candidate
+                best_score = score
+        return best
+
+    @staticmethod
+    def _has_edge_payload(
+        edges: List[Dict[str, Any]],
+        from_node: str,
+        to_node: str,
+        from_side: str = "",
+        to_side: str = "",
+    ) -> bool:
+        from_id = str(from_node or "").strip()
+        to_id = str(to_node or "").strip()
+        side_from = str(from_side or "").strip().lower()
+        side_to = str(to_side or "").strip().lower()
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if str(edge.get("fromNode") or "").strip() != from_id:
+                continue
+            if str(edge.get("toNode") or "").strip() != to_id:
+                continue
+            if side_from and str(edge.get("fromSide") or "").strip().lower() != side_from:
+                continue
+            if side_to and str(edge.get("toSide") or "").strip().lower() != side_to:
+                continue
+            return True
+        return False
+
+    def _append_links_to_discipline_note(self, *, discipline: str, linked_paths: List[str]) -> Dict[str, Any]:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return {"added_links": 0, "note_path": ""}
+
+        note_path = self.current_discipline_note_path or self._resolve_discipline_note_path(discipline)
+        if note_path is None:
+            discipline_dir = vault_root / "05-DISCIPLINAS"
+            discipline_dir.mkdir(parents=True, exist_ok=True)
+            note_path = discipline_dir / f"{self._sanitize_filename(discipline)}.md"
+            if not note_path.exists():
+                note_path.write_text(
+                    "\n".join(
+                        [
+                            f"# {discipline}",
+                            "",
+                            "Assistente organizando conteúdos da disciplina.",
+                            "",
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+        try:
+            content = note_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            content = f"# {discipline}\n\n"
+
+        existing_targets: set[str] = set()
+        for token in re.findall(r"\[\[([^\]]+)\]\]", content):
+            target = token.split("|", 1)[0].strip().replace("\\", "/")
+            if target:
+                existing_targets.add(target)
+
+        new_lines: List[str] = []
+        for raw in linked_paths:
+            normalized = str(raw or "").strip().replace("\\", "/")
+            if not normalized:
+                continue
+            target = str(Path(normalized).with_suffix("")).replace("\\", "/")
+            if target in existing_targets:
+                continue
+            existing_targets.add(target)
+            label = Path(target).name
+            new_lines.append(f"- [[{target}|{label}]]")
+
+        if not new_lines:
+            self.current_discipline_note_path = note_path
+            return {"added_links": 0, "note_path": str(note_path)}
+
+        section_header = "## 🔗 Materiais vinculados"
+        chunks: List[str] = [content.rstrip()]
+        if section_header not in content:
+            chunks.append("")
+            chunks.append(section_header)
+        chunks.extend(new_lines)
+        updated = "\n".join(chunks).rstrip() + "\n"
+
+        try:
+            note_path.write_text(updated, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Falha ao atualizar nota de disciplina com novos links: %s", exc)
+            return {"added_links": 0, "note_path": str(note_path)}
+
+        self.current_discipline_note_path = note_path
+        return {"added_links": len(new_lines), "note_path": str(note_path)}
 
     def _next_isolated_spawn_point(self, card_width: int, card_height: int) -> QPointF:
         """Retorna posição de criação em coluna isolada à direita do mapa atual."""
@@ -1531,6 +2226,66 @@ class ReviewWorkspaceView(QWidget):
 
         self._persist_canvas_payload()
         self.status_label.setText("Conexão criada")
+
+    def _create_edge_between(
+        self,
+        *,
+        from_node: str,
+        to_node: str,
+        color_id: str = "6",
+        label: str = "",
+        from_side: str = "right",
+        to_side: str = "left",
+    ) -> bool:
+        from_id = str(from_node or "").strip()
+        to_id = str(to_node or "").strip()
+        if not from_id or not to_id or from_id == to_id:
+            return False
+        source_item = self._node_items.get(from_id)
+        target_item = self._node_items.get(to_id)
+        if not source_item or not target_item:
+            return False
+
+        edges = self.current_canvas_payload.get("edges")
+        if not isinstance(edges, list):
+            edges = []
+            self.current_canvas_payload["edges"] = edges
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if (
+                str(edge.get("fromNode") or "").strip() == from_id
+                and str(edge.get("toNode") or "").strip() == to_id
+                and str(edge.get("fromSide") or "right").strip().lower() == from_side
+                and str(edge.get("toSide") or "left").strip().lower() == to_side
+            ):
+                return False
+
+        edge_payload = {
+            "id": self._generate_unique_edge_id(),
+            "fromNode": from_id,
+            "toNode": to_id,
+            "fromSide": from_side,
+            "toSide": to_side,
+            "label": str(label or "").strip(),
+            "color": str(color_id or "6"),
+        }
+        edges.append(edge_payload)
+
+        edge_item = MindmapEdgeItem(
+            from_item=source_item,
+            to_item=target_item,
+            color=self._edge_color_for_id(str(edge_payload.get("color") or "")),
+            from_side=from_side,
+            to_side=to_side,
+            label=str(label or "").strip(),
+        )
+        self.scene.addItem(edge_item)
+        self._edge_items.append(edge_item)
+        self._edges_by_node.setdefault(from_id, []).append(edge_item)
+        self._edges_by_node.setdefault(to_id, []).append(edge_item)
+        return True
 
     def _update_edges_for_node(self, node_id: str):
         for edge_item in self._edges_by_node.get(str(node_id or "").strip(), []):

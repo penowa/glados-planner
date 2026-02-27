@@ -30,6 +30,7 @@ except ImportError:
                     "02-ANOTAÇÕES",
                     "03-REVISÃO",
                     "04-MAPAS MENTAIS",
+                    "05-DISCIPLINAS",
                     "06-RECURSOS",
                 ]
                 brain_regions = ["MEMÓRIA", "ANÁLISE"]
@@ -167,7 +168,8 @@ class BookProcessor:
         output_dir: Optional[str] = None,
         schedule_night: bool = False,
         force_immediate: bool = False,
-        integrate_with_vault: bool = True
+        integrate_with_vault: bool = True,
+        discipline: str = "",
     ) -> ProcessingResult:
         """
         Processa um livro completo.
@@ -179,6 +181,7 @@ class BookProcessor:
             schedule_night: Agendar para processamento noturno
             force_immediate: Se True, não agenda automaticamente por tempo estimado
             integrate_with_vault: Se True, integra resultado no vault automaticamente
+            discipline: Nome da disciplina (obrigatório para PDF)
             
         Returns:
             ProcessingResult com o resultado
@@ -221,6 +224,9 @@ class BookProcessor:
             
             # Processar baseado no formato
             extension = Path(filepath).suffix.lower()
+            normalized_discipline = str(discipline or "").strip()
+            if extension == ".pdf" and not normalized_discipline:
+                raise ValueError("Processamento de PDF requer o nome da disciplina.")
             processor_func = self.supported_formats.get(extension)
             
             if not processor_func:
@@ -241,7 +247,7 @@ class BookProcessor:
             
             # Integrar com o vault
             if result.status == ProcessingStatus.COMPLETED and integrate_with_vault:
-                self._integrate_with_vault(result, output_path)
+                self._integrate_with_vault(result, output_path, discipline=normalized_discipline)
             
             if result.status == ProcessingStatus.COMPLETED:
                 logger.info(f"Processamento concluído: {metadata.title}")
@@ -464,7 +470,12 @@ class BookProcessor:
                 error=f"Erro no processamento EPUB: {e}"
             )
     
-    def _integrate_with_vault(self, result: ProcessingResult, output_dir: Path) -> None:
+    def _integrate_with_vault(
+        self,
+        result: ProcessingResult,
+        output_dir: Path,
+        discipline: str = "",
+    ) -> None:
         """Integra o livro processado com o vault do Obsidian."""
         try:
             metadata = result.metadata
@@ -586,12 +597,72 @@ class BookProcessor:
                 content=concepts_content,
                 frontmatter={'title': f'Conceitos-Chave - {metadata.title}', 'type': 'concepts'}
             )
+
+            self._create_discipline_note(metadata, discipline)
             
             logger.info(f"Livro integrado ao vault: {metadata.title}")
             
         except Exception as e:
             logger.error(f"Erro ao integrar livro com vault: {e}")
             raise
+
+    def _create_discipline_note(self, metadata: BookMetadata, discipline: str) -> None:
+        """Cria/atualiza nota em 05-DISCIPLINAS para o livro processado."""
+        discipline_name = str(discipline or "").strip()
+        if not discipline_name:
+            return
+
+        safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
+        safe_title = self._sanitize_filename(metadata.title)
+        safe_discipline = self._sanitize_filename(discipline_name)
+        note_path = f"05-DISCIPLINAS/{safe_discipline}.md"
+
+        discipline_tag = self._discipline_tag(discipline_name)
+        book_link = f"[[01-LEITURAS/{safe_author}/{safe_title}/📖 {safe_title}|{metadata.title}]]"
+        intro = (
+            f"# Disciplina: {discipline_name}\n\n"
+            "A assistente está organizando os conteúdos desta disciplina para manter o estudo conectado.\n\n"
+            "## Livro processado\n"
+        )
+        link_line = f"- {book_link}\n"
+        tag_line = f"- #{discipline_tag}\n"
+
+        existing_note = self.vault_manager.get_note_by_path(note_path)
+        frontmatter = {
+            "title": f"Disciplina - {discipline_name}",
+            "type": "disciplina",
+            "discipline": discipline_name,
+            "tags": ["disciplina", discipline_tag],
+        }
+
+        if existing_note:
+            content = existing_note.content or ""
+            if "## Livro processado" not in content:
+                content = content.rstrip() + "\n\n## Livro processado\n"
+            if link_line.strip() not in content:
+                content = content.rstrip() + "\n" + link_line
+            if f"#{discipline_tag}" not in content:
+                content = content.rstrip() + "\n" + tag_line
+
+            merged_frontmatter = dict(existing_note.frontmatter or {})
+            existing_tags = merged_frontmatter.get("tags", [])
+            if isinstance(existing_tags, str):
+                existing_tags = [existing_tags]
+            merged_frontmatter.update(frontmatter)
+            merged_frontmatter["tags"] = list(dict.fromkeys([*existing_tags, "disciplina", discipline_tag]))
+
+            self.vault_manager.update_note(
+                note_path,
+                content=content.rstrip() + "\n",
+                frontmatter=merged_frontmatter,
+            )
+            return
+
+        self.vault_manager.create_note(
+            note_path,
+            content=intro + link_line + tag_line,
+            frontmatter=frontmatter,
+        )
     
     def _format_chapters_list(self, chapters: List[Dict]) -> str:
         """Formata lista de capítulos para markdown."""
@@ -783,6 +854,12 @@ class BookProcessor:
         filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
         filename = re.sub(r'\s+', ' ', filename).strip()
         return filename[:100]  # Limitar tamanho
+
+    def _discipline_tag(self, discipline: str) -> str:
+        normalized = unicodedata.normalize("NFKD", str(discipline or "").strip())
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+        return normalized or "disciplina"
 
     def _normalize_path_key(self, value: str) -> str:
         """Normaliza texto para comparação estável de pastas."""

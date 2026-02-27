@@ -48,6 +48,17 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QTimeEdit,
 )
+from ui.utils.discipline_links import (
+    append_event_link,
+    ensure_discipline_note,
+    list_disciplines,
+    resolve_vault_root,
+)
+
+try:
+    from core.config.settings import settings as core_settings
+except Exception:
+    core_settings = None
 
 logger = logging.getLogger("GLaDOS.UI.AgendaView")
 
@@ -1169,6 +1180,7 @@ class AddEventDialog(QDialog):
         super().__init__(parent)
         self.controller = controller
         self.default_date = default_date
+        self._vault_root = self._resolve_vault_root()
 
         self.setWindowTitle("Adicionar compromisso")
         self.setModal(True)
@@ -1240,8 +1252,18 @@ class AddEventDialog(QDialog):
         self.description_input.setMaximumHeight(90)
         form.addRow("Descrição:", self.description_input)
 
-        self.discipline_input = QLineEdit()
-        form.addRow("Disciplina:", self.discipline_input)
+        discipline_row = QHBoxLayout()
+        self.discipline_input = QComboBox()
+        self.discipline_input.setEditable(True)
+        self.discipline_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._reload_disciplines()
+        self.new_discipline_button = QPushButton("Nova")
+        self.new_discipline_button.clicked.connect(self._create_selected_discipline)
+        discipline_row.addWidget(self.discipline_input, 1)
+        discipline_row.addWidget(self.new_discipline_button)
+        discipline_wrap = QWidget()
+        discipline_wrap.setLayout(discipline_row)
+        form.addRow("Disciplina:", discipline_wrap)
 
         layout.addLayout(form)
 
@@ -1280,16 +1302,66 @@ class AddEventDialog(QDialog):
             "event_type": self.type_combo.currentText(),
             "priority": priority_map.get(self.priority_combo.currentText(), 2),
             "description": self.description_input.toPlainText().strip(),
-            "discipline": self.discipline_input.text().strip() or None,
+            "discipline": self._selected_discipline() or None,
         }
 
+        discipline_name = self._selected_discipline()
+        if discipline_name and self._vault_root:
+            ensure_discipline_note(self._vault_root, discipline_name)
+
+        event_id = ""
         if self.controller and hasattr(self.controller, "add_event"):
             event_id = self.controller.add_event(payload)
             if not event_id:
                 QMessageBox.warning(self, "Erro", "Não foi possível salvar o compromisso.")
                 return
 
+        if discipline_name and self._vault_root:
+            append_event_link(
+                self._vault_root,
+                discipline_name,
+                title=title,
+                start=start,
+                end=end,
+                event_id=str(event_id or ""),
+            )
+
         self.accept()
+
+    def _resolve_vault_root(self):
+        candidates = []
+        if self.controller and getattr(self.controller, "agenda_manager", None):
+            manager = self.controller.agenda_manager
+            candidates.append(getattr(manager, "vault_path", ""))
+        candidates.append(getattr(getattr(core_settings, "paths", None), "vault", ""))
+        return resolve_vault_root(*candidates)
+
+    def _reload_disciplines(self):
+        current = self._selected_discipline()
+        self.discipline_input.clear()
+        names = list_disciplines(self._vault_root) if self._vault_root else []
+        self.discipline_input.addItems(names)
+        if current:
+            idx = self.discipline_input.findText(current)
+            if idx >= 0:
+                self.discipline_input.setCurrentIndex(idx)
+            else:
+                self.discipline_input.setEditText(current)
+
+    def _selected_discipline(self) -> str:
+        return self.discipline_input.currentText().strip() if self.discipline_input else ""
+
+    def _create_selected_discipline(self):
+        name = self._selected_discipline()
+        if not name:
+            QMessageBox.information(self, "Disciplina", "Informe o nome da nova disciplina.")
+            self.discipline_input.setFocus()
+            return
+        created = ensure_discipline_note(self._vault_root, name) if self._vault_root else None
+        if not created:
+            QMessageBox.warning(self, "Disciplina", "Não foi possível criar a nota da disciplina.")
+            return
+        self._reload_disciplines()
 
 
 class FindSlotDialog(QDialog):

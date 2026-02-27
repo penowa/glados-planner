@@ -138,8 +138,8 @@ class OnboardingDialog(QDialog):
 
         layout.addWidget(
             self._create_info_box(
-                "Objetivo: deixar o planner pronto para uso em poucos cliques.\n"
-                "O tutorial e opcional: se preferir, use 'Pular por agora' e finalize depois em Configuracoes."
+                "Vamos deixar o seu planner pronto para uso em poucos cliques.\n"
+                "O tutorial é opcional: se preferir, use 'Pular por agora' e finalize depois em Configurações."
             )
         )
 
@@ -182,7 +182,7 @@ class OnboardingDialog(QDialog):
 
         self.quick_setup_status_label = QLabel("Status rapido: nenhum preset aplicado.")
         self.quick_setup_status_label.setWordWrap(True)
-        self.quick_setup_status_label.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        self.quick_setup_status_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
         quick_layout.addWidget(self.quick_setup_status_label)
 
         layout.addWidget(quick_box)
@@ -274,11 +274,11 @@ class OnboardingDialog(QDialog):
             "qwen3.5:cloud sera preparado automaticamente."
         )
         self.ollama_login_help_label.setWordWrap(True)
-        self.ollama_login_help_label.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        self.ollama_login_help_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
 
         self.ollama_status_label = QLabel("Status Ollama: nao verificado.")
         self.ollama_status_label.setWordWrap(True)
-        self.ollama_status_label.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        self.ollama_status_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
 
         self.llm_download_choice_combo = QComboBox()
         self.llm_download_choice_combo.addItem("Nao baixar agora", "none")
@@ -292,7 +292,7 @@ class OnboardingDialog(QDialog):
 
         self.llm_download_status_label = QLabel("Status de download: nenhum.")
         self.llm_download_status_label.setWordWrap(True)
-        self.llm_download_status_label.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        self.llm_download_status_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
 
         model_catalog_layout = QHBoxLayout()
         model_catalog_layout.addWidget(self.llm_model_combo)

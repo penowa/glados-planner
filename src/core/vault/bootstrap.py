@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
+from .meta_docs import get_meta_help_notes
 
 DEFAULT_VAULT_STRUCTURE = (
     "00-META",
@@ -14,6 +15,7 @@ DEFAULT_VAULT_STRUCTURE = (
     "02-ANOTAÇÕES",
     "03-REVISÃO",
     "04-MAPAS MENTAIS",
+    "05-DISCIPLINAS",
     "06-RECURSOS",
 )
 
@@ -23,6 +25,7 @@ README_DESCRIPTIONS = {
     "02-ANOTAÇÕES": "Anotações do usuário durante estudo/leitura.",
     "03-REVISÃO": "Materiais de revisão gerados com LLM.",
     "04-MAPAS MENTAIS": "Mapas mentais e estruturas visuais (Canva).",
+    "05-DISCIPLINAS": "Conteúdos organizados por disciplina.",
     "06-RECURSOS": "Recursos de apoio, caches e registros.",
 }
 
@@ -50,6 +53,7 @@ def bootstrap_vault(vault_path: str, vault_structure: Iterable[str] | None = Non
 
     _ensure_obsidian_config(resolved_vault)
     _ensure_index_file(resolved_vault)
+    _ensure_meta_help_notes(resolved_vault)
     _ensure_expected_json_files(resolved_vault)
     return resolved_vault
 
@@ -100,6 +104,7 @@ def _ensure_index_file(vault_path: Path) -> None:
         "- **02-ANOTAÇÕES**: Notas do usuário\n"
         "- **03-REVISÃO**: Resumos, flashcards e perguntas de revisão\n"
         "- **04-MAPAS MENTAIS**: Materiais visuais\n"
+        "- **05-DISCIPLINAS**: Conteúdos organizados por disciplina\n"
         "- **06-RECURSOS**: Arquivos de suporte e registros\n"
     )
     index_path.write_text(content, encoding="utf-8")
@@ -119,6 +124,37 @@ def _ensure_expected_json_files(vault_path: Path) -> None:
     _ensure_json(resource_dir / "review_questions.json", {})
     _ensure_json(resource_dir / "review_chapter_difficulty.json", {})
     _ensure_json(resource_dir / "review_runtime.json", {"question_interval_minutes": 10})
+
+
+def _ensure_meta_help_notes(vault_path: Path) -> None:
+    meta_dir = vault_path / "00-META"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _meta_dir_needs_seed(meta_dir):
+        return
+
+    for relative_path, content in get_meta_help_notes().items():
+        note_path = meta_dir / relative_path
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        if note_path.exists():
+            continue
+        note_path.write_text(content, encoding="utf-8")
+
+
+def _meta_dir_needs_seed(meta_dir: Path) -> bool:
+    if not meta_dir.exists():
+        return True
+
+    files = [
+        path
+        for path in meta_dir.rglob("*")
+        if path.is_file() and not path.name.startswith(".")
+    ]
+    if not files:
+        return True
+
+    user_docs = [path for path in files if path.name.lower() != "readme.md"]
+    return len(user_docs) == 0
 
 
 def _ensure_json(path: Path, default_payload: dict) -> None:

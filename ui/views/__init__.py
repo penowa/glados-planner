@@ -9,3 +9,4 @@ from .vault_glados import VaultGladosView
 from .weekly_review import WeeklyReviewView
 from .library import LibraryView
 from .review_workspace import ReviewWorkspaceView
+from .discipline_chat import DisciplineChatView

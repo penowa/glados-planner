@@ -73,6 +73,7 @@ class BookProcessingPipeline(QThread):
         self.notes_config = self.config.get("notes_config", {})
         self.scheduling_config = self.config.get("scheduling_config", {})
         self.user_metadata = self.config.get("metadata", {})
+        self.discipline = str(self.config.get("discipline", "") or "").strip()
  
     def _analyze_book(self) -> Dict:
         """Etapa 1: Análise do arquivo (atualizada para usar metadados do usuário)"""
@@ -248,6 +249,9 @@ class BookProcessingPipeline(QThread):
         supported_formats = ['.pdf', '.epub']
         if self.file_path.suffix.lower() not in supported_formats:
             raise ValueError(f"Formato não suportado: {self.file_path.suffix}. Formatos suportados: {supported_formats}")
+
+        if self.file_path.suffix.lower() == ".pdf" and not self.discipline:
+            raise ValueError("Processamento de PDF requer o nome da disciplina.")
         
         # Verificar tamanho do arquivo
         file_size_mb = self.file_path.stat().st_size / (1024 * 1024)
@@ -321,7 +325,8 @@ class BookProcessingPipeline(QThread):
             output_dir=str(temp_output_dir),
             schedule_night=False,  # Processar imediatamente
             force_immediate=True,
-            integrate_with_vault=False
+            integrate_with_vault=False,
+            discipline=self.discipline,
         )
         
         if result.status.value == "failed":
@@ -552,7 +557,8 @@ class BookProcessingPipeline(QThread):
             vault_result = self.controller.integrate_with_vault(
                 book_id=self.book_id,
                 metadata=self.metadata,
-                chapters=self.extracted_content
+                chapters=self.extracted_content,
+                discipline=self.discipline,
             )
             integration_result.update(vault_result)
         
@@ -564,7 +570,8 @@ class BookProcessingPipeline(QThread):
             "file_path": str(self.file_path),
             "processed_at": datetime.now().isoformat(),
             "quality": self.quality,
-            "chapters": len(self.extracted_content) if self.extracted_content else 0
+            "chapters": len(self.extracted_content) if self.extracted_content else 0,
+            "discipline": self.discipline,
         }
         
         self.stage_progress.emit(self.pipeline_id, "integration", 100, "Integração concluída")
@@ -1358,7 +1365,13 @@ class BookController(QObject):
         
         return result
     
-    def integrate_with_vault(self, book_id: str, metadata, chapters: List[Dict]) -> Dict:
+    def integrate_with_vault(
+        self,
+        book_id: str,
+        metadata,
+        chapters: List[Dict],
+        discipline: str = "",
+    ) -> Dict:
         """Integra livro com o vault do Obsidian"""
         result = {
             "book_id": book_id,
@@ -1381,12 +1394,17 @@ class BookController(QObject):
             concepts_result = self._create_concepts_note(book_id, metadata)
             if concepts_result.get("concepts_note_created"):
                 result["steps_completed"].append("concepts_note_created")
+
+            discipline_result = self._create_discipline_note(metadata, discipline)
+            if discipline_result.get("discipline_note_created"):
+                result["steps_completed"].append("discipline_note_created")
             
             result["success"] = len(result["steps_completed"]) > 0
             result["details"] = {
                 "structure": structure_result,
                 "index": index_result,
-                "concepts": concepts_result
+                "concepts": concepts_result,
+                "discipline": discipline_result,
             }
             
         except Exception as e:
@@ -1454,6 +1472,81 @@ class BookController(QObject):
             result["error"] = str(e)
         
         return result
+
+    def _create_discipline_note(self, metadata, discipline: str) -> Dict:
+        """Cria/atualiza nota da disciplina com vínculo ao livro processado."""
+        result = {"discipline_note_created": False}
+
+        discipline_name = str(discipline or "").strip()
+        if not discipline_name or not self.vault_manager:
+            return result
+
+        try:
+            safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
+            safe_title = self._sanitize_filename(metadata.title)
+            safe_discipline = self._sanitize_filename(discipline_name)
+            note_path = f"05-DISCIPLINAS/{safe_discipline}.md"
+
+            discipline_tag = self._discipline_tag(discipline_name)
+            book_link = f"[[01-LEITURAS/{safe_author}/{safe_title}/📖 {safe_title}|{metadata.title}]]"
+
+            intro = (
+                f"# Disciplina: {discipline_name}\n\n"
+                "A assistente está organizando os conteúdos desta disciplina para facilitar revisão contínua.\n\n"
+                "## Livro processado\n"
+            )
+            link_line = f"- {book_link}\n"
+            tag_line = f"- #{discipline_tag}\n"
+
+            existing_note = self.vault_manager.get_note_by_path(note_path)
+            frontmatter = {
+                "title": f"Disciplina - {discipline_name}",
+                "type": "disciplina",
+                "discipline": discipline_name,
+                "tags": ["disciplina", discipline_tag],
+            }
+
+            if existing_note:
+                content = existing_note.content or ""
+                if "## Livro processado" not in content:
+                    content = content.rstrip() + "\n\n## Livro processado\n"
+                if link_line.strip() not in content:
+                    content = content.rstrip() + "\n" + link_line
+                if f"#{discipline_tag}" not in content:
+                    content = content.rstrip() + "\n" + tag_line
+
+                merged_frontmatter = dict(existing_note.frontmatter or {})
+                existing_tags = merged_frontmatter.get("tags", [])
+                if isinstance(existing_tags, str):
+                    existing_tags = [existing_tags]
+                merged_frontmatter.update(frontmatter)
+                merged_frontmatter["tags"] = list(dict.fromkeys([*existing_tags, "disciplina", discipline_tag]))
+
+                self.vault_manager.update_note(
+                    note_path,
+                    content=content.rstrip() + "\n",
+                    frontmatter=merged_frontmatter,
+                )
+            else:
+                content = intro + link_line + tag_line
+                self.vault_manager.create_note(
+                    note_path,
+                    content=content,
+                    frontmatter=frontmatter,
+                )
+
+            result["discipline_note_created"] = True
+        except Exception as e:
+            result["error"] = str(e)
+            logger.error("Erro criando nota de disciplina: %s", e)
+
+        return result
+
+    def _discipline_tag(self, discipline: str) -> str:
+        normalized = unicodedata.normalize("NFKD", str(discipline or "").strip())
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+        return normalized or "disciplina"
     
     def register_book_in_system(self, book_id: str, title: str, author: str, 
                                total_pages: int, file_path: Path) -> Dict:

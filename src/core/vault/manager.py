@@ -89,6 +89,7 @@ class VaultManager:
             "02-ANOTAÇÕES": "Anotações do usuário durante estudo/leitura.",
             "03-REVISÃO": "Materiais de revisão gerados com LLM.",
             "04-MAPAS MENTAIS": "Mapas mentais e estruturas visuais (Canva).",
+            "05-DISCIPLINAS": "Conteúdos organizados por disciplina.",
             "06-RECURSOS": "Recursos de apoio, caches e registros."
         }
         
@@ -139,6 +140,7 @@ Bem-vindo ao seu vault gerenciado pelo **GLaDOS**.
 - **02-ANOTAÇÕES**: Notas do usuário
 - **03-REVISÃO**: Resumos, flashcards e perguntas de revisão
 - **04-MAPAS MENTAIS**: Materiais visuais (Canva)
+- **05-DISCIPLINAS**: Conteúdos organizados por disciplina
 - **06-RECURSOS**: Arquivos de suporte e registros
 
 ## Como Usar

@@ -206,7 +206,7 @@ class DashboardView(QWidget):
         self.date_label = QLabel(QDateTime.currentDateTime().toString("dddd, dd 'de' MMMM"))
         self.date_label.setObjectName("minimal_date")
         self.date_label.setFont(QFont("FiraCode Nerd Font Propo", 10))
-        self.date_label.setStyleSheet("color: #8A94A6;")
+        self.date_label.setStyleSheet("color: #8F8F8F;")
         
         # Botão de refresh
         refresh_button = QPushButton("🔄")

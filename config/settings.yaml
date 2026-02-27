@@ -81,6 +81,7 @@ obsidian:
   - 02-ANOTAÇÕES
   - 03-REVISÃO
   - 04-MAPAS MENTAIS
+  - 05-DISCIPLINAS
   - 06-RECURSOS
   brain_regions:
     00-META: Sistema e metadados
@@ -88,6 +89,7 @@ obsidian:
     02-ANOTAÇÕES: Notas do usuário
     03-REVISÃO: Materiais de revisão LLM
     04-MAPAS MENTAIS: Estruturas visuais e Canva
+    05-DISCIPLINAS: Organização por disciplinas de estudo
     06-RECURSOS: Recursos e registros auxiliares
 pomodoro:
   work_duration: 25

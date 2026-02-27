@@ -7,9 +7,9 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QSizePolicy, QFrame, QLabel, 
     QPushButton, QToolBar, QStatusBar, QMessageBox,
     QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox,
-    QToolButton
+    QGraphicsOpacityEffect
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QRect, QEasingCurve, QPropertyAnimation
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QPen, QResizeEvent
 
 # Sistemas centrais
@@ -34,6 +34,7 @@ from ui.views.weekly_review import WeeklyReviewView
 from ui.views.library import LibraryView
 from ui.views.review_planner import ReviewPlanDialog
 from ui.views.review_workspace import ReviewWorkspaceView
+from ui.views.discipline_chat import DisciplineChatView
 
 # Controllers
 from ui.controllers.book_controller import BookController
@@ -47,7 +48,7 @@ from ui.controllers.daily_checkin_controller import DailyCheckinController
 from core.modules.daily_checkin import DailyCheckinSystem
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 from datetime import datetime
 from pathlib import Path
 import os
@@ -154,7 +155,12 @@ class MainWindow(QMainWindow):
         self._header_spacing_layout: QHBoxLayout | None = None
         self._header_actions_layout: QHBoxLayout | None = None
         self._header_extra_actions_layout: QHBoxLayout | None = None
-        self._compact_action_map: Dict[str, QAction] = {}
+        self._compact_action_map: Dict[str, Any] = {}
+        self._header_more_box: QFrame | None = None
+        self._header_more_opacity: QGraphicsOpacityEffect | None = None
+        self._header_more_buttons: Dict[str, QPushButton] = {}
+        self._header_more_geo_anim: QPropertyAnimation | None = None
+        self._header_more_opacity_anim: QPropertyAnimation | None = None
         
         # Configurações de UI
         self.animations_enabled = True
@@ -306,7 +312,7 @@ class MainWindow(QMainWindow):
         self.session_book_label = QLabel("")
         self.session_book_label.setObjectName("session_book_label")
         self.session_book_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.session_book_label.setStyleSheet("color: #9AA4B2; font-size: 11px;")
+        self.session_book_label.setStyleSheet("color: #A0A0A0; font-size: 11px;")
         self.session_book_label.setVisible(False)
         layout.addWidget(self.session_book_label)
         
@@ -326,45 +332,58 @@ class MainWindow(QMainWindow):
         primary_actions.addWidget(self.performance_widget)
 
         # Acesso rápido à sessão de leitura
-        self.session_quick_button = QPushButton("📖")
+        self.session_quick_button = QPushButton("◧")
         self.session_quick_button.setObjectName("session_quick_button")
         self.session_quick_button.setFixedSize(36, 36)
         self.session_quick_button.setToolTip("Abrir sessão de leitura")
         self.session_quick_button.clicked.connect(self.open_session_quick_access)
+        self._apply_header_round_button_style(self.session_quick_button)
         primary_actions.addWidget(self.session_quick_button)
 
         # Acesso à view de contexto (Vault + GLaDOS)
-        self.vault_glados_button = QPushButton("🔍")
+        self.vault_glados_button = QPushButton("◍")
         self.vault_glados_button.setObjectName("vault_glados_button")
         self.vault_glados_button.setFixedSize(36, 36)
         self.vault_glados_button.setToolTip(f"Abrir Vault + {self.custom_assistant_name}")
         self.vault_glados_button.clicked.connect(lambda: self.change_view("vault_glados"))
+        self._apply_header_round_button_style(self.vault_glados_button)
         primary_actions.addWidget(self.vault_glados_button)
 
+        self.discipline_chat_button = QPushButton("◉")
+        self.discipline_chat_button.setObjectName("discipline_chat_button")
+        self.discipline_chat_button.setFixedSize(36, 36)
+        self.discipline_chat_button.setToolTip("Abrir chats por disciplina")
+        self.discipline_chat_button.clicked.connect(lambda: self.change_view("discipline_chat"))
+        self._apply_header_round_button_style(self.discipline_chat_button)
+        primary_actions.addWidget(self.discipline_chat_button)
+
         # Acesso à Agenda
-        self.agenda_button = QPushButton("📅")
+        self.agenda_button = QPushButton("▣")
         self.agenda_button.setObjectName("agenda_button")
         self.agenda_button.setFixedSize(36, 36)
         self.agenda_button.setToolTip("Abrir Agenda")
         self.agenda_button.clicked.connect(lambda: self.change_view("agenda"))
+        self._apply_header_round_button_style(self.agenda_button)
         primary_actions.addWidget(self.agenda_button)
 
         # Acesso à Biblioteca
-        self.library_button = QPushButton("📚")
+        self.library_button = QPushButton("▦")
         self.library_button.setObjectName("library_button")
         self.library_button.setFixedSize(36, 36)
         self.library_button.setToolTip("Abrir Biblioteca")
         self.library_button.clicked.connect(lambda: self.change_view("library"))
+        self._apply_header_round_button_style(self.library_button)
         primary_actions.addWidget(self.library_button)
 
         layout.addLayout(primary_actions)
 
-        self.more_actions_button = QToolButton()
+        self.more_actions_button = QPushButton()
         self.more_actions_button.setObjectName("more_actions_button")
-        self.more_actions_button.setText("⋯")
+        self.more_actions_button.setText("⋮")
         self.more_actions_button.setFixedSize(36, 36)
         self.more_actions_button.setToolTip("Mais ações")
-        self.more_actions_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_actions_button.clicked.connect(self._toggle_header_more_box)
+        self._apply_header_round_button_style(self.more_actions_button)
         self._build_compact_actions_menu()
         self.more_actions_button.setVisible(False)
         layout.addWidget(self.more_actions_button)
@@ -380,45 +399,180 @@ class MainWindow(QMainWindow):
         self.theme_button.setFixedSize(36, 36)
         self.theme_button.setToolTip("Tema: Dark Academia")
         self.theme_button.clicked.connect(self.toggle_theme)
+        self._apply_header_round_button_style(self.theme_button)
         controls_layout.addWidget(self.theme_button)
         
         # Botão de configurações - NOVO
-        self.settings_button = QPushButton("⚙️")
+        self.settings_button = QPushButton("⚙")
         self.settings_button.setObjectName("settings_button")
         self.settings_button.setFixedSize(36, 36)
         self.settings_button.setToolTip("Configurações")
         self.settings_button.clicked.connect(self.show_settings)
+        self._apply_header_round_button_style(self.settings_button)
         controls_layout.addWidget(self.settings_button)
         
         # Botão para encerrar - NOVO
-        self.quit_button = QPushButton("✕")
+        self.quit_button = QPushButton("⨯")
         self.quit_button.setObjectName("quit_button")
         self.quit_button.setFixedSize(36, 36)
         self.quit_button.setToolTip("Encerrar aplicação")
         self.quit_button.clicked.connect(self.close_application)
+        self._apply_header_round_button_style(self.quit_button)
         controls_layout.addWidget(self.quit_button)
         
         layout.addLayout(controls_layout)
+        self._build_header_more_box()
+
+    def _apply_header_round_button_style(self, button: QPushButton):
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton{background:#1F1F1F; border:1px solid #313131; color:#C9C9C9; border-radius:18px; font-size:14px;}"
+            "QPushButton:hover{background:#2A2A2A; border-color:#454545; color:#F0F0F0;}"
+            "QPushButton:pressed{background:#171717;}"
+        )
 
     def _build_compact_actions_menu(self):
-        """Menu de disclosure progressivo para layouts compactos."""
-        compact_menu = QMenu(self)
+        """Atualiza ações exibidas no popup de disclosure progressivo."""
         actions = [
-            ("Abrir sessão de leitura", self.open_session_quick_access, "session"),
-            (f"Abrir Vault + {self.custom_assistant_name}", lambda: self.change_view("vault_glados"), "vault"),
-            ("Abrir Agenda", lambda: self.change_view("agenda"), "agenda"),
-            ("Abrir Biblioteca", lambda: self.change_view("library"), "library"),
-            ("Revisão semanal", lambda: self.change_view("weekly_review"), "review"),
-            ("Configurações", self.show_settings, "settings"),
-            ("Encerrar aplicação", self.close_application, "quit"),
+            ("notifications", "◌", "Notificações", self.show_notifications),
+            ("session", "◧", "Sessão de leitura", self.open_session_quick_access),
+            ("vault", "◍", f"Vault + {self.custom_assistant_name}", lambda: self.change_view("vault_glados")),
+            ("agenda", "▣", "Agenda", lambda: self.change_view("agenda")),
+            ("review", "◈", "Revisão semanal", lambda: self.change_view("weekly_review")),
+            ("theme", "◐", "Alternar tema", self.toggle_theme),
+            ("quit", "⨯", "Encerrar aplicação", self.close_application),
         ]
+        self._compact_action_map = {key: (glyph, label, callback) for key, glyph, label, callback in actions}
+        self._rebuild_header_more_box_buttons()
 
-        self._compact_action_map.clear()
-        for text, callback, key in actions:
-            action = compact_menu.addAction(text)
-            action.triggered.connect(callback)
-            self._compact_action_map[key] = action
-        self.more_actions_button.setMenu(compact_menu)
+    def _build_header_more_box(self):
+        if self._header_more_box is not None:
+            return
+        self._header_more_box = QFrame(self)
+        self._header_more_box.setObjectName("header_more_box")
+        self._header_more_box.setStyleSheet(
+            "QFrame#header_more_box{background:#1D1D1D; border:1px solid #313131; border-radius:14px;}"
+        )
+        layout = QVBoxLayout(self._header_more_box)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+        self._header_more_box.hide()
+
+        self._header_more_opacity = QGraphicsOpacityEffect(self._header_more_box)
+        self._header_more_opacity.setOpacity(0.0)
+        self._header_more_box.setGraphicsEffect(self._header_more_opacity)
+        self._rebuild_header_more_box_buttons()
+
+    def _rebuild_header_more_box_buttons(self):
+        if self._header_more_box is None:
+            return
+        layout = self._header_more_box.layout()
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._header_more_buttons.clear()
+        for key, data in self._compact_action_map.items():
+            glyph, label, callback = data
+            button = QPushButton(glyph)
+            button.setFixedSize(34, 34)
+            button.setToolTip(label)
+            self._apply_header_round_button_style(button)
+            button.clicked.connect(self._wrap_header_more_action(callback))
+            layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
+            self._header_more_buttons[key] = button
+
+    def _wrap_header_more_action(self, callback: Callable[[], None]) -> Callable[[], None]:
+        def _run():
+            self._hide_header_more_box()
+            callback()
+        return _run
+
+    def _toggle_header_more_box(self):
+        if self._header_more_box is None or self.more_actions_button is None:
+            return
+        if self._header_more_box.isVisible():
+            self._hide_header_more_box()
+            return
+        self._show_header_more_box()
+
+    def _show_header_more_box(self):
+        if self._header_more_box is None or self.more_actions_button is None or self._header_more_opacity is None:
+            return
+        final_rect = self._header_more_final_rect()
+        if final_rect is None:
+            return
+        start_rect = QRect(final_rect.x(), final_rect.y() - 8, final_rect.width(), final_rect.height())
+        self._header_more_box.setGeometry(start_rect)
+        self._header_more_box.raise_()
+        self._header_more_box.show()
+
+        geo_anim = QPropertyAnimation(self._header_more_box, b"geometry", self)
+        geo_anim.setDuration(170)
+        geo_anim.setStartValue(start_rect)
+        geo_anim.setEndValue(final_rect)
+        geo_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        geo_anim.start()
+        self._header_more_geo_anim = geo_anim
+
+        opacity_anim = QPropertyAnimation(self._header_more_opacity, b"opacity", self)
+        opacity_anim.setDuration(170)
+        opacity_anim.setStartValue(0.0)
+        opacity_anim.setEndValue(1.0)
+        opacity_anim.start()
+        self._header_more_opacity_anim = opacity_anim
+
+    def _header_more_final_rect(self) -> QRect | None:
+        if self._header_more_box is None or self.more_actions_button is None:
+            return None
+        self._header_more_box.adjustSize()
+        final_w = max(46, self._header_more_box.sizeHint().width())
+        final_h = self._header_more_box.sizeHint().height()
+        button_pos = self.more_actions_button.mapTo(self, QPoint(0, 0))
+        return QRect(
+            button_pos.x() + self.more_actions_button.width() - final_w,
+            button_pos.y() + self.more_actions_button.height() + 8,
+            final_w,
+            final_h,
+        )
+
+    def _reposition_header_more_box(self):
+        if self._header_more_box is None or not self._header_more_box.isVisible():
+            return
+        final_rect = self._header_more_final_rect()
+        if final_rect is None:
+            return
+        self._header_more_box.setGeometry(final_rect)
+        if self._header_more_opacity is not None:
+            self._header_more_opacity.setOpacity(1.0)
+
+    def _hide_header_more_box(self):
+        if self._header_more_box is None or self._header_more_opacity is None:
+            return
+        end_rect = QRect(
+            self._header_more_box.x(),
+            self._header_more_box.y() - 8,
+            self._header_more_box.width(),
+            self._header_more_box.height(),
+        )
+        geo_anim = QPropertyAnimation(self._header_more_box, b"geometry", self)
+        geo_anim.setDuration(120)
+        geo_anim.setStartValue(self._header_more_box.geometry())
+        geo_anim.setEndValue(end_rect)
+        geo_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        geo_anim.start()
+        self._header_more_geo_anim = geo_anim
+
+        opacity_anim = QPropertyAnimation(self._header_more_opacity, b"opacity", self)
+        opacity_anim.setDuration(120)
+        opacity_anim.setStartValue(float(self._header_more_opacity.opacity()))
+        opacity_anim.setEndValue(0.0)
+        opacity_anim.finished.connect(self._header_more_box.hide)
+        opacity_anim.start()
+        self._header_more_opacity_anim = opacity_anim
     
     def setup_notification_indicator(self):
         """Configura indicador de notificações"""
@@ -431,6 +585,7 @@ class MainWindow(QMainWindow):
         self.notification_button.setObjectName("notification_button")
         self.notification_button.setFixedSize(36, 36)
         self.notification_button.clicked.connect(self.show_notifications)
+        self._apply_header_round_button_style(self.notification_button)
         
         self.notification_count = QLabel("0")
         self.notification_count.setObjectName("notification_count")
@@ -455,6 +610,7 @@ class MainWindow(QMainWindow):
         self.performance_button.setFixedSize(36, 36)
         self.performance_button.clicked.connect(lambda: self.change_view("weekly_review"))
         self.performance_button.setToolTip("Revisão semanal")
+        self._apply_header_round_button_style(self.performance_button)
         
         layout.addWidget(self.performance_button)
     
@@ -502,15 +658,21 @@ class MainWindow(QMainWindow):
                 self._header_spacing_layout.setContentsMargins(20, 0, 20, 0)
                 self._header_spacing_layout.setSpacing(15)
 
-        self._set_widget_visibility(self.performance_widget, not is_compact)
+        # Navegação fixa no header: chat, biblioteca e configurações.
+        self._set_widget_visibility(self.discipline_chat_button, True)
+        self._set_widget_visibility(self.library_button, True)
+        self._set_widget_visibility(self.settings_button, True)
+
+        # Demais ações ficam somente no menu vertical "⋮".
+        self._set_widget_visibility(self.notification_widget, False)
+        self._set_widget_visibility(self.performance_widget, False)
         self._set_widget_visibility(self.session_book_label, self.current_view == "session" and not is_compact)
-        self._set_widget_visibility(self.session_quick_button, not is_compact)
-        self._set_widget_visibility(self.vault_glados_button, not is_compact)
-        self._set_widget_visibility(self.agenda_button, not is_compact)
-        self._set_widget_visibility(self.library_button, not is_compact)
-        self._set_widget_visibility(self.settings_button, not is_compact)
-        self._set_widget_visibility(self.quit_button, not is_compact)
-        self._set_widget_visibility(self.more_actions_button, is_compact)
+        self._set_widget_visibility(self.session_quick_button, False)
+        self._set_widget_visibility(self.vault_glados_button, False)
+        self._set_widget_visibility(self.agenda_button, False)
+        self._set_widget_visibility(self.theme_button, False)
+        self._set_widget_visibility(self.quit_button, False)
+        self._set_widget_visibility(self.more_actions_button, True)
 
         if is_compact:
             self.app_logo.setText(self.custom_assistant_name)
@@ -549,6 +711,8 @@ class MainWindow(QMainWindow):
                 self.custom_assistant_name
             )
         self.views['vault_glados'].navigate_to.connect(self.change_view)
+        self.views['discipline_chat'] = DisciplineChatView(self.controllers)
+        self.views['discipline_chat'].navigate_to.connect(self.change_view)
         self.views['session'] = SessionView(self.controllers)
         self.views['session'].navigate_to.connect(self.change_view)
         self.views['library'] = LibraryView(self.controllers)
@@ -656,6 +820,7 @@ class MainWindow(QMainWindow):
             'Ctrl+6': lambda: self.change_view('weekly_review'),
             'Ctrl+7': lambda: self.change_view('goals'),
             'Ctrl+8': lambda: self.change_view('vault_glados'),
+            'Ctrl+Shift+D': lambda: self.change_view('discipline_chat'),
             'Ctrl+Shift+G': lambda: self.change_view('vault_glados'),
             'Ctrl+9': lambda: self.change_view('settings'),
             
@@ -793,6 +958,10 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self, updated_settings: dict):
         """Atualiza estado local após salvar configurações."""
         self.config.update(updated_settings)
+        ui_settings = updated_settings.get("ui", {}) if isinstance(updated_settings, dict) else {}
+        secondary_button_color = str(ui_settings.get("secondary_button_color", "")).strip()
+        if secondary_button_color:
+            ThemeManager.instance().set_secondary_button_color(secondary_button_color, reload_theme=True)
         self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(updated_settings)
         self._apply_custom_identity_to_ui()
         review_view = self.views.get("review_workspace")
@@ -908,6 +1077,7 @@ class MainWindow(QMainWindow):
         titles = {
             'dashboard': self.custom_assistant_name,
             'vault_glados': f'Vault + {self.custom_assistant_name}',
+            'discipline_chat': 'Chats de Disciplinas',
             'session': 'Sessão',
             'review_workspace': 'Revisão',
             'library': 'Biblioteca',
@@ -2040,6 +2210,7 @@ class MainWindow(QMainWindow):
         """Recalcula layout quando tamanho da janela muda."""
         super().resizeEvent(event)
         self._apply_adaptive_layout()
+        self._reposition_header_more_box()
     
     def has_unsaved_changes(self) -> bool:
         """Verifica se há alterações não salvas"""

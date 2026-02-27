@@ -101,7 +101,7 @@ class ReviewPlanView(QWidget):
 
         self.preview_label = QLabel("")
         self.preview_label.setWordWrap(True)
-        self.preview_label.setStyleSheet("color: #8A94A6;")
+        self.preview_label.setStyleSheet("color: #8F8F8F;")
         root.addWidget(self.preview_label)
 
         self.error_label = QLabel("")

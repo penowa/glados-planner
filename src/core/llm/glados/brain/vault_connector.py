@@ -11,6 +11,10 @@ from datetime import datetime
 import json
 
 from .semantic_search import Sembrain, SearchResult
+try:
+    from core.vault.bootstrap import bootstrap_vault
+except Exception:
+    bootstrap_vault = None
 
 @dataclass
 class VaultNote:
@@ -46,6 +50,7 @@ class VaultStructure:
         "02-ANOTAÇÕES": "Anotações do usuário",
         "03-REVISÃO": "Materiais de revisão gerados",
         "04-MAPAS MENTAIS": "Mapas mentais (ex: Canva)",
+        "05-DISCIPLINAS": "Conteúdos organizados por disciplina",
         "06-RECURSOS": "Recursos, registros e dados auxiliares"
     }
     
@@ -75,14 +80,25 @@ class VaultStructure:
     
     def _validate_structure(self) -> bool:
         """Valida se o vault existe (modo flexível)"""
-        if not self.vault_path.exists():
+        vault_exists = self.vault_path.exists()
+        if not vault_exists:
             print(f"[GLaDOS] ❌ Vault não encontrado: {self.vault_path}")
             print(f"[GLaDOS] Criando estrutura básica...")
+        else:
+            print(f"[GLaDOS] ✅ Vault encontrado: {self.vault_path}")
+
+        if bootstrap_vault is not None:
+            try:
+                self.vault_path = bootstrap_vault(
+                    vault_path=str(self.vault_path),
+                    vault_structure=self.STRUCTURE.keys(),
+                )
+            except Exception as exc:
+                print(f"[GLaDOS] ⚠️  Falha no bootstrap do vault: {exc}")
+                if not self.vault_path.exists():
+                    self._create_basic_structure()
+        elif not self.vault_path.exists():
             self._create_basic_structure()
-            return True
-        
-        # Verifica estrutura existente
-        print(f"[GLaDOS] ✅ Vault encontrado: {self.vault_path}")
         
         # Lista diretórios existentes
         existing_dirs = [d.name for d in self.vault_path.iterdir() if d.is_dir()]

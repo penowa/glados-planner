@@ -55,7 +55,7 @@ class UpcomingCommitmentsCard(QFrame):
         layout.addWidget(title)
 
         subtitle = QLabel("Lista dos compromissos marcados a partir de agora.")
-        subtitle.setStyleSheet("font-size: 12px; color: #8A94A6;")
+        subtitle.setStyleSheet("font-size: 12px; color: #8F8F8F;")
         layout.addWidget(subtitle)
 
         self.list_container = QWidget()
@@ -184,7 +184,7 @@ class UpcomingCommitmentsCard(QFrame):
         if not events:
             empty = QLabel("Nenhum compromisso marcado nos próximos dias.")
             empty.setWordWrap(True)
-            empty.setStyleSheet("color: #8A94A6; font-size: 13px;")
+            empty.setStyleSheet("color: #8F8F8F; font-size: 13px;")
             self.list_layout.addWidget(empty)
             self.list_layout.addStretch()
             return

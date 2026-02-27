@@ -182,7 +182,7 @@ class LibraryBookTile(QFrame):
         self.cover_label.setFixedSize(170, 230)
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.cover_label.setStyleSheet("border: 1px solid #2E3440; border-radius: 8px;")
+        self.cover_label.setStyleSheet("border: 1px solid #1F1F1F; border-radius: 8px;")
         self.cover_label.mousePressEvent = self._on_cover_clicked
         self._render_cover()
         layout.addWidget(self.cover_label, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -191,7 +191,7 @@ class LibraryBookTile(QFrame):
         self.options_button.setText("...")
         self.options_button.setFixedSize(24, 20)
         self.options_button.setStyleSheet(
-            "QToolButton { background: rgba(20,20,20,0.75); color: #ECEFF4; border: 1px solid #4C566A; border-radius: 6px; font-weight: 700; }"
+            "QToolButton { background: rgba(20,20,20,0.75); color: #ECECEC; border: 1px solid #444444; border-radius: 6px; font-weight: 700; }"
         )
         self.options_button.clicked.connect(self._show_options_menu)
 
@@ -226,12 +226,12 @@ class LibraryBookTile(QFrame):
         )
         progress_info_label = QLabel(progress_text)
         progress_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        progress_info_label.setStyleSheet("color: #A7B1C2; font-size: 10px;")
+        progress_info_label.setStyleSheet("color: #A7A7A7; font-size: 10px;")
         layout.addWidget(progress_info_label)
 
         author_label = QLabel(self.author)
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        author_label.setStyleSheet("color: #8A94A6; font-size: 11px;")
+        author_label.setStyleSheet("color: #8F8F8F; font-size: 11px;")
         layout.addWidget(author_label)
 
     def _show_options_menu(self):
@@ -255,14 +255,14 @@ class LibraryBookTile(QFrame):
 
         rect = pixmap.rect().adjusted(1, 1, -1, -1)
         grad = QLinearGradient(0, 0, rect.width(), rect.height())
-        grad.setColorAt(0.0, QColor("#2E3440"))
-        grad.setColorAt(1.0, QColor("#3B4252"))
+        grad.setColorAt(0.0, QColor("#1F1F1F"))
+        grad.setColorAt(1.0, QColor("#2A2A2A"))
         painter.setBrush(grad)
-        painter.setPen(QColor("#4C566A"))
+        painter.setPen(QColor("#444444"))
         painter.drawRoundedRect(rect, 8, 8)
 
         initials = "".join([part[0] for part in self.title.split()[:2] if part]).upper() or "BK"
-        painter.setPen(QColor("#ECEFF4"))
+        painter.setPen(QColor("#ECECEC"))
         painter.setFont(QFont("Georgia", 24, QFont.Weight.Bold))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, initials)
         painter.end()
@@ -308,7 +308,7 @@ class LibraryBookTile(QFrame):
             painter.setPen(QPen(QColor("#4A90E2"), 4))
             span = int(360 * 16 * (self.progress_percent / 100.0))
             painter.drawArc(progress_rect, 90 * 16, -span)
-            painter.setPen(QColor("#ECEFF4"))
+            painter.setPen(QColor("#ECECEC"))
             painter.setFont(QFont("Sans Serif", 7, QFont.Weight.Bold))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{int(self.progress_percent)}%")
 
@@ -383,7 +383,7 @@ class LibraryView(QWidget):
         title = QLabel("📚 Biblioteca")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         subtitle = QLabel("Visual rápido de título + capa")
-        subtitle.setStyleSheet("color: #8A94A6; font-size: 11px;")
+        subtitle.setStyleSheet("color: #8F8F8F; font-size: 11px;")
         left = QVBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(2)
@@ -425,7 +425,7 @@ class LibraryView(QWidget):
 
         self.empty_label = QLabel("Sua biblioteca esta vazia, experimente adicionar novos livros")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: #8A94A6;")
+        self.empty_label.setStyleSheet("color: #8F8F8F;")
 
         books_panel_layout.addWidget(self.empty_label)
         books_panel_layout.addWidget(self.books_scroll, 1)
@@ -870,7 +870,7 @@ class LibraryView(QWidget):
                 shelf_layout.setSpacing(8)
 
                 author_label = QLabel(author)
-                author_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #D8DEE9;")
+                author_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #D8D8D8;")
                 shelf_layout.addWidget(author_label)
 
                 if self.sort_mode == "author":
@@ -1116,6 +1116,7 @@ class LibraryView(QWidget):
             "quality": quality_map.get(config.get("quality"), "standard"),
             "use_llm": bool(config.get("use_llm", True)),
             "auto_schedule": bool(config.get("auto_schedule", True)),
+            "discipline": str(config.get("discipline", "")).strip(),
             "metadata": {
                 "title": config.get("title", ""),
                 "author": config.get("author", ""),

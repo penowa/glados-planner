@@ -8,7 +8,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QTabWidget, QWidget,
-    QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox, QSizePolicy
+    QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox, QSizePolicy,
+    QGridLayout, QButtonGroup
 )
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
@@ -32,6 +33,18 @@ class SettingsDialog(QDialog):
         ("Preferir GPU (com fallback para CPU)", "gpu_prefer"),
         ("Somente GPU (sem fallback)", "gpu_only"),
     ]
+    SECONDARY_BUTTON_PALETTE = [
+        "#FFFFFF",
+        "#ECECEC",
+        "#D8D8D8",
+        "#CFCFCF",
+        "#BFBFBF",
+        "#AFAFAF",
+        "#9A9A9A",
+        "#8A8A8A",
+        "#6F6F6F",
+        "#4F4F4F",
+    ]
 
     def __init__(self, parent=None, settings_path: str = "config/settings.yaml"):
         super().__init__(parent)
@@ -41,6 +54,8 @@ class SettingsDialog(QDialog):
         self._llm_form = None
         self._llm_local_rows = []
         self._llm_cloud_rows = []
+        self._secondary_color_buttons: dict[str, QPushButton] = {}
+        self._selected_secondary_button_color = "#FFFFFF"
 
         self.setWindowTitle("Configurações do Sistema")
         self.setMinimumSize(760, 560)
@@ -64,6 +79,7 @@ class SettingsDialog(QDialog):
         self._setup_llm_tab()
         self._setup_obsidian_tab()
         self._setup_review_view_tab()
+        self._setup_appearance_tab()
         self._setup_features_tab()
 
         footer_layout = QHBoxLayout()
@@ -130,7 +146,7 @@ class SettingsDialog(QDialog):
             "Pastas de dados são gerenciadas automaticamente em data/ ao lado do executável."
         )
         auto_paths_note.setWordWrap(True)
-        auto_paths_note.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        auto_paths_note.setStyleSheet("color: #8F8F8F; font-size: 12px;")
 
         form.addRow("Diretório de dados (automático):", self.data_dir_input)
         form.addRow("Diretório de modelos (automático):", self.models_dir_input)
@@ -193,7 +209,7 @@ class SettingsDialog(QDialog):
             "Dica rápida: use 'Automático' e ajuste apenas se souber o que está fazendo."
         )
         llm_help.setWordWrap(True)
-        llm_help.setStyleSheet("color: #8A94A6; font-size: 12px;")
+        llm_help.setStyleSheet("color: #8F8F8F; font-size: 12px;")
 
         model_catalog_layout = QHBoxLayout()
         model_catalog_layout.addWidget(self.llm_model_combo)
@@ -310,6 +326,45 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(tab, "Features")
 
+    def _setup_appearance_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        helper = QLabel(
+            "Cor secundária dos botões.\n"
+            "Padrão: branco. Essa cor é aplicada globalmente no tema."
+        )
+        helper.setWordWrap(True)
+        helper.setStyleSheet("color: #8F8F8F; font-size: 12px;")
+        layout.addWidget(helper)
+
+        palette_box = QWidget()
+        palette_grid = QGridLayout(palette_box)
+        palette_grid.setContentsMargins(0, 0, 0, 0)
+        palette_grid.setHorizontalSpacing(12)
+        palette_grid.setVerticalSpacing(12)
+        self.secondary_color_group = QButtonGroup(self)
+        self.secondary_color_group.setExclusive(True)
+
+        columns = 5
+        for idx, color in enumerate(self.SECONDARY_BUTTON_PALETTE):
+            swatch = QPushButton("")
+            swatch.setCheckable(True)
+            swatch.setFixedSize(30, 30)
+            swatch.setToolTip(color)
+            swatch.clicked.connect(lambda _checked, chosen=color: self._select_secondary_button_color(chosen))
+            self.secondary_color_group.addButton(swatch)
+            self._secondary_color_buttons[color] = swatch
+            row = idx // columns
+            col = idx % columns
+            palette_grid.addWidget(swatch, row, col)
+
+        layout.addWidget(palette_box)
+        layout.addStretch()
+        self.tabs.addTab(tab, "Aparência")
+        self._refresh_secondary_palette_styles()
+
     def _setup_review_view_tab(self):
         tab = QWidget()
         form = QFormLayout(tab)
@@ -389,6 +444,12 @@ class SettingsDialog(QDialog):
         self.feature_translation.setChecked(features.enable_translation)
         self.feature_glados_personality.setChecked(features.enable_glados_personality)
         self.feature_vault_brain.setChecked(features.enable_vault_as_brain)
+        self._selected_secondary_button_color = str(
+            self.config_manager.get("ui/secondary_button_color", "#FFFFFF")
+        ).strip().upper() or "#FFFFFF"
+        if self._selected_secondary_button_color not in self._secondary_color_buttons:
+            self._selected_secondary_button_color = "#FFFFFF"
+        self._refresh_secondary_palette_styles()
 
     def _save_settings(self):
         try:
@@ -447,6 +508,7 @@ class SettingsDialog(QDialog):
             )
             self.config_manager.set("ui/onboarding_preference_set", True)
             self.config_manager.set("ui/onboarding_dialog_version", "tutorial_v3")
+            self.config_manager.set("ui/secondary_button_color", self._selected_secondary_button_color)
 
             self.settings_model.save_yaml(self.settings_path)
             updated = reload_settings(self.settings_path)
@@ -455,6 +517,7 @@ class SettingsDialog(QDialog):
                 "show_onboarding_dialog": self.show_onboarding_check.isChecked(),
                 "onboarding_preference_set": True,
                 "onboarding_dialog_version": "tutorial_v3",
+                "secondary_button_color": self._selected_secondary_button_color,
             }
             self.settings_saved.emit(payload)
             self.accept()
@@ -688,9 +751,35 @@ class SettingsDialog(QDialog):
             "show_onboarding_dialog": self._as_bool(
                 self.config_manager.get("ui/show_onboarding_dialog", True),
                 True,
-            )
+            ),
+            "secondary_button_color": "#FFFFFF",
         }
         self.settings_saved.emit(payload)
+
+    def _select_secondary_button_color(self, color: str):
+        chosen = str(color or "").strip().upper()
+        if chosen not in self._secondary_color_buttons:
+            return
+        self._selected_secondary_button_color = chosen
+        self._refresh_secondary_palette_styles()
+
+    def _refresh_secondary_palette_styles(self):
+        for color, swatch in self._secondary_color_buttons.items():
+            is_selected = color == self._selected_secondary_button_color
+            border = "#ECECEC" if is_selected else "#444444"
+            swatch.setChecked(is_selected)
+            swatch.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {color};
+                    border-radius: 15px;
+                    border: 2px solid {border};
+                }}
+                QPushButton:hover {{
+                    border: 2px solid #D8D8D8;
+                }}
+                """
+            )
 
     @staticmethod
     def _to_abs_path(raw_path: str) -> Path:
