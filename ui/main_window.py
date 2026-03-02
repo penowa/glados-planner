@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
     QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox,
     QGraphicsOpacityEffect
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QRect, QEasingCurve, QPropertyAnimation
-from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QPen, QResizeEvent
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QPointF, QRect, QEasingCurve, QPropertyAnimation
+from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QResizeEvent
 
 # Sistemas centrais
 from core.communication.event_bus import GlobalEventBus
@@ -112,6 +112,68 @@ class AdHocReadingDialog(QDialog):
             return
         self.selected_book_dir = self._filtered[idx]
         self.accept()
+
+
+class DisciplineChatPulseButton(QPushButton):
+    """Botão com ícone de círculo e ponto central vermelho pulsante."""
+
+    def __init__(self, parent=None):
+        super().__init__("", parent)
+        self._dot_radius = 3.0
+        self._dot_min_radius = 2.8
+        self._dot_max_radius = 5.0
+        self._dot_step = 0.05
+        self._dot_alpha_min = 95.0
+        self._dot_alpha_max = 255.0
+        self._dot_alpha = self._dot_alpha_max
+        self._dot_direction = 1
+
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(40)
+        self._pulse_timer.timeout.connect(self._advance_pulse)
+        self._pulse_timer.start()
+
+    def _advance_pulse(self) -> None:
+        self._dot_radius += self._dot_step * self._dot_direction
+        if self._dot_radius >= self._dot_max_radius:
+            self._dot_radius = self._dot_max_radius
+            self._dot_direction = -1
+        elif self._dot_radius <= self._dot_min_radius:
+            self._dot_radius = self._dot_min_radius
+            self._dot_direction = 1
+
+        pulse_range = self._dot_max_radius - self._dot_min_radius
+        if pulse_range > 0:
+            progress = (self._dot_radius - self._dot_min_radius) / pulse_range
+        else:
+            progress = 1.0
+        self._dot_alpha = self._dot_alpha_min + (self._dot_alpha_max - self._dot_alpha_min) * progress
+
+        self.update()
+
+    def hideEvent(self, event) -> None:
+        if self._pulse_timer.isActive():
+            self._pulse_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        if not self._pulse_timer.isActive():
+            self._pulse_timer.start()
+        super().showEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        dot_color = QColor("#FF3B30")
+        dot_color.setAlpha(int(round(self._dot_alpha)))
+        painter.setBrush(dot_color)
+        painter.drawEllipse(center, self._dot_radius, self._dot_radius)
+        painter.end()
 
 class MainWindow(QMainWindow):
     """Janela principal com todos os sistemas integrados"""
@@ -349,7 +411,7 @@ class MainWindow(QMainWindow):
         self._apply_header_round_button_style(self.vault_glados_button)
         primary_actions.addWidget(self.vault_glados_button)
 
-        self.discipline_chat_button = QPushButton("◉")
+        self.discipline_chat_button = DisciplineChatPulseButton()
         self.discipline_chat_button.setObjectName("discipline_chat_button")
         self.discipline_chat_button.setFixedSize(36, 36)
         self.discipline_chat_button.setToolTip("Abrir chats por disciplina")
