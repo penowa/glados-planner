@@ -41,14 +41,14 @@ class AgendaScreen(BaseScreen):
     EVENT_ICONS = {
         'aula': Icon.BOOK,
         'leitura': Icon.BOOK,
-        'producao': Icon.TARGET,
-        'revisao': Icon.FLASHCARD,
+        'produção': Icon.TARGET,
+        'revisão': Icon.FLASHCARD,
         'prova': Icon.ALERT,
-        'seminario': Icon.TARGET,
+        'seminário': Icon.TARGET,
         'entrega': Icon.TASK,
-        'orientacao': Icon.GLADOS,
+        'orientação': Icon.GLADOS,
         'sono': '😴',
-        'refeicao': '🍽️',
+        'refeição': '🍽️',
         'lazer': '🎮',
         'outro': Icon.TASK
     }

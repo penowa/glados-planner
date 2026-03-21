@@ -42,8 +42,9 @@ llm:
     timeout_seconds: 180
     max_retries: 1
   glados:
-    user_name: Pindarolas
-    glados_name: GLaDOS
+    user_name: Hélio
+    glados_name: Olivia
+    personality_profile: marvin
     gender: feminino
     personality_intensity: 0.7
     enable_sarcasm: true

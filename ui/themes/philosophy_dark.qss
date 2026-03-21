@@ -804,3 +804,173 @@ QPushButton:hover {
 QPushButton:pressed {
     background: #2B2B2B;
 }
+
+/* ============ LIBRARY VIEW ============ */
+QWidget#library_view {
+    background: transparent;
+}
+
+QWidget#library_header {
+    background: transparent;
+}
+
+QLabel#library_title {
+    color: #E4E4E4;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+QLabel#library_subtitle {
+    color: #A6A6A6;
+    font-size: 11px;
+}
+
+QFrame#library_filters_panel {
+    background: #232323;
+    border: 1px solid #3A3A3A;
+    border-radius: 14px;
+}
+
+QLabel#library_filters_title {
+    color: #E0E0E0;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QLabel#library_filters_hint {
+    color: #9FA4AD;
+    font-size: 11px;
+}
+
+QFrame#library_books_panel {
+    background: #232323;
+    border: 1px solid #3A3A3A;
+    border-radius: 14px;
+}
+
+QPushButton#library_chip_button {
+    background: #1D1D1D;
+    color: #D7D7D7;
+    border: 1px solid #404040;
+    border-radius: 10px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 30px;
+}
+
+QPushButton#library_chip_button:hover {
+    border-color: #6B9FE6;
+    color: #DDEBFF;
+    background: #262B31;
+}
+
+QPushButton#library_filter_button {
+    background: #1F1F1F;
+    color: #CFCFCF;
+    border: 1px solid #383838;
+    border-radius: 10px;
+    text-align: left;
+    padding: 8px 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QPushButton#library_filter_button:hover {
+    border-color: #5C89C3;
+    color: #DDEBFF;
+    background: #242931;
+}
+
+QPushButton#library_filter_button:checked {
+    border-color: #6B9FE6;
+    color: #ECF5FF;
+    background: #2A3340;
+}
+
+QLabel#library_count_label {
+    color: #A0A6AF;
+    font-size: 11px;
+    padding: 0 6px;
+}
+
+QLineEdit#library_search_input {
+    background: #1C1C1C;
+    color: #ECECEC;
+    border: 1px solid #3A3A3A;
+    border-radius: 10px;
+    padding: 6px 10px;
+    font-size: 11px;
+}
+
+QLineEdit#library_search_input:focus {
+    border-color: #6B9FE6;
+}
+
+QFrame#library_books_drop_zone {
+    background: #1F1F1F;
+    border: 1px solid #31363F;
+    border-radius: 12px;
+}
+
+QFrame#library_books_drop_zone[dragActive="true"] {
+    background: rgba(74, 144, 226, 0.10);
+    border: 1px dashed #6B9FE6;
+}
+
+QLabel#library_drop_hint {
+    color: #E4F1FF;
+    font-size: 13px;
+    font-weight: 700;
+    background: rgba(11, 17, 24, 0.78);
+    border: 1px solid rgba(107, 159, 230, 0.6);
+    border-radius: 12px;
+}
+
+QLabel#library_empty_label {
+    color: #9EA4AE;
+    font-size: 12px;
+    padding: 28px 8px;
+}
+
+QPushButton#library_fab_button {
+    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #3C5575, stop:1 #5677A2);
+    color: #F5F5F5;
+    border: 1px solid #87A7D1;
+    border-radius: 24px;
+    font-size: 22px;
+    font-weight: 700;
+    padding: 0px;
+    text-align: center;
+}
+
+QPushButton#library_fab_button:hover {
+    background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #4A6689, stop:1 #6388B8);
+}
+
+QPushButton#library_fab_button:pressed {
+    background: #3A5578;
+}
+
+QDialog#library_add_book_popup {
+    background: transparent;
+}
+
+QFrame#library_add_book_popup_frame {
+    background: #252525;
+    border: 1px solid #3F454E;
+    border-radius: 16px;
+}
+
+QFrame#library_book_tile {
+    background: #242424;
+    border: 1px solid #353535;
+    border-radius: 12px;
+}
+
+QFrame#library_book_tile:hover {
+    border-color: #5D85B6;
+    background: #282828;
+}

@@ -15,7 +15,7 @@ from typing import Optional, List
 import json
 
 from src.core.llm.glados.brain.vault_connector import VaultStructure
-from src.core.llm.glados.personality.glados_voice import GladosVoice
+from src.core.llm.glados.personality import create_personality_voice
 from src.core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados, LlamaConfig
 
 app = typer.Typer(name="glados", help="Sistema GLaDOS - Cérebro Filosófico com Busca Semântica")
@@ -28,9 +28,11 @@ def _get_glados_system():
     # Configurações
     vault = VaultStructure(settings.paths.vault)
     
-    glados_voice = GladosVoice(
+    glados_voice = create_personality_voice(
         user_name=settings.llm.glados.user_name,
-        intensity=settings.llm.glados.personality_intensity
+        intensity=settings.llm.glados.personality_intensity,
+        assistant_name=settings.llm.glados.glados_name,
+        profile=getattr(settings.llm.glados, "personality_profile", "auto"),
     )
     
     llama_config = LlamaConfig(

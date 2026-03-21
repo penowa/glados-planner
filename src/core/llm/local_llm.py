@@ -13,7 +13,7 @@ import re
 from core.config.settings import settings
 from core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados, LlamaConfig
 from core.llm.glados.brain.vault_connector import VaultStructure
-from core.llm.glados.personality.glados_voice import GladosVoice
+from core.llm.glados.personality import create_personality_voice
 from core.llm.runtime_discovery import (
     detect_nvidia_gpus,
     pick_model_path,
@@ -138,8 +138,13 @@ class LocalLLM:
             if hasattr(settings.llm, 'use_semantic_search') and settings.llm.use_semantic_search:
                 self._init_sembrain()
             
-            # Glados voice
-            glados_voice = GladosVoice()
+            # Personalidade ativa (GLaDOS/Marvin)
+            glados_voice = create_personality_voice(
+                user_name=str(getattr(settings.llm.glados, "user_name", "Helio") or "Helio"),
+                intensity=float(getattr(settings.llm.glados, "personality_intensity", 0.7) or 0.7),
+                assistant_name=str(getattr(settings.llm.glados, "glados_name", "GLaDOS") or "GLaDOS"),
+                profile=str(getattr(settings.llm.glados, "personality_profile", "auto") or "auto"),
+            )
             
             # Instanciar o TinyLlamaGlados
             self.model = TinyLlamaGlados(config, self.vault_structure, glados_voice)
@@ -214,13 +219,14 @@ class LocalLLM:
         if not value:
             return value
 
+        assistant_name = str(getattr(settings.llm.glados, "glados_name", "GLaDOS") or "GLaDOS").strip() or "GLaDOS"
         for marker in (
-            "Responda como GLaDOS:",
+            f"Responda como {assistant_name}:",
             "Sinta as notas acima do vault e responda:",
-            "Responda no estilo GLaDOS:",
-            "[CONSULTA AO CÉREBRO DE GLaDOS",
+            f"Responda no estilo {assistant_name}:",
+            "[CONSULTA AO CÉREBRO",
             "[FIM DA CONSULTA AO CÉREBRO]",
-            "You are a GLaDOS character",
+            "You are a character",
             "your responses should be concise",
         ):
             if marker in value:
@@ -238,11 +244,15 @@ class LocalLLM:
                 continue
             if normalized == "o contexto fornecido não cobre este ponto.":
                 continue
-            if re.match(r"^\s*\d+\.\s*(Seja útil academicamente|Use tom sarcástico.*|Baseie-se no contexto acima|Seja conciso.*|Assine como GLaDOS)\s*$", line, flags=re.IGNORECASE):
+            if re.match(r"^\s*\d+\.\s*(Seja útil academicamente|Use tom sarcástico.*|Baseie-se no contexto acima|Seja conciso.*|Assine como .*)\s*$", line, flags=re.IGNORECASE):
                 continue
-            if re.match(r"^\s*You are a GLaDOS character.*$", line, flags=re.IGNORECASE):
+            if re.match(r"^\s*You are (an|a) .*character.*$", line, flags=re.IGNORECASE):
                 continue
             if re.match(r"^\s*Your responses should be concise.*$", line, flags=re.IGNORECASE):
+                continue
+            if re.match(r"^\s*Sistema:\s*Você é .*$", line, flags=re.IGNORECASE):
+                continue
+            if re.match(r"^\s*Usuário:\s*.*$", line, flags=re.IGNORECASE):
                 continue
             lines.append(line)
 

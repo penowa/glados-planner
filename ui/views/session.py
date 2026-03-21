@@ -3,15 +3,17 @@ View de sessão de leitura com Pomodoro e assistente LLM.
 """
 from __future__ import annotations
 
+import html as html_lib
 import logging
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -45,6 +47,11 @@ from core.modules.mindmap_review_module import (
 )
 from core.modules.pomodoro_timer import PomodoroTimer
 from core.modules.review_system import ReviewSystem
+
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except Exception:
+    BeautifulSoup = None
 
 logger = logging.getLogger("GLaDOS.UI.SessionView")
 
@@ -484,6 +491,8 @@ class SessionView(QWidget):
         self._review_context_note_selection: list[Dict[str, str]] = []
         self._review_backend_metadata: Dict[str, Any] = {}
         self._review_summary_saved_in_run = False
+        self._temporary_read_only_session = False
+        self._temporary_news_article: Dict[str, Any] = {}
         self._search_matches: list[Dict[str, int]] = []
         self._search_term = ""
         self._search_current_index = -1
@@ -658,7 +667,9 @@ class SessionView(QWidget):
         for page in (self.left_page_text, self.right_page_text):
             page.setReadOnly(True)
             page.setObjectName("session_page_text")
-            page.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+            page.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+            page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            page.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             page.setStyleSheet(
                 "background-color: #FFFFFF; color: #111111; "
                 "font-family: Georgia, 'Times New Roman', serif;"
@@ -927,7 +938,11 @@ class SessionView(QWidget):
 
     def on_view_activated(self):
         self._session_closed = False
-        self.refresh_reading_context()
+        if not self._temporary_read_only_session:
+            self.refresh_reading_context()
+        else:
+            self._refresh_pages()
+            self._apply_session_mode_ui()
         self._tick_ui()
         self._position_fullscreen_button()
         self._sync_fullscreen_overlays_geometry()
@@ -937,6 +952,8 @@ class SessionView(QWidget):
         """Inicia leitura avulsa a partir de um diretório de livro do vault."""
         self._manual_book_dir = Path(book_dir)
         self._manual_book_id = None
+        self._temporary_read_only_session = False
+        self._temporary_news_article = {}
         self._session_closed = False
 
         if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
@@ -970,6 +987,297 @@ class SessionView(QWidget):
 
         self.refresh_reading_context()
 
+    def start_news_reading(self, article: Dict[str, Any]):
+        """Inicia uma sessao temporaria de leitura de noticia (sem persistencia)."""
+        payload = dict(article or {})
+        title = str(payload.get("title") or "Notícia").strip() or "Notícia"
+        subtitle = str(payload.get("subtitle") or "").strip()
+        summary = str(payload.get("summary") or "").strip()
+        source = str(payload.get("source") or payload.get("feed_url") or "").strip()
+        published = str(payload.get("published") or "").strip()
+        original_url = str(payload.get("url") or "").strip()
+
+        summary_plain = self._strip_html_to_text(summary)
+        full_article_text = self._fetch_news_article_text(original_url) if original_url else ""
+        blocks: list[str] = [title]
+        if subtitle:
+            blocks.extend(["", subtitle])
+        if source or published:
+            meta_line = " | ".join(part for part in (source, published) if part)
+            if meta_line:
+                blocks.extend(["", f"Fonte: {meta_line}"])
+        if original_url:
+            blocks.extend(["", f"Link: {original_url}"])
+        if full_article_text:
+            blocks.extend(["", full_article_text])
+        elif summary_plain:
+            blocks.extend(
+                [
+                    "",
+                    summary_plain,
+                    "",
+                    "Observação: conteúdo completo indisponível no momento; exibindo resumo do feed.",
+                ]
+            )
+        else:
+            blocks.extend(["", "Conteúdo indisponível."])
+
+        full_text = "\n".join(blocks).strip()
+        page_contents = self._split_text_into_pages(full_text, chars_per_page=self._news_chars_per_page())
+
+        self._temporary_read_only_session = True
+        self._temporary_news_article = payload
+        self._session_closed = False
+        self.current_book_id = None
+        self._manual_book_id = None
+        self._manual_book_dir = None
+        self.current_book_title = title
+        self.current_page = 1
+        self.session_start_page = 1
+        self.max_page_reached = 1
+        self._last_synced_page = 0
+        self.page_contents = page_contents
+        self.page_chapter_map = {}
+        self.chapter_notes = []
+        self.book_source_path = None
+        self.current_chapter_path = None
+        self.left_page = 1
+        self.total_pages = max(page_contents.keys()) if page_contents else 1
+        self._refresh_pages()
+        self._apply_session_mode_ui()
+
+    def _split_text_into_pages(self, text: str, chars_per_page: int = 2600) -> Dict[int, str]:
+        clean = str(text or "").strip()
+        if not clean:
+            return {1: "Sem conteúdo disponível."}
+
+        page_limit = max(800, int(chars_per_page))
+        raw_paragraphs = [part.strip() for part in re.split(r"\n\s*\n", clean) if part.strip()]
+        if not raw_paragraphs:
+            raw_paragraphs = [clean]
+
+        paragraphs: list[str] = []
+        for paragraph in raw_paragraphs:
+            working = paragraph.strip()
+            while len(working) > page_limit:
+                split_at = working.rfind(" ", 0, page_limit + 1)
+                if split_at < max(120, int(page_limit * 0.5)):
+                    split_at = page_limit
+                chunk = working[:split_at].strip()
+                if chunk:
+                    paragraphs.append(chunk)
+                working = working[split_at:].strip()
+            if working:
+                paragraphs.append(working)
+
+        pages: Dict[int, str] = {}
+        current_parts: list[str] = []
+        current_len = 0
+        page_number = 1
+
+        for paragraph in paragraphs:
+            projected = current_len + len(paragraph) + (2 if current_parts else 0)
+            if current_parts and projected > page_limit:
+                pages[page_number] = "\n\n".join(current_parts).strip()
+                page_number += 1
+                current_parts = [paragraph]
+                current_len = len(paragraph)
+                continue
+            current_parts.append(paragraph)
+            current_len = projected
+
+        if current_parts:
+            pages[page_number] = "\n\n".join(current_parts).strip()
+
+        if not pages:
+            pages[1] = clean
+        return pages
+
+    def _news_chars_per_page(self) -> int:
+        viewport = self.left_page_text.viewport() if hasattr(self, "left_page_text") else None
+        if viewport is not None and viewport.width() > 320 and viewport.height() > 280:
+            w = max(420, int(viewport.width()))
+            h = max(360, int(viewport.height()))
+            estimated = int((w * h) / 130)
+            return max(1800, min(4600, estimated))
+        return 2600
+
+    def _strip_html_to_text(self, value: str) -> str:
+        raw = str(value or "")
+        if not raw:
+            return ""
+        without_tags = re.sub(r"<[^>]+>", " ", raw)
+        unescaped = html_lib.unescape(without_tags)
+        normalized = re.sub(r"\s+", " ", unescaped).strip()
+        return normalized
+
+    def _fetch_news_article_text(self, url: str, max_chars: int = 26000) -> str:
+        target = str(url or "").strip()
+        if not target:
+            return ""
+
+        html_text = ""
+        try:
+            request = Request(
+                target,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/123.0 Safari/537.36",
+                    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+                },
+            )
+            with urlopen(request, timeout=12) as response:
+                raw_bytes = response.read(3 * 1024 * 1024)
+                content_type = str(response.headers.get("content-type", "") or "")
+            charset_match = re.search(r"charset=([a-zA-Z0-9._-]+)", content_type, flags=re.IGNORECASE)
+            charset = str(charset_match.group(1) or "").strip() if charset_match else ""
+            html_text = raw_bytes.decode(charset or "utf-8", errors="ignore")
+        except Exception as exc:
+            logger.info("Nao foi possivel baixar conteudo completo da noticia '%s': %s", target, exc)
+            return ""
+
+        extracted = self._extract_news_text_from_html(html_text, max_chars=max_chars)
+        if extracted:
+            return extracted
+        return ""
+
+    def _extract_news_text_from_html(self, html_text: str, max_chars: int = 26000) -> str:
+        raw = str(html_text or "").strip()
+        if not raw:
+            return ""
+
+        if BeautifulSoup is None:
+            fallback = self._strip_html_to_text(raw)
+            if len(fallback) > max_chars:
+                return fallback[:max_chars].rsplit(" ", 1)[0].strip() + "..."
+            return fallback
+
+        try:
+            soup = BeautifulSoup(raw, "lxml")
+        except Exception:
+            try:
+                soup = BeautifulSoup(raw, "html.parser")
+            except Exception:
+                return ""
+
+        for tag in soup.find_all(
+            [
+                "script",
+                "style",
+                "noscript",
+                "svg",
+                "canvas",
+                "iframe",
+                "form",
+                "button",
+                "input",
+                "header",
+                "footer",
+                "nav",
+                "aside",
+            ]
+        ):
+            try:
+                tag.decompose()
+            except Exception:
+                continue
+
+        containers = []
+        article_tag = soup.find("article")
+        if article_tag is not None:
+            containers.append(article_tag)
+        main_tag = soup.find("main")
+        if main_tag is not None and main_tag not in containers:
+            containers.append(main_tag)
+        body_tag = soup.body
+        if not containers and body_tag is not None:
+            containers.append(body_tag)
+        if not containers:
+            containers.append(soup)
+
+        parts: list[str] = []
+        seen: set[str] = set()
+        collected_chars = 0
+        for container in containers:
+            for node in container.find_all(["h1", "h2", "h3", "p", "li", "blockquote"]):
+                text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+                if not text:
+                    continue
+                if node.name in {"p", "li", "blockquote"} and len(text) < 30:
+                    continue
+                lowered = text.lower()
+                if lowered in {
+                    "recommended stories",
+                    "related stories",
+                    "read more",
+                    "advertisement",
+                }:
+                    continue
+                if re.match(r"^list\s+\d+\s+of\s+\d+", lowered):
+                    continue
+                key = text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                parts.append(text)
+                collected_chars += len(text) + 2
+                if collected_chars >= max_chars:
+                    break
+            if collected_chars >= max_chars:
+                break
+
+        if not parts:
+            plain = re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
+            if len(plain) > max_chars:
+                return plain[:max_chars].rsplit(" ", 1)[0].strip() + "..."
+            return plain
+
+        joined = "\n\n".join(parts).strip()
+        if len(joined) > max_chars:
+            return joined[:max_chars].rsplit(" ", 1)[0].strip() + "..."
+        return joined
+
+    def _apply_session_mode_ui(self):
+        is_temporary = bool(self._temporary_read_only_session)
+
+        if self.note_button is not None:
+            self.note_button.setEnabled(not is_temporary)
+            self.note_button.setToolTip(
+                "Anotações" if not is_temporary else "Anotações desativadas na leitura de notícia"
+            )
+        if self.chat_summary_button is not None:
+            self.chat_summary_button.setEnabled(not is_temporary)
+        if self.chat_mindmap_button is not None:
+            self.chat_mindmap_button.setEnabled(not is_temporary)
+        if self.chat_mark_review_button is not None:
+            self.chat_mark_review_button.setEnabled(not is_temporary)
+        if self.chat_preset_combo is not None:
+            self.chat_preset_combo.setEnabled(not is_temporary)
+        if self.note_save_button is not None:
+            self.note_save_button.setEnabled(not is_temporary)
+        if self.note_title_input is not None:
+            self.note_title_input.setEnabled(not is_temporary)
+        if self.note_editor is not None:
+            self.note_editor.setReadOnly(is_temporary)
+
+        if self.assistant_tabs is not None and is_temporary:
+            self.assistant_tabs.setVisible(False)
+            self.assistant_tabs.setMaximumHeight(0)
+            self._assistant_expanded_in_fullscreen = False
+
+        if is_temporary:
+            self.action_back_dashboard.setText("Voltar para chats")
+            self.action_end_session.setText("Fechar notícia")
+            source = str(
+                self._temporary_news_article.get("source")
+                or self._temporary_news_article.get("feed_url")
+                or ""
+            ).strip()
+            if source:
+                self.source_label.setText(f"Fonte: {source}")
+        else:
+            self.action_back_dashboard.setText("Voltar para Dashboard")
+            self.action_end_session.setText("Encerrar Sessão")
+
     def refresh_reading_context(self):
         book_id = self._manual_book_id or self._resolve_book_id()
         progress = self._get_progress(book_id) if book_id else {}
@@ -1001,6 +1309,7 @@ class SessionView(QWidget):
 
         self.left_page = self._left_page_from_current(self.current_page)
         self._refresh_pages()
+        self._apply_session_mode_ui()
 
     def _resolve_book_id(self) -> Optional[str]:
         if self.reading_controller:
@@ -1054,6 +1363,9 @@ class SessionView(QWidget):
         self.right_page_title.setText(f"Página {right}")
         self.left_page_text.setPlainText(left_text)
         self.right_page_text.setPlainText(right_text)
+        if self._temporary_read_only_session:
+            self._apply_news_readability_format(self.left_page_text, left)
+            self._apply_news_readability_format(self.right_page_text, right)
 
         self.page_pair_label.setText(f"{left}-{right}")
         total_text = "?" if self.total_pages <= 0 else str(self.total_pages)
@@ -1071,6 +1383,98 @@ class SessionView(QWidget):
             self.next_pages_button.setEnabled(True)
         self._apply_search_highlights()
         self._position_fullscreen_button()
+
+    def _apply_news_readability_format(self, editor: QTextEdit, page_number: int):
+        doc = editor.document()
+        if doc is None:
+            return
+
+        base_char_fmt = QTextCharFormat()
+        base_char_fmt.setFont(QFont("Georgia", 12))
+        base_char_fmt.setForeground(QColor("#171717"))
+
+        base_block_fmt = QTextBlockFormat()
+        base_block_fmt.setLineHeight(145, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        base_block_fmt.setAlignment(Qt.AlignmentFlag.AlignJustify)
+
+        cursor = QTextCursor(doc)
+        cursor.select(QTextCursor.SelectionType.Document)
+        cursor.mergeCharFormat(base_char_fmt)
+
+        block = doc.begin()
+        while block.isValid():
+            block_cursor = QTextCursor(block)
+            block_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            block_cursor.mergeBlockFormat(base_block_fmt)
+            block = block.next()
+
+        title_block = None
+        subtitle_block = None
+        if page_number == 1:
+            probe = doc.begin()
+            while probe.isValid():
+                text = str(probe.text() or "").strip()
+                if text:
+                    title_block = probe
+                    break
+                probe = probe.next()
+
+            if title_block is not None:
+                probe = title_block.next()
+                while probe.isValid():
+                    text = str(probe.text() or "").strip()
+                    if not text:
+                        probe = probe.next()
+                        continue
+                    if text.lower().startswith("fonte:") or text.lower().startswith("link:"):
+                        probe = probe.next()
+                        continue
+                    subtitle_block = probe
+                    break
+
+        if title_block is not None:
+            title_char_fmt = QTextCharFormat()
+            title_char_fmt.setFont(QFont("Georgia", 20, QFont.Weight.Bold))
+            title_char_fmt.setForeground(QColor("#101010"))
+            title_cursor = QTextCursor(title_block)
+            title_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            title_cursor.mergeCharFormat(title_char_fmt)
+
+            title_block_fmt = QTextBlockFormat()
+            title_block_fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            title_block_fmt.setLineHeight(120, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            title_cursor.mergeBlockFormat(title_block_fmt)
+
+        if subtitle_block is not None:
+            subtitle_char_fmt = QTextCharFormat()
+            subtitle_char_fmt.setFont(QFont("Georgia", 14, QFont.Weight.Medium))
+            subtitle_char_fmt.setFontItalic(True)
+            subtitle_char_fmt.setForeground(QColor("#2E3946"))
+            subtitle_cursor = QTextCursor(subtitle_block)
+            subtitle_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            subtitle_cursor.mergeCharFormat(subtitle_char_fmt)
+
+            subtitle_block_fmt = QTextBlockFormat()
+            subtitle_block_fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            subtitle_block_fmt.setLineHeight(132, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            subtitle_cursor.mergeBlockFormat(subtitle_block_fmt)
+
+        probe = doc.begin()
+        while probe.isValid():
+            text = str(probe.text() or "").strip()
+            lowered = text.lower()
+            if lowered.startswith("fonte:") or lowered.startswith("link:") or lowered.startswith("observação:"):
+                meta_char_fmt = QTextCharFormat()
+                meta_char_fmt.setFont(QFont("Georgia", 10, QFont.Weight.Medium))
+                meta_char_fmt.setForeground(QColor("#4A5563"))
+                meta_cursor = QTextCursor(probe)
+                meta_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                meta_cursor.mergeCharFormat(meta_char_fmt)
+                meta_block_fmt = QTextBlockFormat()
+                meta_block_fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                meta_block_fmt.setLineHeight(126, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+                meta_cursor.mergeBlockFormat(meta_block_fmt)
+            probe = probe.next()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -3992,15 +4396,27 @@ class SessionView(QWidget):
     def _on_back_clicked(self):
         self._set_fullscreen_mode(False)
         self._finalize_session()
+        if self._temporary_read_only_session:
+            self._temporary_read_only_session = False
+            self._temporary_news_article = {}
+            self.navigate_to.emit("discipline_chat")
+            return
         self.navigate_to.emit("dashboard")
 
     def _on_end_session_clicked(self):
         self._set_fullscreen_mode(False)
         self._finalize_session()
+        if self._temporary_read_only_session:
+            self._temporary_read_only_session = False
+            self._temporary_news_article = {}
+            self.navigate_to.emit("discipline_chat")
+            return
         self.navigate_to.emit("dashboard")
 
     def _sync_progress_realtime(self):
         if self._session_closed:
+            return
+        if self._temporary_read_only_session:
             return
         page_to_sync = self.current_page
         if self.total_pages > 0:
@@ -4019,6 +4435,8 @@ class SessionView(QWidget):
         if self._session_closed:
             return
         self._session_closed = True
+        if self._temporary_read_only_session:
+            return
 
         self._auto_update_mindmap("encerramento da sessão")
 
@@ -4044,6 +4462,8 @@ class SessionView(QWidget):
                     logger.warning("Falha ao encerrar sessão no ReadingController: %s", exc)
 
     def _save_progress_absolute(self, page: int, notes: str = ""):
+        if self._temporary_read_only_session:
+            return
         if not self.reading_controller:
             return
         manager = getattr(self.reading_controller, "reading_manager", None)

@@ -30,7 +30,7 @@ try:
     
     # LLM e Personalidade
     from core.llm.backend_router import llm as backend_llm
-    from core.llm.glados.personality.glados_voice import GladosVoice
+    from core.llm.glados.personality import create_personality_voice
     
     # Database
     from core.database.base import get_db
@@ -161,7 +161,12 @@ class BackendIntegration:
             self._modules['llm'] = backend_llm
             
             # 5. Personalidade GLaDOS
-            self._modules['glados_voice'] = GladosVoice()
+            self._modules['glados_voice'] = create_personality_voice(
+                user_name=str(getattr(settings.llm.glados, "user_name", "Helio") or "Helio"),
+                intensity=float(getattr(settings.llm.glados, "personality_intensity", 0.7) or 0.7),
+                assistant_name=str(getattr(settings.llm.glados, "glados_name", "GLaDOS") or "GLaDOS"),
+                profile=str(getattr(settings.llm.glados, "personality_profile", "auto") or "auto"),
+            )
             
             # 6. Repositórios de banco de dados
             self._init_database_repositories()

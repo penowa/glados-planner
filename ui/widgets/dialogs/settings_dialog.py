@@ -33,6 +33,11 @@ class SettingsDialog(QDialog):
         ("Preferir GPU (com fallback para CPU)", "gpu_prefer"),
         ("Somente GPU (sem fallback)", "gpu_only"),
     ]
+    PERSONALITY_PROFILE_LABELS = [
+        ("Automático", "auto"),
+        ("GLaDOS", "glados"),
+        ("Marvin", "marvin"),
+    ]
     SECONDARY_BUTTON_PALETTE = [
         "#FFFFFF",
         "#ECECEC",
@@ -167,6 +172,13 @@ class SettingsDialog(QDialog):
         for label, value in self.BACKEND_LABELS:
             self.llm_backend_combo.addItem(label, value)
         self.llm_backend_combo.currentIndexChanged.connect(self._sync_llm_mode_controls)
+        self.personality_profile_combo = QComboBox()
+        for label, value in self.PERSONALITY_PROFILE_LABELS:
+            self.personality_profile_combo.addItem(label, value)
+        self.personality_profile_combo.currentIndexChanged.connect(self._sync_personality_profile_summary)
+        self.personality_profile_summary_label = QLabel("")
+        self.personality_profile_summary_label.setWordWrap(True)
+        self.personality_profile_summary_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
         self.llm_user_name_input = QLineEdit()
         self.llm_assistant_name_input = QLineEdit()
         self.llm_model_path_input = QLineEdit()
@@ -237,6 +249,8 @@ class SettingsDialog(QDialog):
 
         self._add_llm_row("Nome do usuário (dashboard):", self.llm_user_name_input)
         self._add_llm_row("Nome do assistente:", self.llm_assistant_name_input)
+        self._add_llm_row("Perfil da personalidade:", self.personality_profile_combo)
+        self._add_llm_row("", self.personality_profile_summary_label)
         self._add_llm_row("Backend da LLM:", self.llm_backend_combo)
         self._add_llm_row("", llm_help)
         self._add_llm_row("Modelos encontrados (.gguf):", model_catalog_layout, scope="local")
@@ -250,13 +264,10 @@ class SettingsDialog(QDialog):
         self._add_llm_row("Foco na resposta (top-p):", self.llm_top_p_spin)
         self._add_llm_row("Limite de tokens por resposta:", self.llm_max_tokens_spin)
         self._add_llm_row("Modelo cloud (LiteLLM):", cloud_model_layout, scope="cloud")
-        self._add_llm_row("API base cloud (opcional):", self.llm_cloud_api_base_input, scope="cloud")
-        self._add_llm_row("API version cloud (opcional):", self.llm_cloud_api_version_input, scope="cloud")
-        self._add_llm_row("Organization cloud (opcional):", self.llm_cloud_organization_input, scope="cloud")
-        self._add_llm_row("API key cloud (opcional):", self.llm_cloud_api_key_input, scope="cloud")
         self._add_llm_row("Timeout cloud:", self.llm_cloud_timeout_spin, scope="cloud")
         self._add_llm_row("Tentativas cloud:", self.llm_cloud_max_retries_spin, scope="cloud")
 
+        self._sync_personality_profile_summary()
         self.tabs.addTab(tab, "LLM")
 
     def _add_llm_row(self, label: str, field, scope: str = "common"):
@@ -426,6 +437,10 @@ class SettingsDialog(QDialog):
         self.llm_cloud_max_retries_spin.setValue(int(getattr(cloud_cfg, "max_retries", 1) or 1))
         self.llm_user_name_input.setText(llm.glados.user_name)
         self.llm_assistant_name_input.setText(llm.glados.glados_name)
+        personality_profile = str(getattr(llm.glados, "personality_profile", "auto") or "auto").strip().lower()
+        profile_idx = self.personality_profile_combo.findData(personality_profile)
+        self.personality_profile_combo.setCurrentIndex(max(0, profile_idx))
+        self._sync_personality_profile_summary()
         self._refresh_model_catalog()
         self._refresh_gpu_catalog(selected_index=int(getattr(llm, "gpu_index", 0) or 0))
         self._sync_llm_mode_controls()
@@ -487,6 +502,9 @@ class SettingsDialog(QDialog):
             self.settings_model.llm.cloud.max_retries = self.llm_cloud_max_retries_spin.value()
             self.settings_model.llm.glados.user_name = self.llm_user_name_input.text().strip()
             self.settings_model.llm.glados.glados_name = self.llm_assistant_name_input.text().strip()
+            self.settings_model.llm.glados.personality_profile = str(
+                self.personality_profile_combo.currentData() or "auto"
+            ).strip().lower()
 
             self.settings_model.obsidian.templates_dir = self.obsidian_templates_dir_input.text().strip()
             self.settings_model.obsidian.auto_sync = self.obsidian_auto_sync_check.isChecked()
@@ -580,6 +598,20 @@ class SettingsDialog(QDialog):
         if not selected_path:
             return
         self.llm_model_path_input.setText(selected_path)
+
+    @staticmethod
+    def _personality_profile_summary(profile_value: str) -> str:
+        normalized = str(profile_value or "auto").strip().lower()
+        mapping = {
+            "auto": "Escolhe automaticamente com base na identidade atual do assistente.",
+            "glados": "Tom irônico, técnico e exigente, com sarcasmo seco e foco em clareza.",
+            "marvin": "Tom melancólico, pessimista e entediado, com humor existencial e precisão.",
+        }
+        return mapping.get(normalized, mapping["auto"])
+
+    def _sync_personality_profile_summary(self):
+        selected = str(self.personality_profile_combo.currentData() or "auto")
+        self.personality_profile_summary_label.setText(self._personality_profile_summary(selected))
 
     def _set_device_mode(self, mode_value: str):
         value = str(mode_value or "auto")

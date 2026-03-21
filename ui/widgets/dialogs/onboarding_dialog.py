@@ -53,6 +53,10 @@ class OnboardingDialog(QDialog):
         ("LLM local (GGUF)", "local"),
         ("LLM cloud (LiteLLM/Ollama)", "cloud"),
     ]
+    PERSONALITY_PROFILE_LABELS = [
+        ("GLaDOS", "glados"),
+        ("Marvin", "marvin"),
+    ]
     DEVICE_MODE_LABELS = [
         ("Automatico", "auto"),
         ("Somente CPU", "cpu_only"),
@@ -93,7 +97,7 @@ class OnboardingDialog(QDialog):
         layout.addWidget(header)
 
         subtitle = QLabel(
-            "Voce pode configurar apenas o essencial agora e ajustar o restante depois em Configuracoes."
+            "Voce pode configurar apenas o essencial agora e ajustar o restante depois em Configurações."
         )
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -194,7 +198,7 @@ class OnboardingDialog(QDialog):
         tab_layout = QVBoxLayout(tab)
         tab_layout.addWidget(
             self._create_info_box(
-                "Configuracao de LLM (opcional).\n"
+                "Configuracao de LLM.\n"
                 "No modo cloud, o fluxo guiado faz login no Ollama e prepara qwen3.5:cloud automaticamente."
             )
         )
@@ -210,6 +214,14 @@ class OnboardingDialog(QDialog):
         for label, value in self.BACKEND_LABELS:
             self.llm_backend_combo.addItem(label, value)
         self.llm_backend_combo.currentIndexChanged.connect(self._sync_llm_mode_controls)
+
+        self.personality_profile_combo = QComboBox()
+        for label, value in self.PERSONALITY_PROFILE_LABELS:
+            self.personality_profile_combo.addItem(label, value)
+        self.personality_profile_combo.currentIndexChanged.connect(self._sync_personality_profile_summary)
+        self.personality_profile_summary_label = QLabel("")
+        self.personality_profile_summary_label.setWordWrap(True)
+        self.personality_profile_summary_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
 
         self.llm_model_path_input = QLineEdit()
         self.llm_model_combo = QComboBox()
@@ -341,9 +353,6 @@ class OnboardingDialog(QDialog):
 
         self._add_llm_row("Modelo cloud:", cloud_model_layout, scope="cloud")
         self._add_llm_row("API base cloud:", self.llm_cloud_api_base_input, scope="cloud")
-        self._add_llm_row("API version cloud (opcional):", self.llm_cloud_api_version_input, scope="cloud")
-        self._add_llm_row("Organization cloud (opcional):", self.llm_cloud_organization_input, scope="cloud")
-        self._add_llm_row("API key cloud (opcional):", self.llm_cloud_api_key_input, scope="cloud")
         self._add_llm_row("Timeout cloud:", self.llm_cloud_timeout_spin, scope="cloud")
         self._add_llm_row("Tentativas cloud:", self.llm_cloud_max_retries_spin, scope="cloud")
         self._add_llm_row("Modelo Ollama a preparar:", self.ollama_model_combo, scope="cloud")
@@ -351,10 +360,13 @@ class OnboardingDialog(QDialog):
         self._add_llm_row("", ollama_action_layout, scope="cloud")
         self._add_llm_row("", self.ollama_status_label, scope="cloud")
 
+        self._add_llm_row("Perfil da personalidade:", self.personality_profile_combo)
+        self._add_llm_row("", self.personality_profile_summary_label)
         self._add_llm_row("Criatividade:", self.llm_temperature_spin)
         self._add_llm_row("Foco na resposta:", self.llm_top_p_spin)
         self._add_llm_row("Limite de tokens por resposta:", self.llm_max_tokens_spin)
 
+        self._sync_personality_profile_summary()
         tab_layout.addLayout(form)
         tab_layout.addStretch()
         self.tabs.addTab(tab, "LLM")
@@ -596,6 +608,12 @@ class OnboardingDialog(QDialog):
 
         backend_value = str(getattr(llm, "backend", "local") or "local")
         self._set_backend_mode(backend_value)
+        profile_value = str(getattr(llm.glados, "personality_profile", "glados") or "glados").strip().lower()
+        profile_idx = self.personality_profile_combo.findData(profile_value)
+        if profile_idx < 0:
+            profile_idx = self.personality_profile_combo.findData("glados")
+        self.personality_profile_combo.setCurrentIndex(max(0, profile_idx))
+        self._sync_personality_profile_summary()
 
         self.llm_model_path_input.setText(str(llm.model_path or ""))
         self._set_device_mode(getattr(llm, "device_mode", "auto"))
@@ -641,6 +659,19 @@ class OnboardingDialog(QDialog):
         show_on_start = self._as_bool(self.config_manager.get("ui/show_onboarding_dialog", True), True)
         self.hide_on_start_check.setChecked(not show_on_start)
         self._load_routine_preferences()
+
+    @staticmethod
+    def _personality_profile_summary(profile_value: str) -> str:
+        value = str(profile_value or "glados").strip().lower()
+        descriptions = {
+            "glados": "Tom ironico, analitico e sarcástico, com foco em clareza e rigor.",
+            "marvin": "Tom melancolico e pessimista, com humor seco e foco em objetividade.",
+        }
+        return descriptions.get(value, descriptions["glados"])
+
+    def _sync_personality_profile_summary(self):
+        selected = str(self.personality_profile_combo.currentData() or "glados")
+        self.personality_profile_summary_label.setText(self._personality_profile_summary(selected))
 
     def _load_routine_preferences(self):
         defaults = {
@@ -1489,6 +1520,9 @@ class OnboardingDialog(QDialog):
             self.settings_model.llm.backend = str(self.llm_backend_combo.currentData() or "local")
             self.settings_model.llm.glados.user_name = user_name
             self.settings_model.llm.glados.glados_name = assistant_name
+            self.settings_model.llm.glados.personality_profile = str(
+                self.personality_profile_combo.currentData() or "glados"
+            )
             self.settings_model.llm.model_name = Path(self.llm_model_path_input.text().strip()).name
             self.settings_model.llm.model_path = self.llm_model_path_input.text().strip()
             self.settings_model.llm.models_dir = self.models_dir_input.text().strip()

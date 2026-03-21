@@ -11,8 +11,9 @@ from dataclasses import dataclass
 import json
 
 # Importações do backend completo
+from core.config.settings import settings
 from core.llm.backend_router import llm as backend_llm
-from core.llm.glados.personality.glados_voice import GladosVoice
+from core.llm.glados.personality import create_personality_voice
 from core.llm.glados.brain.vault_connector import VaultStructure
 from core.llm.glados.models.tinyllama_wrapper import TinyLlamaGlados
 from core.llm.glados.brain.semantic_search import Sembrain
@@ -271,11 +272,9 @@ class GladosController(QObject):
         # Instância do backend LLM (singleton)
         self.backend = backend_llm
         
-        # Personalidade GLaDOS
-        self.personality = GladosVoice(
-            user_name="Helio",
-            intensity=self.state.personality_intensity
-        )
+        # Personalidade ativa (GLaDOS/Marvin)
+        self.personality = self._build_personality_voice(self.state.personality_intensity)
+        self._sync_personality_references()
         
         # Workers ativos
         self.active_workers: Dict[str, BackendWorker] = {}
@@ -314,6 +313,50 @@ class GladosController(QObject):
             
         except Exception as e:
             logger.warning(f"Erro em atualização periódica: {e}")
+
+    def _build_personality_voice(self, intensity: Optional[float] = None):
+        config = settings.llm.glados
+        resolved_intensity = self.state.personality_intensity if intensity is None else intensity
+        return create_personality_voice(
+            user_name=str(getattr(config, "user_name", "Helio") or "Helio"),
+            intensity=float(resolved_intensity),
+            assistant_name=str(getattr(config, "glados_name", "GLaDOS") or "GLaDOS"),
+            profile=str(getattr(config, "personality_profile", "auto") or "auto"),
+        )
+
+    def _sync_personality_references(self) -> None:
+        """Propaga a personalidade ativa para backend/modelo quando possível."""
+        personality = self.personality
+        backend_proxy = getattr(self, "backend", None)
+
+        targets: List[Any] = []
+        if backend_proxy is not None:
+            targets.append(backend_proxy)
+            inner = getattr(backend_proxy, "_backend", None)
+            if inner is not None and inner is not backend_proxy:
+                targets.append(inner)
+
+        for target in targets:
+            try:
+                if hasattr(target, "glados_voice"):
+                    setattr(target, "glados_voice", personality)
+            except Exception:
+                pass
+
+            model = getattr(target, "model", None)
+            if model is None:
+                continue
+
+            try:
+                if hasattr(model, "glados_voice"):
+                    setattr(model, "glados_voice", personality)
+                if hasattr(model, "assistant_name"):
+                    setattr(model, "assistant_name", str(getattr(personality, "assistant_name", "GLaDOS") or "GLaDOS"))
+                instruction_fn = getattr(personality, "get_llm_persona_instruction", None)
+                if hasattr(model, "persona_instruction") and callable(instruction_fn):
+                    setattr(model, "persona_instruction", str(instruction_fn() or "").strip())
+            except Exception:
+                pass
     
     def _cleanup_finished_workers(self):
         """Remove workers que já terminaram"""
@@ -527,21 +570,40 @@ class GladosController(QObject):
         self.state.enable_sarcasm = sarcasm_enabled
         
         # Atualizar instância da personalidade
-        self.personality = GladosVoice(
-            user_name="Helio",
-            intensity=intensity
-        )
+        self.personality = self._build_personality_voice(intensity)
+        self._sync_personality_references()
         
         # Emitir sinais
         self.personality_updated.emit({
             "intensity": intensity,
             "sarcasm_enabled": sarcasm_enabled,
-            "mode": self.state.current_mode
+            "mode": self.state.current_mode,
+            "profile": str(getattr(settings.llm.glados, "personality_profile", "auto") or "auto"),
         })
         
         self.voice_tone_changed.emit(intensity, sarcasm_enabled)
         
         logger.info(f"Personalidade GLaDOS atualizada: intensidade={intensity}, sarcasmo={sarcasm_enabled}")
+
+    @pyqtSlot(str)
+    def set_personality_profile(self, profile: str):
+        """Define perfil de personalidade ativo (auto/glados/marvin)."""
+        normalized = str(profile or "auto").strip().lower()
+        if normalized not in {"auto", "glados", "marvin"}:
+            normalized = "auto"
+
+        settings.llm.glados.personality_profile = normalized
+        self.personality = self._build_personality_voice(self.state.personality_intensity)
+        self._sync_personality_references()
+
+        self.personality_updated.emit({
+            "intensity": self.state.personality_intensity,
+            "sarcasm_enabled": self.state.enable_sarcasm,
+            "mode": self.state.current_mode,
+            "profile": normalized,
+        })
+
+        logger.info("Perfil de personalidade atualizado para: %s", normalized)
     
     @pyqtSlot(str)
     def set_mode(self, mode: str):
@@ -672,14 +734,19 @@ class GladosController(QObject):
             return self.ui_cache["quick_responses"][query_lower]
         
         # Respostas padrão para comandos comuns
-        quick_patterns = {
-            "quem é você": "Eu sou GLaDOS, sua assistente filosófica sarcástica.",
-            "qual seu nome": "GLaDOS, mas você já deveria saber disso.",
-            "como você está": "Funcionando dentro dos parâmetros esperados, considerando suas limitações.",
-            "obrigado": "De nada. Agora volte ao trabalho.",
-            "olá": "Olá. Espero que tenha algo útil para perguntar.",
-            "ajuda": "Consulte a documentação ou faça uma pergunta específica."
-        }
+        pattern_fn = getattr(self.personality, "get_quick_patterns", None)
+        if callable(pattern_fn):
+            quick_patterns = pattern_fn()
+        else:
+            assistant_name = str(getattr(self.personality, "assistant_name", "GLaDOS") or "GLaDOS")
+            quick_patterns = {
+                "quem é você": f"Eu sou {assistant_name}, sua assistente filosófica.",
+                "qual seu nome": assistant_name,
+                "como você está": "Funcionando dentro dos parâmetros esperados.",
+                "obrigado": "De nada.",
+                "olá": "Olá.",
+                "ajuda": "Faça uma pergunta específica."
+            }
         
         for pattern, response in quick_patterns.items():
             if pattern in query_lower:

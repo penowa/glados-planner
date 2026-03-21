@@ -121,8 +121,8 @@ class DisciplineChatPulseButton(QPushButton):
         super().__init__("", parent)
         self._dot_radius = 3.0
         self._dot_min_radius = 2.8
-        self._dot_max_radius = 5.0
-        self._dot_step = 0.05
+        self._dot_max_radius = 4.0
+        self._dot_step = 0.03
         self._dot_alpha_min = 95.0
         self._dot_alpha_max = 255.0
         self._dot_alpha = self._dot_alpha_max
@@ -439,16 +439,14 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(primary_actions)
 
-        self.more_actions_button = QPushButton()
-        self.more_actions_button.setObjectName("more_actions_button")
-        self.more_actions_button.setText("⋮")
-        self.more_actions_button.setFixedSize(36, 36)
-        self.more_actions_button.setToolTip("Mais ações")
-        self.more_actions_button.clicked.connect(self._toggle_header_more_box)
-        self._apply_header_round_button_style(self.more_actions_button)
-        self._build_compact_actions_menu()
-        self.more_actions_button.setVisible(False)
-        layout.addWidget(self.more_actions_button)
+        # Botão de configurações (posição principal no header)
+        self.settings_button = QPushButton("◉")
+        self.settings_button.setObjectName("settings_button")
+        self.settings_button.setFixedSize(36, 36)
+        self.settings_button.setToolTip("Configurações")
+        self.settings_button.clicked.connect(self.show_settings)
+        self._apply_header_round_button_style(self.settings_button)
+        layout.addWidget(self.settings_button)
         
         # Controles da janela
         controls_layout = QHBoxLayout()
@@ -464,14 +462,17 @@ class MainWindow(QMainWindow):
         self._apply_header_round_button_style(self.theme_button)
         controls_layout.addWidget(self.theme_button)
         
-        # Botão de configurações - NOVO
-        self.settings_button = QPushButton("⚙")
-        self.settings_button.setObjectName("settings_button")
-        self.settings_button.setFixedSize(36, 36)
-        self.settings_button.setToolTip("Configurações")
-        self.settings_button.clicked.connect(self.show_settings)
-        self._apply_header_round_button_style(self.settings_button)
-        controls_layout.addWidget(self.settings_button)
+        # Botão de ações extras (menu vertical "⋮")
+        self.more_actions_button = QPushButton()
+        self.more_actions_button.setObjectName("more_actions_button")
+        self.more_actions_button.setText("⋮")
+        self.more_actions_button.setFixedSize(36, 36)
+        self.more_actions_button.setToolTip("Mais ações")
+        self.more_actions_button.clicked.connect(self._toggle_header_more_box)
+        self._apply_header_round_button_style(self.more_actions_button)
+        self._build_compact_actions_menu()
+        self.more_actions_button.setVisible(False)
+        controls_layout.addWidget(self.more_actions_button)
         
         # Botão para encerrar - NOVO
         self.quit_button = QPushButton("⨯")
@@ -1032,6 +1033,15 @@ class MainWindow(QMainWindow):
                 review_view.apply_review_settings(updated_settings.get("review_view", {}))
             except Exception as exc:
                 logger.debug("Falha ao aplicar settings na review workspace: %s", exc)
+        glados_cfg = updated_settings.get("llm", {}).get("glados", {}) if isinstance(updated_settings, dict) else {}
+        personality_profile = str(glados_cfg.get("personality_profile", "") or "").strip().lower()
+        if personality_profile in {"auto", "glados", "marvin"}:
+            glados_controller = self.controllers.get("glados")
+            if glados_controller and hasattr(glados_controller, "set_personality_profile"):
+                try:
+                    glados_controller.set_personality_profile(personality_profile)
+                except Exception as exc:
+                    logger.debug("Falha ao aplicar perfil de personalidade em runtime: %s", exc)
         self.show_success_notification(
             "Configurações salvas",
             "As configurações foram atualizadas com sucesso."

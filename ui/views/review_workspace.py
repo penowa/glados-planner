@@ -3,6 +3,7 @@ Workspace de revisão com mapa mental interativo.
 """
 from __future__ import annotations
 
+from collections import deque
 import json
 import logging
 import re
@@ -802,6 +803,7 @@ class ReviewWorkspaceView(QWidget):
         self._editing_card_node_id: str = ""
         self._editing_card_mode: str = "text"
         self._isolated_spawn_index: int = 0
+        self.auto_layout_button: Optional[CanvasActionDragButton] = None
 
         self._fullscreen_active = False
         self._window_was_maximized = False
@@ -1066,8 +1068,16 @@ class ReviewWorkspaceView(QWidget):
         self.add_image_card_button.setIconSize(QSize(22, 22))
         self._apply_round_icon_button_style(self.add_image_card_button, radius=23)
 
+        self.auto_layout_button = CanvasActionDragButton("auto_layout_map", self, enable_drag=False)
+        self.auto_layout_button.setToolTip("Organizar mapa automaticamente")
+        self.auto_layout_button.setFixedSize(46, 46)
+        self.auto_layout_button.setIcon(self._build_auto_layout_icon())
+        self.auto_layout_button.setIconSize(QSize(22, 22))
+        self._apply_round_icon_button_style(self.auto_layout_button, radius=23)
+
         dock_layout.addWidget(self.add_text_card_button)
         dock_layout.addWidget(self.add_image_card_button)
+        dock_layout.addWidget(self.auto_layout_button)
         bottom_layout.addWidget(dock)
         bottom_layout.addStretch(1)
         root.addWidget(self.bottom_actions_bar, 0)
@@ -1102,6 +1112,8 @@ class ReviewWorkspaceView(QWidget):
         self.zoom_reset_button.clicked.connect(self.canvas_view.reset_zoom)
         self.add_text_card_button.clicked.connect(self._create_text_card_isolated)
         self.add_image_card_button.clicked.connect(self._create_image_card_isolated)
+        if self.auto_layout_button:
+            self.auto_layout_button.clicked.connect(self._auto_organize_current_map)
 
         self.capture_selection_button.clicked.connect(lambda: self._capture_selection_to_note(show_empty_feedback=True))
         self.note_viewer.customContextMenuRequested.connect(self._on_note_viewer_context_menu)
@@ -1139,6 +1151,443 @@ class ReviewWorkspaceView(QWidget):
         painter.drawLine(15, 15, 18, 12)
         painter.end()
         return QIcon(pixmap)
+
+    def _build_auto_layout_icon(self) -> QIcon:
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor("#E8EEF9"), 1.7)
+        painter.setPen(pen)
+        painter.drawRoundedRect(3, 4, 6, 6, 2, 2)
+        painter.drawRoundedRect(15, 4, 6, 6, 2, 2)
+        painter.drawRoundedRect(9, 14, 6, 6, 2, 2)
+        painter.drawLine(9, 7, 15, 7)
+        painter.drawLine(18, 10, 12, 14)
+        painter.drawLine(6, 10, 12, 14)
+        painter.end()
+        return QIcon(pixmap)
+
+    @staticmethod
+    def _node_size(node: Dict[str, Any]) -> tuple[float, float]:
+        try:
+            width = max(120.0, float(node.get("width", 220) or 220))
+        except Exception:
+            width = 220.0
+        try:
+            height = max(64.0, float(node.get("height", 90) or 90))
+        except Exception:
+            height = 90.0
+        return width, height
+
+    @staticmethod
+    def _node_position(node: Dict[str, Any]) -> tuple[float, float]:
+        try:
+            x = float(node.get("x", 0) or 0)
+        except Exception:
+            x = 0.0
+        try:
+            y = float(node.get("y", 0) or 0)
+        except Exception:
+            y = 0.0
+        return x, y
+
+    def _node_rank_label(self, node: Dict[str, Any]) -> str:
+        file_ref = str(node.get("file") or "").strip()
+        if file_ref:
+            return Path(file_ref).stem.lower()
+        text = str(node.get("text") or node.get("title") or node.get("caption") or "").strip()
+        if text:
+            return text.lower()
+        return str(node.get("id") or "").strip().lower()
+
+    def _node_signal_text(self, node: Dict[str, Any]) -> str:
+        chunks = [
+            str(node.get("id") or ""),
+            str(node.get("type") or ""),
+            str(node.get("file") or ""),
+            str(node.get("text") or ""),
+            str(node.get("title") or ""),
+            str(node.get("caption") or ""),
+        ]
+        return self._normalize_token(" ".join(chunks))
+
+    def _is_root_like_node(self, node: Dict[str, Any]) -> bool:
+        node_id = str(node.get("id") or "").strip().lower()
+        if node_id in {"node-livro", "node-disciplina"}:
+            return True
+        signal = self._node_signal_text(node)
+        return "mapa base da obra" in signal or "mapa da disciplina" in signal
+
+    def _is_chapter_like_node(self, node: Dict[str, Any]) -> bool:
+        if str(node.get("color") or "").strip() == "5":
+            return True
+        signal = self._node_signal_text(node)
+        return "capitulo" in signal or "chapter" in signal
+
+    def _is_user_note_like_node(self, node: Dict[str, Any]) -> bool:
+        signal = self._node_signal_text(node)
+        if "02-anotacoes" in signal:
+            return True
+        if "nota-usuario" in signal or "nota do usuario" in signal or "anotacao" in signal:
+            return True
+        if "05 - pessoal" in signal or "05-pessoal" in signal:
+            return True
+        return str(node.get("color") or "").strip() == "6"
+
+    def _resolve_primary_layout_root_id(
+        self,
+        node_by_id: Dict[str, Dict[str, Any]],
+        incoming_by_id: Dict[str, set[str]],
+    ) -> str:
+        if "node-livro" in node_by_id:
+            return "node-livro"
+        if "node-disciplina" in node_by_id:
+            return "node-disciplina"
+
+        root_candidates = [
+            node_id
+            for node_id, node in node_by_id.items()
+            if self._is_root_like_node(node)
+        ]
+        if root_candidates:
+            root_candidates.sort(
+                key=lambda node_id: (
+                    self._node_position(node_by_id[node_id])[0],
+                    self._node_position(node_by_id[node_id])[1],
+                    node_id,
+                )
+            )
+            return root_candidates[0]
+
+        without_parent = [
+            node_id
+            for node_id in node_by_id
+            if not incoming_by_id.get(node_id)
+        ]
+        if without_parent:
+            without_parent.sort(
+                key=lambda node_id: (
+                    self._node_position(node_by_id[node_id])[0],
+                    self._node_position(node_by_id[node_id])[1],
+                    node_id,
+                )
+            )
+            return without_parent[0]
+
+        fallback = sorted(
+            node_by_id.keys(),
+            key=lambda node_id: (
+                self._node_position(node_by_id[node_id])[0],
+                self._node_position(node_by_id[node_id])[1],
+                node_id,
+            ),
+        )
+        return fallback[0] if fallback else ""
+
+    def _nearest_ancestor_in_set(
+        self,
+        node_id: str,
+        incoming_by_id: Dict[str, set[str]],
+        candidates: set[str],
+    ) -> str:
+        start = str(node_id or "").strip()
+        if not start or not candidates:
+            return ""
+
+        queue = deque(incoming_by_id.get(start, set()))
+        visited = {start}
+        while queue:
+            current = str(queue.popleft() or "").strip()
+            if not current or current in visited:
+                continue
+            if current in candidates:
+                return current
+            visited.add(current)
+            for parent in incoming_by_id.get(current, set()):
+                if parent not in visited:
+                    queue.append(parent)
+        return ""
+
+    def _has_ancestor(
+        self,
+        node_id: str,
+        ancestor_id: str,
+        incoming_by_id: Dict[str, set[str]],
+    ) -> bool:
+        start = str(node_id or "").strip()
+        target = str(ancestor_id or "").strip()
+        if not start or not target:
+            return False
+        if start == target:
+            return True
+
+        queue = deque(incoming_by_id.get(start, set()))
+        visited = {start}
+        while queue:
+            current = str(queue.popleft() or "").strip()
+            if not current or current in visited:
+                continue
+            if current == target:
+                return True
+            visited.add(current)
+            for parent in incoming_by_id.get(current, set()):
+                if parent not in visited:
+                    queue.append(parent)
+        return False
+
+    def _reorient_edges_for_layout(self, payload: Dict[str, Any], node_by_id: Dict[str, Dict[str, Any]]):
+        edges = payload.get("edges")
+        if not isinstance(edges, list):
+            return
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            from_id = str(edge.get("fromNode") or "").strip()
+            to_id = str(edge.get("toNode") or "").strip()
+            from_node = node_by_id.get(from_id)
+            to_node = node_by_id.get(to_id)
+            if not from_node or not to_node:
+                continue
+
+            from_x, from_y = self._node_position(from_node)
+            to_x, to_y = self._node_position(to_node)
+            from_w, from_h = self._node_size(from_node)
+            to_w, to_h = self._node_size(to_node)
+
+            from_center = QPointF(from_x + (from_w / 2.0), from_y + (from_h / 2.0))
+            to_center = QPointF(to_x + (to_w / 2.0), to_y + (to_h / 2.0))
+            dx = float(to_center.x() - from_center.x())
+            dy = float(to_center.y() - from_center.y())
+
+            if abs(dx) >= abs(dy):
+                if dx >= 0:
+                    edge["fromSide"] = "right"
+                    edge["toSide"] = "left"
+                else:
+                    edge["fromSide"] = "left"
+                    edge["toSide"] = "right"
+            else:
+                if dy >= 0:
+                    edge["fromSide"] = "bottom"
+                    edge["toSide"] = "top"
+                else:
+                    edge["fromSide"] = "top"
+                    edge["toSide"] = "bottom"
+
+    def _auto_organize_current_map(self):
+        payload = self.current_canvas_payload
+        nodes = payload.get("nodes")
+        if not isinstance(nodes, list) or not nodes:
+            self.status_label.setText("Não há cards para organizar no mapa atual")
+            return
+
+        valid_nodes = [node for node in nodes if isinstance(node, dict) and str(node.get("id") or "").strip()]
+        if not valid_nodes:
+            self.status_label.setText("Mapa sem nós válidos para organização")
+            return
+
+        node_by_id: Dict[str, Dict[str, Any]] = {
+            str(node.get("id") or "").strip(): node
+            for node in valid_nodes
+        }
+
+        edges = payload.get("edges")
+        edge_rows = edges if isinstance(edges, list) else []
+        incoming_by_id: Dict[str, set[str]] = {node_id: set() for node_id in node_by_id}
+        for edge in edge_rows:
+            if not isinstance(edge, dict):
+                continue
+            from_id = str(edge.get("fromNode") or "").strip()
+            to_id = str(edge.get("toNode") or "").strip()
+            if from_id in node_by_id and to_id in node_by_id and from_id != to_id:
+                incoming_by_id.setdefault(to_id, set()).add(from_id)
+
+        root_id = self._resolve_primary_layout_root_id(node_by_id, incoming_by_id)
+        if not root_id:
+            self.status_label.setText("Não foi possível identificar o nó raiz do mapa")
+            return
+
+        sortable_ids = sorted(
+            node_by_id.keys(),
+            key=lambda node_id: (
+                self._node_position(node_by_id[node_id])[1],
+                self._node_position(node_by_id[node_id])[0],
+                self._node_rank_label(node_by_id[node_id]),
+                node_id,
+            ),
+        )
+
+        chapter_ids = {
+            node_id
+            for node_id in node_by_id
+            if node_id != root_id and self._is_chapter_like_node(node_by_id[node_id])
+        }
+        user_note_ids = {
+            node_id
+            for node_id in node_by_id
+            if node_id != root_id and self._is_user_note_like_node(node_by_id[node_id])
+        }
+
+        chapter_main_children: Dict[str, List[str]] = {node_id: [] for node_id in chapter_ids}
+        chapter_user_children: Dict[str, List[str]] = {node_id: [] for node_id in chapter_ids}
+        root_direct_main: List[str] = []
+        root_direct_user: List[str] = []
+        loose_ids: List[str] = []
+
+        for node_id in sortable_ids:
+            if node_id == root_id or node_id in chapter_ids:
+                continue
+
+            chapter_parent = self._nearest_ancestor_in_set(node_id, incoming_by_id, chapter_ids)
+            if chapter_parent:
+                if node_id in user_note_ids:
+                    chapter_user_children.setdefault(chapter_parent, []).append(node_id)
+                else:
+                    chapter_main_children.setdefault(chapter_parent, []).append(node_id)
+                continue
+
+            if self._has_ancestor(node_id, root_id, incoming_by_id):
+                if node_id in user_note_ids:
+                    root_direct_user.append(node_id)
+                else:
+                    root_direct_main.append(node_id)
+                continue
+
+            loose_ids.append(node_id)
+
+        chapter_order = [node_id for node_id in sortable_ids if node_id in chapter_ids]
+        root_direct_ids = root_direct_main + root_direct_user
+
+        placed_ids = {root_id}
+        placed_ids.update(root_direct_ids)
+        for chapter_id in chapter_order:
+            placed_ids.add(chapter_id)
+            placed_ids.update(chapter_main_children.get(chapter_id, []))
+            placed_ids.update(chapter_user_children.get(chapter_id, []))
+        placed_ids.update(loose_ids)
+
+        remaining_ids = [
+            node_id
+            for node_id in sortable_ids
+            if node_id not in placed_ids
+        ]
+        if remaining_ids:
+            loose_ids.extend(remaining_ids)
+
+        root_node = node_by_id[root_id]
+        root_x, root_y = self._node_position(root_node)
+        root_w, _ = self._node_size(root_node)
+
+        def _max_width(ids: List[str], default_value: float = 220.0) -> float:
+            if not ids:
+                return default_value
+            return max(self._node_size(node_by_id[node_id])[0] for node_id in ids)
+
+        chapter_children_all: List[str] = []
+        for chapter_id in chapter_order:
+            chapter_children_all.extend(chapter_main_children.get(chapter_id, []))
+            chapter_children_all.extend(chapter_user_children.get(chapter_id, []))
+
+        lane_gap = 200.0
+        root_direct_w = _max_width(root_direct_ids, 220.0)
+        chapter_w = _max_width(chapter_order, 220.0)
+        chapter_child_w = _max_width(chapter_children_all, 220.0)
+
+        if root_direct_ids:
+            root_direct_x = root_x + root_w + lane_gap
+            chapter_x = root_direct_x + max(root_direct_w, 220.0) + lane_gap
+        else:
+            root_direct_x = root_x + root_w + lane_gap
+            chapter_x = root_x + root_w + lane_gap
+        chapter_children_x = chapter_x + max(chapter_w, 220.0) + lane_gap
+        loose_x = chapter_children_x + max(chapter_child_w, 220.0) + lane_gap
+
+        positions: Dict[str, tuple[float, float]] = {root_id: (root_x, root_y)}
+
+        def _vertical_span(ids: List[str], gap: float) -> float:
+            if not ids:
+                return 0.0
+            heights = [self._node_size(node_by_id[node_id])[1] for node_id in ids]
+            return sum(heights) + (gap * max(0, len(ids) - 1))
+
+        # Lane para conteúdos ligados diretamente ao livro (inclui notas do usuário diretas).
+        root_lane_gap = 38.0
+        if root_direct_ids:
+            root_lane_total = _vertical_span(root_direct_ids, root_lane_gap)
+            cursor_y = root_y - (root_lane_total / 2.0)
+            for node_id in root_direct_ids:
+                _, card_h = self._node_size(node_by_id[node_id])
+                positions[node_id] = (root_direct_x, cursor_y)
+                cursor_y += card_h + root_lane_gap
+
+        # Lane hierárquica Livro -> Capítulos -> Filhos.
+        chapter_block_gap = 72.0
+        chapter_child_gap = 34.0
+        if chapter_order:
+            blocks: List[Dict[str, Any]] = []
+            for chapter_id in chapter_order:
+                chapter_children = chapter_main_children.get(chapter_id, []) + chapter_user_children.get(chapter_id, [])
+                _, chapter_h = self._node_size(node_by_id[chapter_id])
+                children_total_h = _vertical_span(chapter_children, chapter_child_gap)
+                block_h = max(chapter_h, children_total_h)
+                blocks.append(
+                    {
+                        "chapter_id": chapter_id,
+                        "children": chapter_children,
+                        "chapter_h": chapter_h,
+                        "children_total_h": children_total_h,
+                        "block_h": block_h,
+                    }
+                )
+
+            total_blocks_h = (
+                sum(float(block["block_h"]) for block in blocks)
+                + chapter_block_gap * max(0, len(blocks) - 1)
+            )
+            block_cursor = root_y - (total_blocks_h / 2.0)
+            for block in blocks:
+                chapter_id = str(block["chapter_id"])
+                block_h = float(block["block_h"])
+                chapter_h = float(block["chapter_h"])
+                children = list(block["children"])
+                children_total_h = float(block["children_total_h"])
+
+                chapter_y = block_cursor + max(0.0, (block_h - chapter_h) / 2.0)
+                positions[chapter_id] = (chapter_x, chapter_y)
+
+                if children:
+                    child_cursor = block_cursor + max(0.0, (block_h - children_total_h) / 2.0)
+                    for child_id in children:
+                        _, child_h = self._node_size(node_by_id[child_id])
+                        positions[child_id] = (chapter_children_x, child_cursor)
+                        child_cursor += child_h + chapter_child_gap
+
+                block_cursor += block_h + chapter_block_gap
+
+        # Lane para exceções soltas/desconectadas.
+        loose_gap = 34.0
+        if loose_ids:
+            loose_total = _vertical_span(loose_ids, loose_gap)
+            loose_cursor = root_y - (loose_total / 2.0)
+            for node_id in loose_ids:
+                _, card_h = self._node_size(node_by_id[node_id])
+                positions[node_id] = (loose_x, loose_cursor)
+                loose_cursor += card_h + loose_gap
+
+        for node_id, (x, y) in positions.items():
+            node = node_by_id.get(node_id)
+            if not node:
+                continue
+            node["x"] = round(float(x), 2)
+            node["y"] = round(float(y), 2)
+
+        self._reorient_edges_for_layout(payload, node_by_id)
+        self._render_canvas(payload, reset_zoom=False)
+        self._persist_canvas_payload()
+        self.status_label.setText(
+            f"Mapa organizado automaticamente: {len(positions)} nós distribuídos por hierarquia"
+        )
 
     def _load_review_settings(self):
         try:

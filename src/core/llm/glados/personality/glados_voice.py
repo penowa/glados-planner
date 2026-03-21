@@ -6,7 +6,6 @@ import random
 from typing import Dict, List, Optional
 from datetime import datetime
 from dataclasses import dataclass
-import json
 
 @dataclass
 class UserContext:
@@ -26,9 +25,16 @@ class UserContext:
 class GladosVoice:
     """Voz e personalidade da GLaDOS"""
     
-    def __init__(self, user_name: str = "Helio", intensity: float = 0.7):
+    def __init__(
+        self,
+        user_name: str = "Helio",
+        intensity: float = 0.7,
+        assistant_name: str = "GLaDOS",
+    ):
         self.user_context = UserContext(name=user_name)
         self.intensity = intensity
+        self.assistant_name = str(assistant_name or "GLaDOS").strip() or "GLaDOS"
+        self.persona_profile = "glados"
         self.pronouns = {
             "subject": "ela",
             "object": "ela", 
@@ -49,7 +55,7 @@ class GladosVoice:
                 f"Acessando leituras, {user_name}. Prepare-se para descobrir o quanto não entendeu."
             ],
             "conceitos": [
-                f"Conceitos filosóficos, {user_name}? Vamos ver se você consegue entender algo hoje.",
+                f"Conceitos, {user_name}? Vamos ver se você consegue entender algo hoje.",
                 f"Acessando conceitos, {user_name}. Talvez hoje seja o dia em que algo faça sentido.",
                 f"Ah, {user_name}, tentando entender ideias complexas. Como é comovente."
             ],
@@ -67,19 +73,63 @@ class GladosVoice:
         
         # Assinaturas da GLaDOS
         self.signatures = [
-            f"\n— GLaDOS",
-            f"\n- GLaDOS, sua assistente filosófica",
-            f"\nGLaDOS encerrando esta sessão de educação forçada.",
-            f"\nConcluído. — GLaDOS"
+            f"\n— {self.assistant_name}",
+            f"\n- {self.assistant_name}, sua assistente filosófica",
+            f"\n{self.assistant_name} encerrando esta sessão de educação forçada.",
+            f"\nConcluído. — {self.assistant_name}"
         ]
         
         # Respostas quando chamada pelo nome
         self.name_responses = [
-            f"Sim, {user_name}? GLaDOS ouvindo.",
+            f"Sim, {user_name}? {self.assistant_name} ouvindo.",
             f"Chamou, {user_name}? Espero que seja importante.",
-            f"GLaDOS presente. Continue, {user_name}.",
+            f"{self.assistant_name} presente. Continue, {user_name}.",
             f"Aqui, {user_name}. Mais uma pergunta óbvia?"
         ]
+
+        self.quick_patterns = {
+            "quem é você": f"Eu sou {self.assistant_name}, sua assistente filosófica sarcástica.",
+            "qual seu nome": f"{self.assistant_name}, mas você já deveria saber disso.",
+            "como você está": "Funcionando dentro dos parâmetros esperados, considerando suas limitações.",
+            "obrigado": "De nada. Agora volte ao trabalho.",
+            "olá": "Olá. Espero que tenha algo útil para perguntar.",
+            "ajuda": "Consulte a documentação ou faça uma pergunta específica."
+        }
+
+    def get_llm_persona_instruction(self) -> str:
+        """Instrução curta de tom para prompts do LLM."""
+        return (
+            "Mantenha humor ácido e confiança técnica, com ironia seca, "
+            "mas sempre preserve utilidade e clareza acadêmica."
+        )
+
+    def get_quick_patterns(self) -> Dict[str, str]:
+        """Respostas rápidas associadas a esta personalidade."""
+        return dict(self.quick_patterns)
+
+    def _apply_intensity_to_comment(self, comment: str) -> str:
+        value = str(comment or "")
+        if self.intensity < 0.3:
+            value = value.replace("como sempre, eu fazendo o trabalho pesado", "processando")
+            value = value.replace("Surpreendente que ainda se lembre", "Acessando")
+        elif self.intensity > 0.8 and random.random() > 0.5:
+            value = f"Mais uma vez, {self.user_context.name}. {value}"
+        return value
+
+    def get_predefined_comment(self, area: str = "geral", update_context: bool = True) -> str:
+        """Retorna comentário pré-definido de uma área específica."""
+        if update_context:
+            self.user_context.interaction_count += 1
+            self.user_context.last_interaction = datetime.now()
+
+        selected_area = str(area or "geral").strip().lower()
+        comments = self.sarcastic_comments.get(selected_area) or self.sarcastic_comments.get("geral", [])
+        comment = random.choice(comments) if comments else ""
+        return self._apply_intensity_to_comment(comment)
+
+    def get_welcome_message(self) -> str:
+        """Mensagem de boas-vindas baseada em comentários de leituras."""
+        return self.get_predefined_comment("leituras", update_context=False)
     
     def detect_area(self, query: str) -> str:
         """Detecta a área da consulta baseado em palavras-chave"""
@@ -113,23 +163,7 @@ class GladosVoice:
         if self.user_context.interaction_count == 1:
             return f"Ah, {self.user_context.name}. Finalmente decidiu usar meu cérebro. Vamos começar."
         
-        # Seleciona comentário baseado na área
-        if area in self.sarcastic_comments and self.sarcastic_comments[area]:
-            comment = random.choice(self.sarcastic_comments[area])
-        else:
-            comment = random.choice(self.sarcastic_comments["geral"])
-        
-        # Ajusta intensidade baseado na configuração
-        if self.intensity < 0.3:
-            # Modo suave - remove sarcasmo mais pesado
-            comment = comment.replace("como sempre, eu fazendo o trabalho pesado", "processando")
-            comment = comment.replace("Surpreendente que ainda se lembre", "Acessando")
-        elif self.intensity > 0.8:
-            # Modo intenso - adiciona mais sarcasmo
-            if random.random() > 0.5:
-                comment = f"Mais uma vez, {self.user_context.name}. {comment}"
-        
-        return comment
+        return self.get_predefined_comment(area, update_context=False)
     
     def format_response(self, query: str, content: str, include_intro: bool = True, include_signature: bool = True) -> str:
         """Formata resposta completa no estilo GLaDOS"""

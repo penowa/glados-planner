@@ -9,8 +9,8 @@ from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 
 import yaml
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QAction, QColor, QFont, QLinearGradient, QPainter, QPixmap, QPen
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QAction, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPixmap, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -329,7 +329,7 @@ class LibraryBookTile(QFrame):
 
 
 class LibraryView(QWidget):
-    """Tela da biblioteca com itens superficiais e card de adição."""
+    """Tela da biblioteca com grid de capas, filtros e importação via pop-up."""
 
     navigate_to = pyqtSignal(str)
     open_book_requested = pyqtSignal(object)  # Path
@@ -342,13 +342,22 @@ class LibraryView(QWidget):
         self.reading_controller = self.controllers.get("reading")
         self.agenda_controller = self.controllers.get("agenda")
         self.add_book_card: Optional[AddBookCard] = None
+        self.add_book_popup: Optional[QDialog] = None
+        self.add_book_button: Optional[QPushButton] = None
+        self.books_panel: Optional[QFrame] = None
+        self.books_drop_zone: Optional[QFrame] = None
+        self.drop_hint_label: Optional[QLabel] = None
         self.books_container: Optional[QWidget] = None
         self.books_panel_layout: Optional[QVBoxLayout] = None
         self.books_shelves_layout: Optional[QVBoxLayout] = None
         self.books_scroll: Optional[QScrollArea] = None
         self.empty_label: Optional[QLabel] = None
+        self.search_input: Optional[QLineEdit] = None
+        self.books_count_label: Optional[QLabel] = None
+        self.filter_buttons: Dict[str, QPushButton] = {}
         self._books_cache: list[Dict[str, Any]] = []
         self._schedule_feedback: Dict[str, Dict[str, Any]] = {}
+        self.status_filter_mode = "all"
         self.sort_mode = "recent"
         self.sort_toggle_button: Optional[QPushButton] = None
         self._render_retry_count = 0
@@ -375,78 +384,163 @@ class LibraryView(QWidget):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(20, 20, 20, 20)
-        content_layout.setSpacing(16)
+        content_layout.setSpacing(14)
 
         header = QWidget()
+        header.setObjectName("library_header")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
+
         title = QLabel("📚 Biblioteca")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        subtitle = QLabel("Visual rápido de título + capa")
-        subtitle.setStyleSheet("color: #8F8F8F; font-size: 11px;")
+        title.setObjectName("library_title")
+        subtitle = QLabel("Coleção visual inspirada em estantes editoriais")
+        subtitle.setObjectName("library_subtitle")
+
         left = QVBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(2)
         left.addWidget(title)
         left.addWidget(subtitle)
-        refresh_button = QPushButton("🔄")
-        refresh_button.setFixedSize(32, 32)
-        refresh_button.setToolTip("Atualizar biblioteca")
-        refresh_button.clicked.connect(self.refresh_books)
-        self.sort_toggle_button = QPushButton(self._sort_button_text())
-        self.sort_toggle_button.setToolTip("Alternar organização das prateleiras")
-        self.sort_toggle_button.clicked.connect(self._cycle_sort_mode)
-        self.sort_toggle_button.setMinimumHeight(32)
+
         header_layout.addLayout(left)
-        header_layout.addStretch()
-        header_layout.addWidget(self.sort_toggle_button)
-        header_layout.addWidget(refresh_button)
+        header_layout.addStretch(1)
         content_layout.addWidget(header)
 
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(14)
+
+        filters_panel = QFrame()
+        filters_panel.setObjectName("library_filters_panel")
+        filters_panel.setFixedWidth(220)
+        filters_layout = QVBoxLayout(filters_panel)
+        filters_layout.setContentsMargins(14, 14, 14, 14)
+        filters_layout.setSpacing(8)
+
+        filters_title = QLabel("Filtros")
+        filters_title.setObjectName("library_filters_title")
+        filters_layout.addWidget(filters_title)
+
+        filters_hint = QLabel("Estado de leitura")
+        filters_hint.setObjectName("library_filters_hint")
+        filters_layout.addWidget(filters_hint)
+
+        filter_defs = [
+            ("all", "Todos"),
+            ("reading", "Em andamento"),
+            ("completed", "Concluídos"),
+            ("pending", "Não iniciados"),
+        ]
+        for mode, label in filter_defs:
+            button = QPushButton(label)
+            button.setObjectName("library_filter_button")
+            button.setCheckable(True)
+            button.clicked.connect(lambda checked, m=mode: self._set_status_filter_mode(m))
+            self.filter_buttons[mode] = button
+            filters_layout.addWidget(button)
+
+        filters_spacer = QLabel("Arraste PDFs/EPUBs diretamente para a área das capas.")
+        filters_spacer.setObjectName("library_filters_hint")
+        filters_spacer.setWordWrap(True)
+        filters_layout.addStretch(1)
+        filters_layout.addWidget(filters_spacer)
+        row.addWidget(filters_panel, 0, alignment=Qt.AlignmentFlag.AlignTop)
 
         books_panel = QFrame()
-        books_panel.setObjectName("dashboard_card")
+        books_panel.setObjectName("library_books_panel")
+        self.books_panel = books_panel
         books_panel_layout = QVBoxLayout(books_panel)
         self.books_panel_layout = books_panel_layout
         books_panel_layout.setContentsMargins(12, 12, 12, 12)
         books_panel_layout.setSpacing(10)
 
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
+
+        self.sort_toggle_button = QPushButton(self._sort_button_text())
+        self.sort_toggle_button.setObjectName("library_chip_button")
+        self.sort_toggle_button.setToolTip("Alternar organização das prateleiras")
+        self.sort_toggle_button.clicked.connect(self._cycle_sort_mode)
+        self.sort_toggle_button.setMinimumHeight(32)
+
+        refresh_button = QPushButton("Atualizar")
+        refresh_button.setObjectName("library_chip_button")
+        refresh_button.setMinimumHeight(32)
+        refresh_button.setToolTip("Atualizar biblioteca")
+        refresh_button.clicked.connect(self.refresh_books)
+
+        self.books_count_label = QLabel("0 livros")
+        self.books_count_label.setObjectName("library_count_label")
+
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("library_search_input")
+        self.search_input.setPlaceholderText("Buscar por título ou autor...")
+        self.search_input.textChanged.connect(self._render_books_grid)
+        self.search_input.setMinimumHeight(32)
+
+        controls.addWidget(self.sort_toggle_button)
+        controls.addWidget(refresh_button)
+        controls.addWidget(self.books_count_label)
+        controls.addStretch(1)
+        controls.addWidget(self.search_input, 1)
+        books_panel_layout.addLayout(controls)
+
+        self.books_drop_zone = QFrame()
+        self.books_drop_zone.setObjectName("library_books_drop_zone")
+        self.books_drop_zone.setProperty("dragActive", False)
+        self.books_drop_zone.setAcceptDrops(True)
+        self.books_drop_zone.installEventFilter(self)
+        drop_zone_layout = QVBoxLayout(self.books_drop_zone)
+        drop_zone_layout.setContentsMargins(10, 10, 10, 10)
+        drop_zone_layout.setSpacing(8)
+
         self.books_scroll = QScrollArea()
         self.books_scroll.setWidgetResizable(True)
         self.books_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.books_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.books_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.books_scroll.setAcceptDrops(True)
+        self.books_scroll.viewport().setAcceptDrops(True)
+        self.books_scroll.viewport().installEventFilter(self)
         books_widget = QWidget()
+        books_widget.setAcceptDrops(True)
+        books_widget.installEventFilter(self)
         self.books_container = books_widget
         self.books_shelves_layout = QVBoxLayout(books_widget)
         self.books_shelves_layout.setContentsMargins(0, 0, 0, 0)
         self.books_shelves_layout.setSpacing(12)
         self.books_scroll.setWidget(books_widget)
 
-        self.empty_label = QLabel("Sua biblioteca esta vazia, experimente adicionar novos livros")
+        self.empty_label = QLabel("Sua biblioteca está vazia. Arraste um PDF/EPUB ou use o botão +.")
+        self.empty_label.setObjectName("library_empty_label")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: #8F8F8F;")
+        self.empty_label.setWordWrap(True)
 
-        books_panel_layout.addWidget(self.empty_label)
-        books_panel_layout.addWidget(self.books_scroll, 1)
-        row.addWidget(books_panel, 75)
+        drop_zone_layout.addWidget(self.empty_label)
+        drop_zone_layout.addWidget(self.books_scroll, 1)
+        books_panel_layout.addWidget(self.books_drop_zone, 1)
+        row.addWidget(books_panel, 1)
 
-        self.add_book_card = AddBookCard(book_controller=self.book_controller)
-        self.add_book_card.setObjectName("dashboard_card")
-        self.add_book_card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        row.addWidget(self.add_book_card, 25, alignment=Qt.AlignmentFlag.AlignTop)
+        self.drop_hint_label = QLabel("Solte o arquivo para importar", self.books_drop_zone)
+        self.drop_hint_label.setObjectName("library_drop_hint")
+        self.drop_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop_hint_label.hide()
 
-        content_layout.addLayout(row)
-        content_layout.addStretch()
+        content_layout.addLayout(row, 1)
 
         scroll_area.setWidget(content)
         root.addWidget(scroll_area)
+
+        self._create_add_book_popup()
+        self._create_add_book_button()
+        self._set_status_filter_mode("all")
+        QTimer.singleShot(0, self._position_floating_elements)
 
     def _setup_connections(self):
         if self.add_book_card:
             self.add_book_card.import_config_requested.connect(self.show_import_dialog)
 
-        if self.book_controller:
+        if self.book_controller and self.add_book_card:
             self.book_controller.book_processing_started.connect(self.add_book_card.on_processing_started)
             self.book_controller.book_processing_progress.connect(self.add_book_card.on_processing_progress)
             self.book_controller.book_processing_completed.connect(self._on_processing_completed)
@@ -455,6 +549,172 @@ class LibraryView(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._layout_timer.start(100)
+        self._position_floating_elements()
+        if self.add_book_popup and self.add_book_popup.isVisible():
+            self._position_add_book_popup()
+
+    def eventFilter(self, watched, event):
+        drop_targets = (
+            self.books_drop_zone,
+            self.books_container,
+            self.books_scroll.viewport() if self.books_scroll else None,
+        )
+        if watched in drop_targets:
+            event_type = event.type()
+            if event_type in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                file_path = self._extract_drop_file_path(event)
+                if file_path:
+                    event.acceptProposedAction()
+                    self._set_drop_zone_active(True)
+                else:
+                    event.ignore()
+                return True
+            if event_type == QEvent.Type.Drop:
+                file_path = self._extract_drop_file_path(event)
+                self._set_drop_zone_active(False)
+                if file_path:
+                    event.acceptProposedAction()
+                    self._handle_drop_file(file_path)
+                else:
+                    event.ignore()
+                return True
+            if event_type == QEvent.Type.DragLeave:
+                self._set_drop_zone_active(False)
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
+
+    def _create_add_book_popup(self):
+        self.add_book_popup = QDialog(
+            self,
+            Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint,
+        )
+        self.add_book_popup.setModal(False)
+        self.add_book_popup.setObjectName("library_add_book_popup")
+
+        popup_layout = QVBoxLayout(self.add_book_popup)
+        popup_layout.setContentsMargins(8, 8, 8, 8)
+        popup_layout.setSpacing(0)
+
+        popup_frame = QFrame()
+        popup_frame.setObjectName("library_add_book_popup_frame")
+        popup_frame_layout = QVBoxLayout(popup_frame)
+        popup_frame_layout.setContentsMargins(0, 0, 0, 0)
+        popup_frame_layout.setSpacing(0)
+
+        self.add_book_card = AddBookCard(book_controller=self.book_controller)
+        self.add_book_card.setObjectName("library_add_book_card")
+        self.add_book_card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        popup_frame_layout.addWidget(self.add_book_card)
+        popup_layout.addWidget(popup_frame)
+        self.add_book_popup.adjustSize()
+
+    def _create_add_book_button(self):
+        if self.books_drop_zone is None:
+            return
+
+        self.add_book_button = QPushButton("+", self.books_drop_zone)
+        self.add_book_button.setObjectName("library_fab_button")
+        self.add_book_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_book_button.setFixedSize(48, 48)
+        self.add_book_button.setToolTip("Adicionar novo livro")
+        self.add_book_button.clicked.connect(self._toggle_add_book_popup)
+        self.add_book_button.raise_()
+
+    def _position_floating_elements(self):
+        if self.books_drop_zone:
+            inset = 16
+            zone_width = max(0, self.books_drop_zone.width() - (inset * 2))
+            zone_height = max(0, self.books_drop_zone.height() - (inset * 2))
+
+            if self.drop_hint_label:
+                self.drop_hint_label.setGeometry(inset, inset, zone_width, zone_height)
+                if self.drop_hint_label.isVisible():
+                    self.drop_hint_label.raise_()
+
+            if self.add_book_button:
+                x = max(inset, self.books_drop_zone.width() - self.add_book_button.width() - inset)
+                y = max(inset, self.books_drop_zone.height() - self.add_book_button.height() - inset)
+                self.add_book_button.move(x, y)
+                self.add_book_button.raise_()
+
+    def _toggle_add_book_popup(self):
+        if not self.add_book_popup:
+            return
+        if self.add_book_popup.isVisible():
+            self.add_book_popup.hide()
+            return
+
+        self._position_add_book_popup()
+        self.add_book_popup.show()
+        self.add_book_popup.raise_()
+
+    def _position_add_book_popup(self):
+        if not self.add_book_popup or not self.add_book_button:
+            return
+
+        self.add_book_popup.adjustSize()
+        popup_size = self.add_book_popup.sizeHint()
+        button_top_left = self.add_book_button.mapToGlobal(self.add_book_button.rect().topLeft())
+
+        x = button_top_left.x() - 8
+        y = button_top_left.y() - popup_size.height() - 10
+
+        screen = QGuiApplication.screenAt(button_top_left)
+        if screen is not None:
+            available = screen.availableGeometry()
+            x = max(available.left() + 8, min(x, available.right() - popup_size.width() - 8))
+            if y < available.top() + 8:
+                y = min(
+                    button_top_left.y() + self.add_book_button.height() + 10,
+                    available.bottom() - popup_size.height() - 8,
+                )
+
+        self.add_book_popup.move(x, y)
+
+    def _extract_drop_file_path(self, event) -> Optional[str]:
+        mime_data = event.mimeData() if hasattr(event, "mimeData") else None
+        if mime_data is None or not mime_data.hasUrls():
+            return None
+
+        valid_extensions = {".pdf", ".epub"}
+        for url in mime_data.urls():
+            local_path = str(url.toLocalFile() or "").strip()
+            if not local_path:
+                continue
+            if Path(local_path).suffix.lower() in valid_extensions:
+                return local_path
+        return None
+
+    def _set_drop_zone_active(self, active: bool):
+        if self.books_drop_zone is None:
+            return
+
+        current = bool(self.books_drop_zone.property("dragActive"))
+        if current != bool(active):
+            self.books_drop_zone.setProperty("dragActive", bool(active))
+            self.books_drop_zone.style().unpolish(self.books_drop_zone)
+            self.books_drop_zone.style().polish(self.books_drop_zone)
+            self.books_drop_zone.update()
+
+        if self.drop_hint_label:
+            self.drop_hint_label.setVisible(bool(active))
+            if active:
+                self.drop_hint_label.raise_()
+        if self.add_book_button:
+            self.add_book_button.raise_()
+
+    def _handle_drop_file(self, file_path: str):
+        if self.add_book_card is None:
+            QMessageBox.warning(self, "Importação", "Componente de importação indisponível.")
+            return
+        self.add_book_card.handle_file_selected(file_path)
+
+    def _set_status_filter_mode(self, mode: str):
+        self.status_filter_mode = mode
+        for current_mode, button in self.filter_buttons.items():
+            button.setChecked(current_mode == mode)
+        self._render_books_grid()
 
     def on_view_activated(self):
         self.refresh_books()
@@ -787,15 +1047,41 @@ class LibraryView(QWidget):
         self._books_cache = books
         logger.info("Library refresh concluído | livros_total=%d | roots=%s", len(books), checked_roots)
         if self.empty_label:
-            if books:
-                self.empty_label.setText("Sua biblioteca esta vazia, experimente adicionar novos livros")
-                self.empty_label.setToolTip("")
-                self.empty_label.hide()
-            else:
-                self.empty_label.setText("Sua biblioteca esta vazia, experimente adicionar novos livros")
-                self.empty_label.setToolTip("")
-                self.empty_label.show()
+            self.empty_label.setToolTip("")
         self._render_books_grid()
+
+    def _apply_status_and_search_filters(self, books: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        filtered = list(books)
+        query = str(self.search_input.text() if self.search_input else "").strip().lower()
+        if query:
+            filtered = [
+                book
+                for book in filtered
+                if query in str(book.get("title", "")).lower()
+                or query in str(book.get("author", "")).lower()
+            ]
+
+        if self.status_filter_mode == "completed":
+            filtered = [book for book in filtered if bool(book.get("progress_completed", False))]
+        elif self.status_filter_mode == "reading":
+            filtered = [
+                book
+                for book in filtered
+                if int(book.get("progress_current", 0) or 0) > 0
+                and not bool(book.get("progress_completed", False))
+            ]
+        elif self.status_filter_mode == "pending":
+            filtered = [book for book in filtered if int(book.get("progress_current", 0) or 0) <= 0]
+
+        return filtered
+
+    def _update_books_counter(self, visible_count: int, total_count: int):
+        if not self.books_count_label:
+            return
+        if visible_count == total_count:
+            self.books_count_label.setText(f"{visible_count} livros")
+        else:
+            self.books_count_label.setText(f"{visible_count} de {total_count} livros")
 
     def _sorted_books(self) -> list[Dict[str, Any]]:
         books: list[Dict[str, Any]] = []
@@ -814,6 +1100,8 @@ class LibraryView(QWidget):
                     "registered_at": progress["registered_at"],
                 }
             )
+
+        books = self._apply_status_and_search_filters(books)
 
         if self.sort_mode == "alphabetical":
             return sorted(books, key=lambda b: str(b["title"]).lower())
@@ -845,14 +1133,35 @@ class LibraryView(QWidget):
                 if widget:
                     widget.deleteLater()
 
-            has_books = len(self._books_cache) > 0
+            sorted_books = self._sorted_books()
+            total_books = len(self._books_cache)
+            visible_books = len(sorted_books)
+            self._update_books_counter(visible_books, total_books)
+
             if self.empty_label:
-                self.empty_label.setVisible(not has_books)
+                if total_books == 0:
+                    self.empty_label.setText("Sua biblioteca está vazia. Arraste um PDF/EPUB ou use o botão +.")
+                else:
+                    self.empty_label.setText("Nenhum livro encontrado para os filtros atuais.")
+                self.empty_label.setVisible(visible_books == 0)
             if self.books_scroll:
                 self.books_scroll.setVisible(True)
-            logger.info("Render prateleiras | has_books=%s | total=%d", has_books, len(self._books_cache))
 
-            sorted_books = self._sorted_books()
+            logger.info(
+                "Render prateleiras | total=%d | visiveis=%d | filtro=%s",
+                total_books,
+                visible_books,
+                self.status_filter_mode,
+            )
+
+            if not sorted_books:
+                spacer = QWidget()
+                spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                shelves_layout.addWidget(spacer)
+                if self.books_scroll and self.books_scroll.widget():
+                    self.books_scroll.widget().adjustSize()
+                    self.books_scroll.viewport().update()
+                return
 
             if self.sort_mode == "author":
                 grouped: Dict[str, list[Dict[str, Any]]] = {}
@@ -961,12 +1270,16 @@ class LibraryView(QWidget):
     def _ensure_books_shelves_layout(self) -> Optional[QVBoxLayout]:
         """Recupera/cria layout de prateleiras de forma robusta no container do scroll."""
         if self.books_scroll is None:
-            if self.books_panel_layout is None:
+            if self.books_panel_layout is None and self.books_drop_zone is None:
                 return None
             self.books_scroll = QScrollArea()
             self.books_scroll.setWidgetResizable(True)
             self.books_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            self.books_panel_layout.addWidget(self.books_scroll, 1)
+            drop_layout = self.books_drop_zone.layout() if self.books_drop_zone else None
+            if isinstance(drop_layout, QVBoxLayout):
+                drop_layout.addWidget(self.books_scroll, 1)
+            elif self.books_panel_layout is not None:
+                self.books_panel_layout.addWidget(self.books_scroll, 1)
 
         container = self.books_scroll.widget()
         if container is None:
@@ -1083,7 +1396,8 @@ class LibraryView(QWidget):
         self._render_books_grid()
 
     def _on_processing_completed(self, pipeline_id, result):
-        self.add_book_card.on_processing_completed(pipeline_id, result)
+        if self.add_book_card:
+            self.add_book_card.on_processing_completed(pipeline_id, result)
         self.refresh_books()
 
     def show_import_dialog(self, file_path, initial_metadata):
@@ -1091,7 +1405,8 @@ class LibraryView(QWidget):
 
         dialog = BookImportDialog(file_path, initial_metadata, self)
         dialog.import_confirmed.connect(lambda config: self.start_book_processing(config))
-        dialog.import_cancelled.connect(self.add_book_card.reset_to_idle)
+        if self.add_book_card:
+            dialog.import_cancelled.connect(self.add_book_card.reset_to_idle)
         dialog.exec()
 
     def start_book_processing(self, config):

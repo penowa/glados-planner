@@ -53,6 +53,7 @@ class GladosResponseConfig(BaseModel):
 class GladosPersonalityConfig(BaseModel):
     user_name: str = "Pindarolas"
     glados_name: str = "GLaDOS"
+    personality_profile: Literal["auto", "glados", "marvin"] = "auto"
     gender: str = "feminino"
     personality_intensity: float = 0.7
     enable_sarcasm: bool = True
