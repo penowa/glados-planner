@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+BUILD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/glados-build.XXXXXX")"
+cleanup() {
+  rm -rf "${BUILD_TMP_DIR}"
+}
+trap cleanup EXIT
+
+# Keep the release build deterministic in offline/headless environments.
+export MPLCONFIGDIR="${BUILD_TMP_DIR}/mplconfig"
+mkdir -p "${MPLCONFIGDIR}"
+export LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
+
 SYNC_DEPS=1
 VERIFY_ARCHIVE=1
 for arg in "$@"; do
@@ -82,7 +93,20 @@ if [[ "$VERIFY_ARCHIVE" -eq 1 ]]; then
     echo "ERRO: litellm nao foi encontrado no executavel empacotado."
     exit 1
   fi
+  if ! grep -q "litellm.litellm_core_utils.tokenizers" "${ARCHIVE_LIST_FILE}"; then
+    rm -f "${ARCHIVE_LIST_FILE}"
+    echo "ERRO: pacote interno do LiteLLM (litellm.litellm_core_utils.tokenizers) nao foi empacotado."
+    exit 1
+  fi
   rm -f "${ARCHIVE_LIST_FILE}"
+  if [[ ! -f "dist/glados-planner/_internal/litellm/model_prices_and_context_window_backup.json" ]]; then
+    echo "ERRO: arquivo de dados do LiteLLM nao foi empacotado."
+    exit 1
+  fi
+  if [[ ! -d "dist/glados-planner/_internal/litellm/litellm_core_utils/tokenizers" ]]; then
+    echo "ERRO: arquivos de tokenizer do LiteLLM nao foram empacotados."
+    exit 1
+  fi
 fi
 
 echo

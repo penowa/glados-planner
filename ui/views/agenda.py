@@ -55,6 +55,7 @@ from ui.utils.discipline_links import (
     list_disciplines,
     resolve_vault_root,
 )
+from ui.utils.nerd_icons import NerdIcons, nerd_font
 
 try:
     from core.config.settings import settings as core_settings
@@ -72,20 +73,20 @@ PRIORITY_COLORS = {
 }
 
 TYPE_ICONS = {
-    "leitura": "📖",
-    "revisao": "🔁",
-    "producao": "✍",
-    "aula": "🎓",
-    "prova": "🧪",
-    "seminario": "🗣",
-    "orientacao": "🧭",
-    "reuniao": "🤝",
-    "revisao_dominical": "🗓",
-    "grupo_estudo": "👥",
-    "lazer": "🎯",
-    "refeicao": "🍽",
-    "sono": "🛌",
-    "casual": "📌",
+    "leitura": NerdIcons.BOOK,
+    "revisao": NerdIcons.REFRESH,
+    "producao": NerdIcons.NOTE,
+    "aula": NerdIcons.GRADUATION,
+    "prova": NerdIcons.FLASK,
+    "seminario": NerdIcons.BULLHORN,
+    "orientacao": NerdIcons.COMPASS,
+    "reuniao": NerdIcons.USERS,
+    "revisao_dominical": NerdIcons.CALENDAR,
+    "grupo_estudo": NerdIcons.USERS,
+    "lazer": NerdIcons.TARGET,
+    "refeicao": NerdIcons.CUTLERY,
+    "sono": NerdIcons.BED,
+    "casual": NerdIcons.PIN,
 }
 
 TYPE_COLORS = {
@@ -351,7 +352,7 @@ class DayCellWidget(QFrame):
             return
 
         for event in display_events[:8]:
-            icon = TYPE_ICONS.get(event.get("type", "casual"), "📌")
+            icon = TYPE_ICONS.get(event.get("type", "casual"), NerdIcons.PIN)
             item = QListWidgetItem(icon)
             item.setData(Qt.ItemDataRole.UserRole, event)
             color = QColor(
@@ -437,7 +438,7 @@ class HourlyAgendaTable(QTableWidget):
         for hour, hour_events in buckets.items():
             labels = []
             for event in hour_events:
-                icon = TYPE_ICONS.get(event.get("type", "casual"), "📌")
+                icon = TYPE_ICONS.get(event.get("type", "casual"), NerdIcons.PIN)
                 labels.append(f"{icon} {event.get('title', 'Sem título')}")
 
             unique_labels = list(dict.fromkeys(labels))
@@ -549,8 +550,9 @@ class AgendaView(QWidget):
         self.prev_month_btn = QPushButton("◀")
         self.next_month_btn = QPushButton("▶")
         self.today_btn = QPushButton("Hoje")
-        self.routine_settings_btn = QPushButton("⚙")
+        self.routine_settings_btn = QPushButton(NerdIcons.SETTINGS)
         self.routine_settings_btn.setToolTip("Configurar rotina")
+        self.routine_settings_btn.setFont(nerd_font(12))
         self.month_label = QLabel("")
         self.month_label.setObjectName("agenda_month_label")
         self.month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -607,8 +609,11 @@ class AgendaView(QWidget):
         self.day_detail_label.setStyleSheet("color: #FFFFFF; font-weight: 600;")
 
         actions = QHBoxLayout()
-        self.add_event_btn = QPushButton("➕ Adicionar compromisso")
-        self.refresh_day_btn = QPushButton("Atualizar")
+        self.add_event_btn = QPushButton(f"{NerdIcons.PLUS} Adicionar compromisso")
+        self.refresh_day_btn = QPushButton(f"{NerdIcons.REFRESH} Reorganizar agenda")
+        self.refresh_day_btn.setToolTip(
+            "Redistribui compromissos flexíveis respeitando aulas, refeições e blocos protegidos."
+        )
         self.hide_day_detail_btn = QPushButton("Ocultar")
         actions.addWidget(self.add_event_btn)
         actions.addWidget(self.refresh_day_btn)
@@ -659,8 +664,14 @@ class AgendaView(QWidget):
         self.back_action = QAction("← Voltar", self)
         self.back_action.triggered.connect(lambda: self.navigate_to.emit("dashboard"))
 
-        self.refresh_action = QAction("🔄 Atualizar", self)
-        self.refresh_action.triggered.connect(self.refresh)
+        self.refresh_action = QAction(f"{NerdIcons.REFRESH} Reorganizar agenda", self)
+        self.refresh_action.setToolTip(
+            "Redistribui compromissos flexíveis respeitando aulas, refeições e blocos protegidos."
+        )
+        self.refresh_action.setStatusTip(
+            "Reorganizar agenda respeitando horários reservados."
+        )
+        self.refresh_action.triggered.connect(self.rebalance_agenda)
 
         self.toolbar.addAction(self.back_action)
         self.toolbar.addSeparator()
@@ -672,7 +683,7 @@ class AgendaView(QWidget):
         self.today_btn.clicked.connect(self.go_to_today)
         self.routine_settings_btn.clicked.connect(self.open_routine_settings)
         self.add_event_btn.clicked.connect(self.add_event)
-        self.refresh_day_btn.clicked.connect(self.refresh)
+        self.refresh_day_btn.clicked.connect(self.rebalance_agenda)
         self.hide_day_detail_btn.clicked.connect(self.hide_day_detail)
 
         self.hour_table.event_clicked.connect(self.show_event_details)
@@ -716,71 +727,15 @@ class AgendaView(QWidget):
 
     def _build_fixed_events(self, date_str: str, events: List[dict]) -> List[dict]:
         manager = getattr(self.controller, "agenda_manager", None)
-        preferences = getattr(manager, "user_preferences", {}) if manager else {}
-
-        sleep_cfg = preferences.get("sleep_schedule", {"start": "23:00", "end": "07:00"})
-        meal_cfg = preferences.get(
-            "meal_times",
-            {"breakfast": "08:00", "lunch": "12:30", "dinner": "19:30"},
-        )
-
         generated: List[dict] = []
-
-        end_time = sleep_cfg.get("end", "07:00")
-        generated.append(
-            _normalize_event(
-                {
-                    "id": f"fixed-sleep-morning-{date_str}",
-                    "title": "Sono",
-                    "type": "sono",
-                    "start": f"{date_str}T00:00:00",
-                    "end": f"{date_str}T{end_time}:00",
-                    "priority": 5,
-                    "_fixed_virtual": True,
-                }
-            )
-        )
-
-        start_time = sleep_cfg.get("start", "23:00")
-        generated.append(
-            _normalize_event(
-                {
-                    "id": f"fixed-sleep-night-{date_str}",
-                    "title": "Sono",
-                    "type": "sono",
-                    "start": f"{date_str}T{start_time}:00",
-                    "end": f"{date_str}T23:59:00",
-                    "priority": 5,
-                    "_fixed_virtual": True,
-                }
-            )
-        )
-
-        meal_map = [
-            ("Café da manhã", meal_cfg.get("breakfast", "08:00"), 30),
-            ("Almoço", meal_cfg.get("lunch", "12:30"), 60),
-            ("Jantar", meal_cfg.get("dinner", "19:30"), 60),
-        ]
-
-        for title, start_hhmm, duration in meal_map:
+        if manager and hasattr(manager, "get_virtual_fixed_events"):
             try:
-                start_dt = datetime.fromisoformat(f"{date_str}T{start_hhmm}:00")
-                end_dt = start_dt + timedelta(minutes=duration)
-                generated.append(
-                    _normalize_event(
-                        {
-                            "id": f"fixed-meal-{title}-{date_str}",
-                            "title": title,
-                            "type": "refeicao",
-                            "start": start_dt.isoformat(),
-                            "end": end_dt.isoformat(),
-                            "priority": 5,
-                            "_fixed_virtual": True,
-                        }
-                    )
-                )
-            except Exception:
-                continue
+                generated = [
+                    _normalize_event({**event, "_fixed_virtual": True})
+                    for event in (manager.get_virtual_fixed_events(date_str) or [])
+                ]
+            except Exception as exc:
+                logger.debug("Falha ao carregar blocos virtuais da rotina para %s: %s", date_str, exc)
 
         existing_slots = {
             (event.get("type"), event.get("start_time"), event.get("title", "").lower())
@@ -845,11 +800,43 @@ class AgendaView(QWidget):
         self.selected_date = today
         self.load_month_data()
 
-    def refresh(self):
-        self.status_label.setText("Atualizando agenda...")
+    def _reload_agenda_view(self):
         self.load_month_data()
-        self.status_label.setText("Agenda atualizada")
-        QTimer.singleShot(1600, lambda: self.status_label.setText("Pronto"))
+
+    def _apply_rebalance_feedback(self, rebalance_result: Dict[str, Any]):
+        if rebalance_result.get("success"):
+            moved = int(rebalance_result.get("moved_count", 0) or 0)
+            unscheduled = int(rebalance_result.get("unscheduled_count", 0) or 0)
+            if unscheduled > 0:
+                self.status_label.setText(
+                    "Agenda reorganizada respeitando horários reservados: "
+                    f"{moved} compromisso(s) redistribuído(s), {unscheduled} sem novo encaixe"
+                )
+            else:
+                self.status_label.setText(
+                    "Agenda reorganizada respeitando horários reservados: "
+                    f"{moved} compromisso(s) redistribuído(s)"
+                )
+        elif rebalance_result.get("error"):
+            self.status_label.setText("A reorganização falhou, mas a agenda foi recarregada")
+        else:
+            self.status_label.setText("Agenda atualizada")
+        QTimer.singleShot(1800, lambda: self.status_label.setText("Pronto"))
+
+    def rebalance_agenda(self):
+        self.status_label.setText(
+            "Reorganizando agenda com base em aulas, refeições e blocos protegidos..."
+        )
+        rebalance_result = {}
+        if self.controller and hasattr(self.controller, "rebalance_schedule"):
+            rebalance_result = self.controller.rebalance_schedule() or {}
+        self._reload_agenda_view()
+        self._apply_rebalance_feedback(rebalance_result)
+
+    def refresh(self):
+        self.status_label.setText("Atualizando visualização da agenda...")
+        self._reload_agenda_view()
+        QTimer.singleShot(1200, lambda: self.status_label.setText("Pronto"))
 
     def open_routine_settings(self):
         if not self.controller:
@@ -866,7 +853,7 @@ class AgendaView(QWidget):
                 result = self.controller.update_routine_preferences(payload)
                 if result:
                     self.status_label.setText("Rotina atualizada")
-                    self.refresh()
+                    self.rebalance_agenda()
 
     def on_day_selected(self, date: QDate):
         self.show_day_detail()
@@ -1066,7 +1053,7 @@ class AgendaView(QWidget):
     def add_event(self):
         dialog = AddEventDialog(self.controller, self.selected_date, self)
         if dialog.exec():
-            self.refresh()
+            self.rebalance_agenda()
 
     def delete_selected_event(self):
         if not self.selected_event:
@@ -1086,7 +1073,7 @@ class AgendaView(QWidget):
 
         if self.controller and hasattr(self.controller, "delete_event"):
             self.controller.delete_event(event_id)
-            self.refresh()
+            self.rebalance_agenda()
 
     def toggle_selected_event(self):
         if not self.selected_event or self.selected_event.get("_fixed_virtual", False):
@@ -1096,7 +1083,7 @@ class AgendaView(QWidget):
         completed = not bool(self.selected_event.get("completed", False))
         if self.controller and hasattr(self.controller, "toggle_event_completion"):
             self.controller.toggle_event_completion(event_id, completed)
-            self.refresh()
+            self.rebalance_agenda()
 
     @pyqtSlot(str, list)
     def on_agenda_updated(self, date_str: str, events: list):

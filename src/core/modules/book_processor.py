@@ -40,6 +40,7 @@ except ImportError:
         settings = Settings()
 
 from .obsidian.vault_manager import ObsidianVaultManager
+from ui.utils.citation_notes import ensure_citations_note_for_book
 from ui.utils.discipline_links import append_book_note_links, ensure_discipline_note
 
 logger = logging.getLogger(__name__)
@@ -722,6 +723,12 @@ class BookProcessor:
 
         ensure_discipline_note(vault_root, discipline_name)
         append_book_note_links(vault_root, discipline_name, [book_note_abs])
+        ensure_citations_note_for_book(
+            vault_root,
+            book_note_path=book_note_abs,
+            discipline=discipline_name,
+            discipline_note_path=vault_root / note_path,
+        )
 
         existing_note = self.vault_manager.get_note_by_path(note_path)
         frontmatter = {

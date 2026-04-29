@@ -23,25 +23,45 @@ class ConfigManager:
             self._initialized = True
             self.default_config = self._load_default_config()
             self.user_settings = QSettings("GLaDOS Project", "Philosophy Planner")
+
+    def _config_candidates(self) -> list[Path]:
+        """Lista caminhos de configuração candidatos, priorizando a área do usuário no modo frozen."""
+        if getattr(sys, "frozen", False):
+            home_config = Path.home() / ".glados" / "settings.yaml"
+            runtime_root = Path(sys.executable).resolve().parent
+            bundled_root = Path(getattr(sys, "_MEIPASS", runtime_root))
+            candidates = [
+                home_config,
+                runtime_root / "config" / "settings.yaml",
+                runtime_root / "config" / "settings.release.yaml",
+                bundled_root / "config" / "settings.yaml",
+                bundled_root / "config" / "settings.release.yaml",
+            ]
+        else:
+            project_root = Path(__file__).parent.parent.parent
+            candidates = [project_root / "config" / "settings.yaml"]
+
+        unique_candidates = []
+        for candidate in candidates:
+            if candidate not in unique_candidates:
+                unique_candidates.append(candidate)
+        return unique_candidates
             
     def _load_default_config(self) -> Dict[str, Any]:
         """Carrega configurações padrão do arquivo YAML"""
-        runtime_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent.parent
-        config_path = runtime_root / "config" / "settings.yaml"
-        if not config_path.exists():
-            # Fallback útil para modo dev, caso o CWD esteja fora da raiz do projeto.
-            config_path = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
-        
-        if not config_path.exists():
-            print(f"⚠️  Arquivo de configuração não encontrado: {config_path}")
-            return self._get_fallback_config()
-        
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
-        except Exception as e:
-            print(f"⚠️  Erro ao carregar configuração YAML: {e}")
-            return self._get_fallback_config()
+        candidates = self._config_candidates()
+        for config_path in candidates:
+            if not config_path.exists():
+                continue
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                print(f"⚠️  Erro ao carregar configuração YAML {config_path}: {e}")
+
+        missing_hint = candidates[0] if candidates else Path("config/settings.yaml")
+        print(f"⚠️  Arquivo de configuração não encontrado: {missing_hint}")
+        return self._get_fallback_config()
     
     def _get_fallback_config(self) -> Dict[str, Any]:
         """Configuração de fallback se o arquivo YAML não existir"""

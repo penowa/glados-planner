@@ -19,9 +19,8 @@
 -  **Agenda** - Calendário acadêmico integrado
 -  **Assistente LLM Local** - Análise de textos com modelos privados
 -  **Integração Obsidian** - Sincronia bidirecional com seu vault
--  **Pomodoro** - Foco com citações inspiradoras
--  **Tradução & Glossário** - Termos técnicos em grego/alemão
--  **Estatísticas** - Analytics de produtividade e aprendizado
+-  **Pomodoro** - Foco
+-  **Estatísticas** - Analise de produtividade e aprendizado
 
 ## Quick Start
 
@@ -29,7 +28,7 @@
 - Arch Linux (otimizado para Hyprland/Wayland)
 - Python 3.11+
 - Obsidian (opcional, mas recomendado)
-
+- Zathura + Plugins
 ### Instalação
 
 ```bash
@@ -37,20 +36,22 @@
 git clone https://github.com/penowa/glados-planner.git
 cd glados-planner
 
-# Configure o ambiente
-chmod +x setup.sh
+# Configure o ambiente base
+chmod +x setup.sh scripts/install_dependencies.sh
 ./setup.sh
+
+# Instale dependências do sistema + Python + apps externos
+./scripts/install_dependencies.sh
+
+# Opcionais
+./scripts/install_dependencies.sh --with-dev
+./scripts/install_dependencies.sh --with-nlp
+./scripts/install_dependencies.sh --with-release
 
 # Ative o ambiente virtual
 source venv/bin/activate  # bash/zsh
 # ou
 source venv/bin/activate.fish  # fish
-
-# Instale dependências
-pip install -r requirements.txt
-
-# (Opcional) Stack de embeddings/NLP pesado
-pip install -r requirements-nlp.txt
 
 # Configure seu ambiente
 cp .env.example .env

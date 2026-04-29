@@ -109,6 +109,32 @@ class ReviewViewConfig(BaseModel):
     question_interval_minutes: int = 10
     arrow_pan_step: int = 130
 
+class ZathuraConfig(BaseModel):
+    enabled: bool = True
+    preset: str = ""
+    binary: str = "zathura"
+    config_dir: str = "~/.config/zathura"
+    config_file: str = "~/.config/zathura/zathurarc"
+    data_dir: str = "~/.local/share/zathura"
+    cache_dir: str = "~/.cache/zathura"
+    plugin_path: str = ""
+    sync_to_zathurarc: bool = True
+    theme_mode: Literal["plain", "pywal_internal", "pywal_generator", "custom_include"] = "plain"
+    pywal_generator: str = "genzathurarc"
+    pywal_colors_file: str = "~/.cache/wal/colors.sh"
+    generated_theme_file: str = "~/.config/zathura/glados-theme.zathurarc"
+    custom_theme_include_file: str = ""
+    selection_clipboard: Literal["clipboard", "primary"] = "clipboard"
+    statusbar_basename: bool = True
+    window_title_home_tilde: bool = True
+    recolor: bool = False
+    session_open_mode: Literal["normal", "fullscreen", "presentation"] = "fullscreen"
+    session_use_fork: bool = True
+    extra_options: Dict[str, Any] = Field(default_factory=dict)
+    include_files: List[str] = Field(default_factory=list)
+    keymaps: List[str] = Field(default_factory=list)
+    extra_config: str = ""
+
 class CacheConfig(BaseModel):
     enabled: bool = True
     max_size: int = 100
@@ -125,20 +151,46 @@ def _runtime_base_dir() -> Path:
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[3]
 
+def _user_app_dir() -> Path:
+    return (Path.home() / ".glados").resolve()
+
+def _runtime_storage_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return _user_app_dir()
+    return _runtime_base_dir()
+
 def _bundled_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     return Path(__file__).resolve().parents[3]
 
 def _seed_runtime_config_from_bundle(target_path: Path) -> None:
-    """No modo frozen, copia config padrão do bundle para área gravável ao lado do executável."""
+    """No modo frozen, copia config padrão do bundle para área gravável do usuário."""
     if not getattr(sys, "frozen", False):
         return
     if target_path.exists():
         return
 
-    bundled_candidate = _bundled_base_dir() / "config" / target_path.name
-    if not bundled_candidate.exists():
+    candidate_names = [target_path.name]
+    if target_path.name == "settings.yaml":
+        candidate_names = ["settings.release.yaml", "settings.yaml"]
+
+    search_roots: list[Path] = []
+    for root in (_bundled_base_dir(), _runtime_base_dir()):
+        if root not in search_roots:
+            search_roots.append(root)
+
+    bundled_candidate = None
+    for candidate_name in candidate_names:
+        for root in search_roots:
+            probe = root / "config" / candidate_name
+            if probe.exists():
+                bundled_candidate = probe
+                break
+        if bundled_candidate is not None:
+            break
+
+    if bundled_candidate is None:
         return
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +200,10 @@ def _resolve_config_path(yaml_path: str) -> Path:
     target = Path(str(yaml_path or "config/settings.yaml")).expanduser()
     if target.is_absolute():
         return target
-    runtime_target = _runtime_base_dir() / target
+    if getattr(sys, "frozen", False):
+        runtime_target = _user_app_dir() / target.name
+    else:
+        runtime_target = _runtime_base_dir() / target
     _seed_runtime_config_from_bundle(runtime_target)
     return runtime_target
 
@@ -165,8 +220,8 @@ def _sqlite_url_for_file(file_path: Path) -> str:
     return f"sqlite:///{file_path.as_posix()}"
 
 def _normalize_and_prepare_data_paths(data: Dict[str, Any]) -> Dict[str, Any]:
-    runtime_base = _runtime_base_dir()
-    app_data_root = runtime_base / "data"
+    storage_root = _runtime_storage_root()
+    app_data_root = storage_root / "data"
     legacy_aliases = {"./data", "data", ".data"}
 
     paths = data.setdefault("paths", {})
@@ -177,25 +232,25 @@ def _normalize_and_prepare_data_paths(data: Dict[str, Any]) -> Dict[str, Any]:
     if not raw_data_dir or raw_data_dir in legacy_aliases:
         data_dir = app_data_root
     else:
-        data_dir = _resolve_runtime_path(raw_data_dir, runtime_base)
+        data_dir = _resolve_runtime_path(raw_data_dir, storage_root)
 
     raw_models_dir = str(paths.get("models_dir", "") or "").strip()
     if not raw_models_dir or raw_models_dir in {"./data/models", "data/models", ".data/models"}:
         models_dir = data_dir / "models"
     else:
-        models_dir = _resolve_runtime_path(raw_models_dir, runtime_base)
+        models_dir = _resolve_runtime_path(raw_models_dir, storage_root)
 
     raw_exports_dir = str(paths.get("exports_dir", "") or "").strip()
     if not raw_exports_dir or raw_exports_dir in {"./data/exports", "data/exports", ".data/exports"}:
         exports_dir = data_dir / "exports"
     else:
-        exports_dir = _resolve_runtime_path(raw_exports_dir, runtime_base)
+        exports_dir = _resolve_runtime_path(raw_exports_dir, storage_root)
 
     raw_cache_dir = str(paths.get("cache_dir", "") or "").strip()
     if not raw_cache_dir or raw_cache_dir in {"./data/cache", "data/cache", ".data/cache"}:
         cache_dir = data_dir / "cache"
     else:
-        cache_dir = _resolve_runtime_path(raw_cache_dir, runtime_base)
+        cache_dir = _resolve_runtime_path(raw_cache_dir, storage_root)
 
     for required in (data_dir, models_dir, exports_dir, cache_dir, data_dir / "database", data_dir / "history"):
         required.mkdir(parents=True, exist_ok=True)
@@ -209,13 +264,13 @@ def _normalize_and_prepare_data_paths(data: Dict[str, Any]) -> Dict[str, Any]:
     if not llm_models_dir or llm_models_dir in {"./data/models", "data/models", ".data/models"}:
         llm_cfg["models_dir"] = str(models_dir)
     else:
-        llm_cfg["models_dir"] = str(_resolve_runtime_path(llm_models_dir, runtime_base))
+        llm_cfg["models_dir"] = str(_resolve_runtime_path(llm_models_dir, storage_root))
 
     llm_model_path = str(llm_cfg.get("model_path", "") or "").strip()
     if llm_model_path in {"./data/models/mistral-7b-GGUF-Q4K.gguf", "data/models/mistral-7b-GGUF-Q4K.gguf", ".data/models/mistral-7b-GGUF-Q4K.gguf"}:
         llm_cfg["model_path"] = str(models_dir / "mistral-7b-GGUF-Q4K.gguf")
     elif llm_model_path:
-        llm_cfg["model_path"] = str(_resolve_runtime_path(llm_model_path, runtime_base))
+        llm_cfg["model_path"] = str(_resolve_runtime_path(llm_model_path, storage_root))
     else:
         llm_cfg["model_path"] = ""
 
@@ -234,6 +289,7 @@ class Settings(BaseSettings):
     pomodoro: PomodoroConfig = PomodoroConfig()
     features: FeaturesConfig = FeaturesConfig()
     review_view: ReviewViewConfig = ReviewViewConfig()
+    zathura: ZathuraConfig = ZathuraConfig()
     cache: CacheConfig = CacheConfig()
     development: DevelopmentConfig = DevelopmentConfig()
     

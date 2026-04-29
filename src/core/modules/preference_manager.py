@@ -26,6 +26,49 @@ class PreferenceManager:
         self.history_file = base / "preferences_learning_history.json"
         self.learning_history: List[Dict[str, Any]] = self._load_history()
 
+    def _apply_defaults(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Completa preferências essenciais de rotina sem sobrescrever customizações."""
+        current = dict(data or {})
+
+        sleep_schedule = dict(current.get("sleep_schedule") or {})
+        sleep_schedule.setdefault("start", "23:00")
+        sleep_schedule.setdefault("end", "07:00")
+        current["sleep_schedule"] = sleep_schedule
+
+        meal_times = dict(current.get("meal_times") or {})
+        meal_times.setdefault("breakfast", "08:00")
+        meal_times.setdefault("lunch", "12:30")
+        meal_times.setdefault("dinner", "19:30")
+        current["meal_times"] = meal_times
+
+        protected_blocks = current.get("protected_time_blocks")
+        if not isinstance(protected_blocks, list) or not protected_blocks:
+            current["protected_time_blocks"] = [
+                {
+                    "title": "Café da manhã",
+                    "type": "refeicao",
+                    "start": "08:00",
+                    "end": "08:30",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+                {
+                    "title": "Janela de almoço",
+                    "type": "refeicao",
+                    "start": "11:00",
+                    "end": "14:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+                {
+                    "title": "Janela de jantar",
+                    "type": "refeicao",
+                    "start": "18:00",
+                    "end": "20:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+            ]
+
+        return current
+
     def _load_preferences(self) -> Dict[str, Any]:
         if not self.preferences_file.exists():
             return {}
@@ -59,12 +102,12 @@ class PreferenceManager:
 
     def get_all(self) -> Dict[str, Any]:
         """Retorna preferências completas."""
-        return self._load_preferences()
+        return self._apply_defaults(self._load_preferences())
 
     def update(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Atualiza preferências e registra histórico básico."""
-        current = self._load_preferences()
-        merged = {**current, **(updates or {})}
+        current = self.get_all()
+        merged = self._apply_defaults({**current, **(updates or {})})
         self._save_preferences(merged)
         self.learning_history.append(
             {

@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 from core.config.settings import settings as core_settings
 from core.modules.mindmap_review_module import MindmapReviewModule
 from ui.controllers.vault_controller import VaultController
+from ui.utils.nerd_icons import LEGACY_BOOK_NOTE_PREFIXES, LEGACY_LINK_ICON, NerdIcons, nerd_font
 
 logger = logging.getLogger("GLaDOS.UI.VaultGladosView")
 
@@ -79,7 +80,7 @@ class ContextSelectionDialog(QDialog):
         for author in sorted(grouped.keys(), key=str.lower):
             author_map = grouped[author]
             total_author_notes = sum(len(items) for items in author_map.values())
-            author_item = QTreeWidgetItem([f"👤 {author} ({total_author_notes})"])
+            author_item = QTreeWidgetItem([f"{NerdIcons.USER} {author} ({total_author_notes})"])
             author_item.setFlags(
                 (author_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                 | Qt.ItemFlag.ItemIsUserCheckable
@@ -89,7 +90,7 @@ class ContextSelectionDialog(QDialog):
 
             for work in sorted(author_map.keys(), key=str.lower):
                 notes = author_map[work]
-                work_item = QTreeWidgetItem([f"📚 {work} ({len(notes)})"])
+                work_item = QTreeWidgetItem([f"{NerdIcons.BOOK} {work} ({len(notes)})"])
                 work_item.setFlags(
                     (work_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                     | Qt.ItemFlag.ItemIsUserCheckable
@@ -246,7 +247,7 @@ class VaultGladosView(QWidget):
             if normalized:
                 self.assistant_name = normalized
         if self.header_title_label:
-            self.header_title_label.setText(f"💬 {self.assistant_name}")
+            self.header_title_label.setText(f"{NerdIcons.CHAT} {self.assistant_name}")
 
     def _resolve_vault_controller(self):
         if self.controllers.get("vault"):
@@ -270,11 +271,11 @@ class VaultGladosView(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.header_title_label = QLabel(f"💬 {self.assistant_name}")
-        self.header_title_label.setFont(QFont("FiraCode Nerd Font Propo", 18, QFont.Weight.Medium))
+        self.header_title_label = QLabel(f"{NerdIcons.CHAT} {self.assistant_name}")
+        self.header_title_label.setFont(nerd_font(18, weight=QFont.Weight.Medium))
         subtitle = QLabel("Pesquisa contextual e revisão assistida")
         subtitle.setStyleSheet("color: #8F8F8F;")
-        subtitle.setFont(QFont("FiraCode Nerd Font Propo", 10))
+        subtitle.setFont(nerd_font(10))
 
         left = QVBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
@@ -825,7 +826,7 @@ class VaultGladosView(QWidget):
             old_content = str(note_data.get("content") or "")
             new_content = self._append_link_to_section(
                 old_content,
-                section_header="## 🔗 Revisões Contextuais",
+                section_header=f"## {NerdIcons.LINK} Revisões Contextuais",
                 link_line=summary_link_line,
             )
             if new_content != old_content:
@@ -925,7 +926,7 @@ class VaultGladosView(QWidget):
         if not book_dir.exists() or not book_dir.is_dir():
             return None
         files = sorted([p for p in book_dir.glob("*.md") if p.is_file()])
-        for prefix in ("📖", "📚"):
+        for prefix in LEGACY_BOOK_NOTE_PREFIXES:
             for file in files:
                 if file.name.startswith(prefix):
                     return file
@@ -936,7 +937,11 @@ class VaultGladosView(QWidget):
         if link_line in text:
             return text
 
-        header_pattern = re.compile(rf"(?m)^{re.escape(section_header)}\s*$")
+        normalized_header = str(section_header or "").strip()
+        if normalized_header == f"## {NerdIcons.LINK} Revisões Contextuais":
+            header_pattern = re.compile(rf"(?m)^##\s+(?:{re.escape(LEGACY_LINK_ICON)}|{re.escape(NerdIcons.LINK)})\s+Revisões Contextuais\s*$")
+        else:
+            header_pattern = re.compile(rf"(?m)^{re.escape(section_header)}\s*$")
         match = header_pattern.search(text)
         if not match:
             return text.rstrip() + f"\n\n{section_header}\n{link_line}\n"

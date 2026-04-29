@@ -5,7 +5,7 @@
 QMainWindow {
     background-color: #1F1F1F;
     color: #CFCFCF;
-    font-family: "FiraCode Nerd Font Propo", monospace;
+    font-family: "FiraCode Nerd Font Propo", "FantasqueSansM Nerd Font Propo", "FantasqueSansM Nerd Font", monospace;
     font-size: 12px;
 }
 
@@ -18,7 +18,7 @@ QWidget#main_central_widget {
 QWidget {
     background-color: #1F1F1F;
     color: #CFCFCF;
-    font-family: "FiraCode Nerd Font Propo", monospace;
+    font-family: "FiraCode Nerd Font Propo", "FantasqueSansM Nerd Font Propo", "FantasqueSansM Nerd Font", monospace;
     font-size: 12px;
     selection-background-color: #5A5A5A;
     selection-color: #ECECEC;

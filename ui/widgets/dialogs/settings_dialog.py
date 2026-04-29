@@ -2,21 +2,353 @@
 Dialog para edição das configurações principais do sistema.
 """
 import os
+import re
 import shutil
 from pathlib import Path
+import subprocess
+from typing import Any, Callable
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QTabWidget, QWidget,
     QFormLayout, QDialogButtonBox, QFileDialog, QMessageBox, QSizePolicy,
+    QTextBrowser, QTextEdit, QKeySequenceEdit,
     QGridLayout, QButtonGroup
 )
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QKeySequence
 
 from core.config.settings import Settings, reload_settings
 from core.llm.runtime_discovery import detect_nvidia_gpus, discover_gguf_models
+from core.modules.zathura_config_manager import ZathuraConfigManager
 from ui.utils.config_manager import ConfigManager
+from ui.utils.session_keybindings import SESSION_SHORTCUT_DEFINITIONS, default_session_shortcuts
+
+
+ZATHURA_KEYMAP_DEFINITIONS = [
+    {"id": "capture_citation", "label": "Criar bookmark de citação", "default_key": "zb", "command": 'feedkeys ":bmark "'},
+    {"id": "reload", "label": "Recarregar documento", "default_key": "r", "command": "reload"},
+    {"id": "toggle_fullscreen", "label": "Alternar tela cheia", "default_key": "f", "command": "toggle_fullscreen"},
+    {"id": "scroll_down", "label": "Scroll para baixo", "default_key": "J", "command": "scroll down"},
+    {"id": "scroll_up", "label": "Scroll para cima", "default_key": "K", "command": "scroll up"},
+    {"id": "zoom_in", "label": "Aumentar zoom", "default_key": "+", "command": "zoom in"},
+    {"id": "zoom_out", "label": "Diminuir zoom", "default_key": "-", "command": "zoom out"},
+]
+
+ZATHURA_REFERENCE_SECTIONS = [
+    (
+        "General",
+        [
+            ("J, PgDn", "Go to the next page"),
+            ("K, PgUp", "Go to the previous page"),
+            ("h, k, j, l", "Scroll to the left, down, up or right direction"),
+            ("Left, Down, Up, Right", "Scroll to the left, down, up or right direction"),
+            ("^t, ^d, ^u, ^y", "Scroll a half page left, down, up or right"),
+            ("t, ^f, ^b, space, , y", "Scroll a full page left, down, up or right"),
+            ("gg, G, nG", "Goto to the first, the last or to the nth page"),
+            ("P", "Snaps to the current page"),
+            ("H, L", "Goto top or bottom of the current page"),
+            ("^o, ^i", "Move backward and forward through the jump list"),
+            ("^j, ^k", "Bisect forward and backward between the last two jump points"),
+            ("^c, Escape", "Abort"),
+            ("a, s", "Adjust window in best-fit or width mode"),
+            ("/, ?", "Search for text"),
+            ("n, N", "Search for the next or previous result"),
+            ("o, O", "Open document"),
+            ("f", "Follow links"),
+            ("F", "Display link target"),
+            ("c", "Copy link target into the clipboard"),
+            ("\\:", "Enter command"),
+            ("r", "Rotate by 90 degrees"),
+            ("^r", "Recolor (grayscale and invert colors)"),
+            ("R", "Reload document"),
+            ("Tab", "Show index and switch to Index mode"),
+            ("d", "Toggle dual page view"),
+            ("D", "Cycle opening column in dual page view"),
+            ("F5", "Switch to presentation mode"),
+            ("F11", "Switch to fullscreen mode"),
+            ("^m", "Toggle inputbar"),
+            ("^n", "Toggle statusbar"),
+            ("+, -, =", "Zoom in, out or to the original size"),
+            ("zI, zO, z0", "Zoom in, out or to the original size"),
+            ("n=", "Zoom to size n"),
+            ("mX", "Set a quickmark to a letter or number X"),
+            ("'X", "Goto quickmark saved at letter or number X"),
+            ("q", "Quit"),
+        ],
+    ),
+    (
+        "Fullscreen mode",
+        [
+            ("J, K", "Go to the next or previous page"),
+            ("space, ,", "Scroll a full page down or up"),
+            ("gg, G, nG", "Goto to the first, the last or to the nth page"),
+            ("^c, Escape", "Abort"),
+            ("F11", "Switch to normal mode"),
+            ("+, -, =", "Zoom in, out or to the original size"),
+            ("zI, zO, z0", "Zoom in, out or to the original size"),
+            ("n=", "Zoom to size n"),
+            ("q", "Quit"),
+        ],
+    ),
+    (
+        "Presentation mode",
+        [
+            ("space, ,", "Scroll a full page down or up"),
+            ("^c, Escape", "Abort"),
+            ("F5", "Switch to normal mode"),
+            ("q", "Quit"),
+        ],
+    ),
+    (
+        "Index mode",
+        [
+            ("k, j", "Move to upper or lower entry"),
+            ("l", "Expand entry"),
+            ("L", "Expand all entries"),
+            ("h", "Collapse entry"),
+            ("H", "Collapse all entries"),
+            ("space, Return", "Select and open entry"),
+        ],
+    ),
+]
+
+ZATHURA_MOUSE_BINDINGS = [
+    ("Scroll", "Scroll up or down"),
+    ("^Scroll", "Zoom in or out"),
+    ("Drag Button2 (middle button drag)", "Pan the document"),
+    ("Button1 (left click)", "Follow link"),
+    ("Drag Button1", "Select text"),
+    ("Drag S-Button1", "Highlight region"),
+    (
+        "Button3 (right click)",
+        "Open popup menu to copy/save image (activates for images recognized by export command)",
+    ),
+]
+
+ZATHURA_COMMANDS = [
+    ("bmark", "Save a bookmark"),
+    ("bdelete", "Delete a bookmark"),
+    ("blist", "List bookmarks"),
+    ("bjump", "Jump to given bookmark"),
+    (
+        "jumplist",
+        'Show recent jumps in jumplist (by default last 5). Optional argument specifies number of entries to show. Negative value "-N" shows all except the first "N" entries',
+    ),
+    ("mark", "Set a quickmark"),
+    ("delmarks", "Delete a quickmark. Abbreviation: delm"),
+    ("close", "Close document"),
+    ("quit", "Quit zathura. Abbreviation: q"),
+    ("exec", "Execute an external command. $FILE expands to the current document path, $PAGE to the current page number, and $DBUS to the bus name of the D-Bus interface. Alias: ! (space is still needed after)"),
+    ("info", "Show document information"),
+    ("open", "Open a document. Abbreviation: o"),
+    ("offset", "Set page offset"),
+    ("print", "Print document"),
+    ("write(!)", "Save document (and force overwriting). Alias: save(!)"),
+    ("export", "Export attachments. First argument specifies the attachment identifier (use completion with Tab), second argument gives the target filename (relative to current working directory)"),
+    ("dump", "Write values, descriptions, etc. of all current settings to a file"),
+    ("source", "Source a configuration file. It is possible to change the config directory by passing an argument"),
+    ("hlsearch", "Highlight current search results"),
+    ("nohlsearch", "Remove highlights of current search results. Abbreviation: nohl"),
+    ("version", "Show version information."),
+]
+
+
+class ZathuraKeybindingsDialog(QDialog):
+    """Painel de configuracao de keybindings do Zathura e da SessionView."""
+
+    def __init__(
+        self,
+        model_getter: Callable[[], Any],
+        apply_callback: Callable[[Any], tuple[bool, str]],
+        session_shortcuts_getter: Callable[[], dict[str, str]],
+        session_shortcuts_setter: Callable[[dict[str, str]], None],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._model_getter = model_getter
+        self._apply_callback = apply_callback
+        self._session_shortcuts_getter = session_shortcuts_getter
+        self._session_shortcuts_setter = session_shortcuts_setter
+        self._zathura_key_inputs: dict[str, QLineEdit] = {}
+        self._session_key_inputs: dict[str, QKeySequenceEdit] = {}
+        self._unmapped_keymap_lines: list[str] = []
+
+        self.setWindowTitle("Keybindings do Zathura")
+        self.resize(760, 720)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Configure os atalhos principais do Zathura e da sessao de leitura. "
+            "Atalhos extras ja existentes no zathurarc serao preservados."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        content_tabs = QTabWidget()
+        layout.addWidget(content_tabs, 1)
+
+        editor_tab = QWidget()
+        editor_layout = QVBoxLayout(editor_tab)
+
+        zathura_form = QFormLayout()
+        for item in ZATHURA_KEYMAP_DEFINITIONS:
+            key_input = QLineEdit()
+            key_input.setPlaceholderText(item["default_key"])
+            self._zathura_key_inputs[item["id"]] = key_input
+            zathura_form.addRow(f"{item['label']}:", key_input)
+        editor_layout.addLayout(zathura_form)
+
+        self.preserved_keymaps_label = QLabel("")
+        self.preserved_keymaps_label.setWordWrap(True)
+        self.preserved_keymaps_label.setStyleSheet("color: #8F8F8F; font-size: 12px;")
+        editor_layout.addWidget(self.preserved_keymaps_label)
+
+        session_title = QLabel("Atalhos da SessionView")
+        session_title.setFont(QFont("Georgia", 11, QFont.Weight.Bold))
+        editor_layout.addWidget(session_title)
+
+        session_form = QFormLayout()
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            key_input = QKeySequenceEdit()
+            key_input.setClearButtonEnabled(True)
+            self._session_key_inputs[item["id"]] = key_input
+            session_form.addRow(f"{item['label']}:", key_input)
+        editor_layout.addLayout(session_form)
+        editor_layout.addStretch()
+
+        reference_tab = QWidget()
+        reference_layout = QVBoxLayout(reference_tab)
+        self.reference_browser = QTextBrowser()
+        self.reference_browser.setOpenExternalLinks(False)
+        self.reference_browser.setHtml(self._build_reference_html())
+        reference_layout.addWidget(self.reference_browser)
+
+        content_tabs.addTab(editor_tab, "Editar")
+        content_tabs.addTab(reference_tab, "Referencia")
+
+        action_row = QHBoxLayout()
+        self.restore_defaults_button = QPushButton("Restaurar padroes")
+        self.save_apply_button = QPushButton("Salvar e aplicar")
+        action_row.addWidget(self.restore_defaults_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.save_apply_button)
+        layout.addLayout(action_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
+        layout.addWidget(buttons)
+
+        self.restore_defaults_button.clicked.connect(self._restore_defaults)
+        self.save_apply_button.clicked.connect(self._save_and_apply)
+
+        self._load_values()
+
+    def _build_reference_html(self) -> str:
+        sections = [
+            "<html><head><style>"
+            "body { font-family: sans-serif; color: #E6E6E6; background: #171717; }"
+            "h2 { color: #F1F1F1; margin-top: 18px; }"
+            "h3 { color: #D6D6D6; margin-top: 16px; }"
+            "table { border-collapse: collapse; width: 100%; margin-top: 8px; margin-bottom: 14px; }"
+            "th, td { border: 1px solid #3F3F3F; padding: 8px; text-align: left; vertical-align: top; }"
+            "th { background: #222222; }"
+            "td:first-child { white-space: nowrap; width: 28%; color: #A9D1FF; }"
+            "code { color: #A9D1FF; }"
+            "</style></head><body>",
+            "<h2>Mouse and Key Bindings</h2>",
+        ]
+
+        for title, rows in ZATHURA_REFERENCE_SECTIONS:
+            sections.append(f"<h3>{title}</h3>")
+            sections.append("<table><tr><th>Input</th><th>Description</th></tr>")
+            for key, description in rows:
+                sections.append(f"<tr><td><code>{key}</code></td><td>{description}</td></tr>")
+            sections.append("</table>")
+
+        sections.append("<h3>Mouse bindings</h3>")
+        sections.append("<table><tr><th>Input</th><th>Description</th></tr>")
+        for key, description in ZATHURA_MOUSE_BINDINGS:
+            sections.append(f"<tr><td><code>{key}</code></td><td>{description}</td></tr>")
+        sections.append("</table>")
+
+        sections.append("<h3>Commands</h3>")
+        sections.append("<table><tr><th>Command</th><th>Description</th></tr>")
+        for command, description in ZATHURA_COMMANDS:
+            sections.append(f"<tr><td><code>{command}</code></td><td>{description}</td></tr>")
+        sections.append("</table></body></html>")
+        return "".join(sections)
+
+    def _load_values(self):
+        model = self._model_getter()
+        mapped_keys, self._unmapped_keymap_lines = self._parse_known_keymaps(getattr(model, "keymaps", []) or [])
+        for item in ZATHURA_KEYMAP_DEFINITIONS:
+            self._zathura_key_inputs[item["id"]].setText(mapped_keys.get(item["id"], item["default_key"]))
+
+        self.preserved_keymaps_label.setText(
+            f"Linhas extras preservadas automaticamente: {len(self._unmapped_keymap_lines)}"
+        )
+
+        session_shortcuts = self._session_shortcuts_getter()
+        defaults = default_session_shortcuts()
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            sequence = str(session_shortcuts.get(item["id"], defaults[item["id"]]) or "").strip()
+            self._session_key_inputs[item["id"]].setKeySequence(QKeySequence(sequence))
+
+    def _parse_known_keymaps(self, keymaps: list[str]) -> tuple[dict[str, str], list[str]]:
+        command_to_id = {item["command"]: item["id"] for item in ZATHURA_KEYMAP_DEFINITIONS}
+        known: dict[str, str] = {}
+        unknown: list[str] = []
+        for raw_line in keymaps:
+            line = str(raw_line or "").strip()
+            match = re.match(r"^map\s+(\S+)\s+(.+)$", line)
+            if not match:
+                if line:
+                    unknown.append(line)
+                continue
+            key_text = match.group(1).strip()
+            command_text = match.group(2).strip()
+            action_id = command_to_id.get(command_text)
+            if action_id and action_id not in known:
+                known[action_id] = key_text
+            else:
+                unknown.append(line)
+        return known, unknown
+
+    def _restore_defaults(self):
+        for item in ZATHURA_KEYMAP_DEFINITIONS:
+            self._zathura_key_inputs[item["id"]].setText(item["default_key"])
+        defaults = default_session_shortcuts()
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            self._session_key_inputs[item["id"]].setKeySequence(QKeySequence(defaults[item["id"]]))
+
+    def _save_and_apply(self):
+        model = self._model_getter()
+        new_keymaps: list[str] = []
+        for item in ZATHURA_KEYMAP_DEFINITIONS:
+            key_text = self._zathura_key_inputs[item["id"]].text().strip()
+            if key_text:
+                new_keymaps.append(f"map {key_text} {item['command']}")
+        new_keymaps.extend(self._unmapped_keymap_lines)
+        model.keymaps = new_keymaps
+
+        session_shortcuts: dict[str, str] = {}
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            sequence = self._session_key_inputs[item["id"]].keySequence().toString(
+                QKeySequence.SequenceFormat.PortableText
+            ).strip()
+            session_shortcuts[item["id"]] = sequence
+
+        self._session_shortcuts_setter(session_shortcuts)
+        success, message = self._apply_callback(model)
+        if success:
+            QMessageBox.information(self, "Zathura", message)
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Zathura", message)
 
 
 class SettingsDialog(QDialog):
@@ -50,17 +382,25 @@ class SettingsDialog(QDialog):
         "#6F6F6F",
         "#4F4F4F",
     ]
+    ZATHURA_PRESETS = [
+        ("classic", "Classico"),
+        ("pywal", "Pywal"),
+        ("focus", "Foco"),
+        ("midnight_lilac", "Lilac Night"),
+    ]
 
     def __init__(self, parent=None, settings_path: str = "config/settings.yaml"):
         super().__init__(parent)
         self.settings_path = settings_path
         self.settings_model = Settings.from_yaml(settings_path)
         self.config_manager = ConfigManager.instance()
+        self._zathura_working_model = self.settings_model.zathura.model_copy(deep=True)
         self._llm_form = None
         self._llm_local_rows = []
         self._llm_cloud_rows = []
         self._secondary_color_buttons: dict[str, QPushButton] = {}
         self._selected_secondary_button_color = "#FFFFFF"
+        self._zathura_preset_buttons: dict[str, QPushButton] = {}
 
         self.setWindowTitle("Configurações do Sistema")
         self.setMinimumSize(760, 560)
@@ -84,6 +424,7 @@ class SettingsDialog(QDialog):
         self._setup_llm_tab()
         self._setup_obsidian_tab()
         self._setup_review_view_tab()
+        self._setup_zathura_tab()
         self._setup_appearance_tab()
         self._setup_features_tab()
 
@@ -394,12 +735,45 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(tab, "Review View")
 
+    def _setup_zathura_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        self.zathura_preset_group = QButtonGroup(self)
+        self.zathura_preset_group.setExclusive(True)
+
+        preset_buttons = QHBoxLayout()
+        for preset_id, label in self.ZATHURA_PRESETS:
+            button = QPushButton(label)
+            button.setCheckable(True)
+            self.zathura_preset_group.addButton(button)
+            self._zathura_preset_buttons[preset_id] = button
+            preset_buttons.addWidget(button)
+        layout.addLayout(preset_buttons)
+
+        action_buttons = QHBoxLayout()
+        self.zathura_apply_preset_button = QPushButton("Aplicar preset")
+        self.zathura_test_button = QPushButton("Testar")
+        self.zathura_panel_button = QPushButton("Configurar keybindings")
+        action_buttons.addWidget(self.zathura_apply_preset_button)
+        action_buttons.addWidget(self.zathura_test_button)
+        action_buttons.addWidget(self.zathura_panel_button)
+        layout.addLayout(action_buttons)
+        layout.addStretch()
+
+        self.zathura_apply_preset_button.clicked.connect(self._apply_selected_zathura_preset)
+        self.zathura_test_button.clicked.connect(self._test_zathura_with_pdf)
+        self.zathura_panel_button.clicked.connect(self._open_zathura_panel)
+        self.tabs.addTab(tab, "Zathura")
+
     def _load_current_values(self):
         app = self.settings_model.app
         paths = self.settings_model.paths
         llm = self.settings_model.llm
         obsidian = self.settings_model.obsidian
         review_view = self.settings_model.review_view
+        zathura = self.settings_model.zathura
         features = self.settings_model.features
 
         self.app_name_input.setText(app.name)
@@ -453,6 +827,9 @@ class SettingsDialog(QDialog):
         self.review_question_interval_spin.setValue(int(review_view.question_interval_minutes))
         self.review_arrow_pan_step_spin.setValue(int(review_view.arrow_pan_step))
 
+        self._zathura_working_model = zathura.model_copy(deep=True)
+        self._set_zathura_preset_selection(self._infer_zathura_preset(zathura))
+
         self.feature_llm.setChecked(features.enable_llm)
         self.feature_obsidian.setChecked(features.enable_obsidian_sync)
         self.feature_pomodoro.setChecked(features.enable_pomodoro)
@@ -465,6 +842,255 @@ class SettingsDialog(QDialog):
         if self._selected_secondary_button_color not in self._secondary_color_buttons:
             self._selected_secondary_button_color = "#FFFFFF"
         self._refresh_secondary_palette_styles()
+
+    def _dump_option_pairs(self, values: dict) -> str:
+        lines = []
+        for key, value in values.items():
+            lines.append(f"{key}={value}")
+        return "\n".join(lines)
+
+    def _parse_key_value_lines(self, raw_text: str) -> dict:
+        data: dict[str, Any] = {}
+        for raw_line in str(raw_text or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            normalized_key = key.strip()
+            normalized_value = value.strip()
+            if not normalized_key:
+                continue
+            lowered = normalized_value.lower()
+            if lowered in {"true", "false"}:
+                data[normalized_key] = lowered == "true"
+                continue
+            try:
+                data[normalized_key] = int(normalized_value)
+                continue
+            except ValueError:
+                pass
+            try:
+                data[normalized_key] = float(normalized_value)
+                continue
+            except ValueError:
+                pass
+            data[normalized_key] = normalized_value
+        return data
+
+    def _parse_nonempty_lines(self, raw_text: str) -> list[str]:
+        return [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
+
+    def _selected_zathura_preset(self) -> str:
+        for preset_id, button in self._zathura_preset_buttons.items():
+            if button.isChecked():
+                return preset_id
+        return "classic"
+
+    def _set_zathura_preset_selection(self, preset_id: str):
+        selected = preset_id if preset_id in self._zathura_preset_buttons else "classic"
+        button = self._zathura_preset_buttons.get(selected)
+        if button is not None:
+            button.setChecked(True)
+
+    def _infer_zathura_preset(self, model: Any) -> str:
+        preset = str(getattr(model, "preset", "") or "").strip().lower()
+        if preset in self._zathura_preset_buttons:
+            return preset
+        extra_options = dict(getattr(model, "extra_options", {}) or {})
+        if extra_options.get("default-bg") == "#1E2740":
+            return "midnight_lilac"
+        theme_mode = str(getattr(model, "theme_mode", "plain") or "plain")
+        if theme_mode == "pywal_generator":
+            return "pywal"
+        if theme_mode == "pywal_internal" or bool(getattr(model, "recolor", False)):
+            return "focus"
+        return "classic"
+
+    def _preset_model(self, preset_id: str):
+        model = self._zathura_working_model.model_copy(deep=True)
+        model.extra_options = dict(getattr(model, "extra_options", {}) or {})
+        for key in (
+            "page-padding",
+            "default-bg",
+            "default-fg",
+            "statusbar-bg",
+            "statusbar-fg",
+            "inputbar-bg",
+            "inputbar-fg",
+            "completion-bg",
+            "completion-fg",
+            "completion-group-bg",
+            "completion-group-fg",
+            "completion-highlight-bg",
+            "completion-highlight-fg",
+            "notification-bg",
+            "notification-fg",
+            "notification-error-bg",
+            "notification-error-fg",
+            "notification-warning-bg",
+            "notification-warning-fg",
+            "recolor-lightcolor",
+            "recolor-darkcolor",
+            "render-loading-bg",
+            "render-loading-fg",
+            "index-bg",
+            "index-fg",
+            "index-active-bg",
+            "index-active-fg",
+        ):
+            model.extra_options.pop(key, None)
+        model.enabled = True
+        model.sync_to_zathurarc = True
+        model.preset = preset_id
+        model.statusbar_basename = True
+        model.window_title_home_tilde = True
+        model.session_use_fork = True
+        model.include_files = list(getattr(model, "include_files", []) or [])
+
+        if preset_id == "pywal":
+            model.theme_mode = "pywal_generator"
+            model.selection_clipboard = "primary"
+            model.recolor = False
+            model.session_open_mode = "fullscreen"
+            return model
+
+        if preset_id == "focus":
+            model.theme_mode = "pywal_internal"
+            model.selection_clipboard = "primary"
+            model.recolor = True
+            model.session_open_mode = "fullscreen"
+            model.extra_options["page-padding"] = 8
+            return model
+
+        if preset_id == "midnight_lilac":
+            model.theme_mode = "plain"
+            model.selection_clipboard = "primary"
+            model.recolor = True
+            model.session_open_mode = "fullscreen"
+            model.extra_options.update(
+                {
+                    "page-padding": 10,
+                    "default-bg": "#1E2740",
+                    "default-fg": "#9FC0E5",
+                    "statusbar-bg": "#151D31",
+                    "statusbar-fg": "#A77AD7",
+                    "inputbar-bg": "#151D31",
+                    "inputbar-fg": "#9FC0E5",
+                    "completion-bg": "#1E2740",
+                    "completion-fg": "#9FC0E5",
+                    "completion-group-bg": "#1E2740",
+                    "completion-group-fg": "#4C8EC5",
+                    "completion-highlight-bg": "#A77AD7",
+                    "completion-highlight-fg": "#151D31",
+                    "notification-bg": "#1E2740",
+                    "notification-fg": "#9FC0E5",
+                    "notification-error-bg": "#A77AD7",
+                    "notification-error-fg": "#151D31",
+                    "notification-warning-bg": "#4C8EC5",
+                    "notification-warning-fg": "#151D31",
+                    "recolor-lightcolor": "#1E2740",
+                    "recolor-darkcolor": "#9FC0E5",
+                    "render-loading-bg": "#1E2740",
+                    "render-loading-fg": "#4C8EC5",
+                    "index-bg": "#1E2740",
+                    "index-fg": "#9FC0E5",
+                    "index-active-bg": "#4C8EC5",
+                    "index-active-fg": "#151D31",
+                }
+            )
+            return model
+
+        model.theme_mode = "plain"
+        model.selection_clipboard = "clipboard"
+        model.recolor = False
+        model.session_open_mode = "normal"
+        return model
+
+    def _apply_selected_zathura_preset(self):
+        preset_id = self._selected_zathura_preset()
+        self._zathura_working_model = self._preset_model(preset_id)
+        success, message = self._save_zathura_settings_only(self._build_zathura_model_from_form())
+        if success:
+            QMessageBox.information(self, "Zathura", message)
+        else:
+            QMessageBox.warning(self, "Zathura", message)
+
+    def _test_zathura_with_pdf(self):
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar PDF para teste do Zathura",
+            str(Path.home()),
+            "Arquivos PDF (*.pdf)",
+        )
+        if not selected:
+            return
+        try:
+            manager = ZathuraConfigManager(self._build_zathura_model_from_form())
+            command = manager.build_open_command(selected, page=1)
+            subprocess.Popen(command, start_new_session=True)
+        except Exception as exc:
+            QMessageBox.warning(self, "Teste Zathura", f"Não foi possível abrir o PDF de teste.\n\n{exc}")
+
+    def _load_session_shortcuts(self) -> dict[str, str]:
+        shortcuts = default_session_shortcuts()
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            key = f"ui/session_shortcuts/{item['id']}"
+            shortcuts[item["id"]] = str(self.config_manager.get(key, shortcuts[item["id"]]) or "").strip()
+        return shortcuts
+
+    def _save_session_shortcuts(self, shortcuts: dict[str, str]):
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            key = f"ui/session_shortcuts/{item['id']}"
+            self.config_manager.set(key, str(shortcuts.get(item["id"], "") or "").strip())
+        parent = self.parent()
+        views = getattr(parent, "views", None)
+        session_view = views.get("session") if isinstance(views, dict) else None
+        if session_view is not None and hasattr(session_view, "reload_configurable_shortcuts"):
+            session_view.reload_configurable_shortcuts()
+
+    def _build_zathura_model_from_form(self):
+        model = self._zathura_working_model.model_copy(deep=True)
+        model.preset = self._selected_zathura_preset()
+        return model
+
+    def _apply_zathura_form_to_settings_model(self):
+        self.settings_model.zathura = self._build_zathura_model_from_form()
+
+    def _save_zathura_settings_only(self, zathura_model: Any | None = None) -> tuple[bool, str]:
+        try:
+            if zathura_model is not None:
+                self.settings_model.zathura = zathura_model
+                self._zathura_working_model = zathura_model.model_copy(deep=True)
+            else:
+                self._apply_zathura_form_to_settings_model()
+            self.settings_model.save_yaml(self.settings_path)
+            updated = reload_settings(self.settings_path)
+            self.settings_model = updated
+            self._zathura_working_model = updated.zathura.model_copy(deep=True)
+            if updated.zathura.enabled and updated.zathura.sync_to_zathurarc:
+                result = ZathuraConfigManager(updated.zathura).apply()
+                details = "\n".join(result.get("errors", []) + result.get("warnings", []))
+                if result.get("success", False):
+                    return True, details.strip() or "Configuração do Zathura aplicada com sucesso."
+                return False, details.strip() or "A sincronização do zathurarc falhou."
+            return True, "Configuração do Zathura salva no settings.yaml."
+        except Exception as exc:
+            return False, f"Não foi possível aplicar as configurações do Zathura.\n\n{exc}"
+
+    def _refresh_zathura_status(self):
+        return ZathuraConfigManager(self._build_zathura_model_from_form()).status()
+
+    def _open_zathura_panel(self):
+        dialog = ZathuraKeybindingsDialog(
+            model_getter=self._build_zathura_model_from_form,
+            apply_callback=self._save_zathura_settings_only,
+            session_shortcuts_getter=self._load_session_shortcuts,
+            session_shortcuts_setter=self._save_session_shortcuts,
+            parent=self,
+        )
+        dialog.exec()
 
     def _save_settings(self):
         try:
@@ -514,6 +1140,8 @@ class SettingsDialog(QDialog):
             self.settings_model.review_view.question_interval_minutes = self.review_question_interval_spin.value()
             self.settings_model.review_view.arrow_pan_step = self.review_arrow_pan_step_spin.value()
 
+            self._apply_zathura_form_to_settings_model()
+
             self.settings_model.features.enable_llm = self.feature_llm.isChecked()
             self.settings_model.features.enable_obsidian_sync = self.feature_obsidian.isChecked()
             self.settings_model.features.enable_pomodoro = self.feature_pomodoro.isChecked()
@@ -530,6 +1158,21 @@ class SettingsDialog(QDialog):
 
             self.settings_model.save_yaml(self.settings_path)
             updated = reload_settings(self.settings_path)
+            self.settings_model = updated
+            self._zathura_working_model = updated.zathura.model_copy(deep=True)
+            if updated.zathura.enabled and updated.zathura.sync_to_zathurarc:
+                zathura_result = ZathuraConfigManager(updated.zathura).apply()
+                if not zathura_result.get("success", False):
+                    errors = "\n".join(zathura_result.get("errors", []))
+                    warnings = "\n".join(zathura_result.get("warnings", []))
+                    detail = "\n".join(part for part in [errors, warnings] if part).strip()
+                    if detail:
+                        QMessageBox.warning(
+                            self,
+                            "Zathura",
+                            "As configurações foram salvas, mas a sincronização do zathurarc teve problemas:\n\n"
+                            f"{detail}",
+                        )
             payload = updated.model_dump()
             payload["ui"] = {
                 "show_onboarding_dialog": self.show_onboarding_check.isChecked(),

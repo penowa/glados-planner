@@ -51,6 +51,7 @@ from core.modules.obsidian.lazy_vault_manager import LazyObsidianVaultManager
 from core.modules.book_processor import BookProcessor
 from core.modules.reading_manager import ReadingManager
 from core.modules.agenda_manager import AgendaManager
+from core.modules.zathura_config_manager import ZathuraConfigManager
 from core.config.settings import settings as core_settings
 from core.llm.backend_router import llm
 from core.vault.bootstrap import bootstrap_vault
@@ -227,6 +228,35 @@ class PhilosophyPlannerApp:
                 return str(path)
         return None
 
+    def _open_ollama_log_handle(self):
+        """Abre um destino gravável para logs do Ollama; faz fallback para /dev/null se necessário."""
+        log_candidates = [
+            Path(core_settings.paths.data_dir) / "logs" / "ollama-serve.log",
+            Path.home() / ".glados" / "logs" / "ollama-serve.log",
+        ]
+
+        last_error = None
+        seen_paths = set()
+        for log_path in log_candidates:
+            resolved_log_path = log_path.expanduser()
+            if resolved_log_path in seen_paths:
+                continue
+            seen_paths.add(resolved_log_path)
+            try:
+                resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_handle = open(resolved_log_path, "a", encoding="utf-8")
+                self.logger.info("Logs do Ollama serão gravados em %s", resolved_log_path)
+                return log_handle
+            except OSError as exc:
+                last_error = exc
+
+        self.logger.warning(
+            "Não foi possível abrir um arquivo de log para o Ollama (%s). Usando %s.",
+            last_error,
+            os.devnull,
+        )
+        return open(os.devnull, "a", encoding="utf-8")
+
     def ensure_ollama_service_for_cloud_backend(self):
         """Inicia `ollama serve` automaticamente quando backend cloud/ollama estiver ativo."""
         if not self._is_ollama_cloud_backend_active():
@@ -249,10 +279,7 @@ class PhilosophyPlannerApp:
             if self.splash:
                 self.splash.show_message("Inicializando serviço Ollama...")
 
-            logs_dir = Path(core_settings.paths.data_dir) / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            log_path = logs_dir / "ollama-serve.log"
-            self._ollama_log_handle = open(log_path, "a", encoding="utf-8")
+            self._ollama_log_handle = self._open_ollama_log_handle()
 
             env = os.environ.copy()
             env["OLLAMA_HOST"] = api_base
@@ -406,6 +433,7 @@ class PhilosophyPlannerApp:
         )
         self.backend_modules['reading_manager'] = ReadingManager(vault_path=vault_path)
         self.backend_modules['agenda_manager'] = AgendaManager(vault_path=vault_path)
+        self.backend_modules['zathura_manager'] = ZathuraConfigManager(core_settings.zathura)
         
         self.splash.show_message("Inicializando núcleo cognitivo da GLaDOS...")
         self.backend_modules['llm_module'] = llm

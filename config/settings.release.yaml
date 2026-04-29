@@ -1,50 +1,50 @@
 app:
   name: Planner
   version: 1.0.0
-  debug: true
+  debug: false
   log_level: INFO
 paths:
   vault: ~/Documentos/Obsidian/Planner/
-  data_dir: /home/penowa/Glados/data
-  models_dir: /home/penowa/Glados/data/models
-  exports_dir: /home/penowa/Glados/data/exports
-  cache_dir: /home/penowa/Glados/data/cache
+  data_dir: data
+  models_dir: data/models
+  exports_dir: data/exports
+  cache_dir: data/cache
 database:
-  url: sqlite:////home/penowa/Glados/data/database/philosophy.db
+  url: sqlite:///data/database/philosophy.db
   echo: false
 llm:
   backend: cloud
-  model_name: Qwen3-1.7B-Q8_0.gguf
-  model_path: /home/penowa/Glados/data/models/Qwen3-1.7B-Q8_0.gguf
-  models_dir: /home/penowa/Glados/data/models
-  n_ctx: 3000
+  model_name: Mistral-7B-GGUF-Q4K
+  model_path: data/models/mistral-7b-GGUF-Q4K.gguf
+  models_dir: data/models
+  n_ctx: 2048
   n_gpu_layers: 0
   use_gpu: true
-  use_cpu: false
-  device_mode: gpu_only
+  use_cpu: true
+  device_mode: auto
   gpu_index: 0
   vram_soft_limit_mb: 0
   temperature: 0.35
   top_p: 0.9
   repeat_penalty: 1.12
-  max_tokens: 256
+  max_tokens: 384
   use_semantic_search: true
   cpu:
-    threads: 2
-    batch_size: 80
+    threads: 4
+    batch_size: 128
     use_mlock: true
   cloud:
-    model: ollama/qwen3.5:cloud
+    model: ollama/qwen2.5:1.5b
     api_key: ''
     api_base: http://127.0.0.1:11434
     api_version: ''
     organization: ''
-    timeout_seconds: 180
+    timeout_seconds: 120
     max_retries: 1
   glados:
-    user_name: Hélio
-    glados_name: Olivia
-    personality_profile: marvin
+    user_name: Pindarolas
+    glados_name: GLaDOS
+    personality_profile: auto
     gender: feminino
     personality_intensity: 0.7
     enable_sarcasm: true
@@ -110,7 +110,6 @@ review_view:
   arrow_pan_step: 130
 zathura:
   enabled: true
-  preset: midnight_lilac
   binary: zathura
   config_dir: ~/.config/zathura
   config_file: ~/.config/zathura/zathurarc
@@ -123,48 +122,15 @@ zathura:
   pywal_colors_file: ~/.cache/wal/colors.sh
   generated_theme_file: ~/.config/zathura/glados-theme.zathurarc
   custom_theme_include_file: ''
-  selection_clipboard: primary
+  selection_clipboard: clipboard
   statusbar_basename: true
   window_title_home_tilde: true
-  recolor: true
+  recolor: false
   session_open_mode: fullscreen
   session_use_fork: true
-  extra_options:
-    page-padding: 10
-    default-bg: '#1E2740'
-    default-fg: '#9FC0E5'
-    statusbar-bg: '#151D31'
-    statusbar-fg: '#A77AD7'
-    inputbar-bg: '#151D31'
-    inputbar-fg: '#9FC0E5'
-    completion-bg: '#1E2740'
-    completion-fg: '#9FC0E5'
-    completion-group-bg: '#1E2740'
-    completion-group-fg: '#4C8EC5'
-    completion-highlight-bg: '#A77AD7'
-    completion-highlight-fg: '#151D31'
-    notification-bg: '#1E2740'
-    notification-fg: '#9FC0E5'
-    notification-error-bg: '#A77AD7'
-    notification-error-fg: '#151D31'
-    notification-warning-bg: '#4C8EC5'
-    notification-warning-fg: '#151D31'
-    recolor-lightcolor: '#1E2740'
-    recolor-darkcolor: '#9FC0E5'
-    render-loading-bg: '#1E2740'
-    render-loading-fg: '#4C8EC5'
-    index-bg: '#1E2740'
-    index-fg: '#9FC0E5'
-    index-active-bg: '#4C8EC5'
-    index-active-fg: '#151D31'
+  extra_options: {}
   include_files: []
-  keymaps:
-  - map r reload
-  - map f toggle_fullscreen
-  - map J scroll down
-  - map K scroll up
-  - map + zoom in
-  - map - zoom out
+  keymaps: []
   extra_config: ''
 cache:
   enabled: true

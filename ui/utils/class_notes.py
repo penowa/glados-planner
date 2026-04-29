@@ -1,4 +1,4 @@
-"""Utilitários para criação de notas de aula em 03-PRODUÇÃO."""
+"""Utilitários para criação de notas de aula em 02-ANOTAÇÕES."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from typing import Any, Optional
 from ui.utils.discipline_links import find_primary_book_note
 
 
-PRODUCTION_DIR = "03-PRODUÇÃO"
+CLASS_NOTES_DIR = "02-ANOTAÇÕES"
 DISCIPLINE_DIR = "05-DISCIPLINAS"
 ANNOTATIONS_HEADER = "## Anotações da aula"
 
@@ -101,7 +101,52 @@ def _resolve_obsidian_target(vault_root: Path, target: str) -> Optional[Path]:
         full = full.resolve(strict=False)
         if full.exists() and full.is_file():
             return full
+
+    fallback = _resolve_obsidian_target_fallback(vault_root, cleaned)
+    if fallback is not None:
+        return fallback
     return None
+
+
+def _resolve_obsidian_target_fallback(vault_root: Path, target: str) -> Optional[Path]:
+    target_path = Path(target)
+    target_name = target_path.name or target
+    target_stem = Path(target_name).stem.strip()
+    normalized_target = _normalize_token(target_stem)
+    reading_root = vault_root / "01-LEITURAS"
+    if not reading_root.exists():
+        return None
+
+    candidates = []
+    for note_path in reading_root.rglob("*.md"):
+        if not note_path.is_file():
+            continue
+        rel = str(note_path.relative_to(vault_root).with_suffix("")).replace("\\", "/")
+        stem = note_path.stem.strip()
+        stem_no_prefix = stem.removeprefix("📖 ").strip()
+        rel_norm = _normalize_token(rel)
+        stem_norm = _normalize_token(stem)
+        stem_no_prefix_norm = _normalize_token(stem_no_prefix)
+
+        score = 0
+        if rel.endswith(target):
+            score += 120
+        if stem == target_stem or stem_no_prefix == target_stem:
+            score += 100
+        if normalized_target and normalized_target in {stem_norm, stem_no_prefix_norm}:
+            score += 90
+        if normalized_target and normalized_target == rel_norm.split("/")[-1]:
+            score += 70
+        if note_path.name.startswith("📖 "):
+            score += 20
+        if score > 0:
+            candidates.append((score, note_path))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (-item[0], str(item[1])))
+    return candidates[0][1]
 
 
 def _vault_target(vault_root: Path, note_abs: Path) -> str:
@@ -175,7 +220,7 @@ def build_class_note_filename(discipline: str, event_dt: datetime) -> str:
 
 def build_class_note_relative_path(discipline: str, event_data: dict[str, Any]) -> str:
     event_dt = _event_datetime(event_data)
-    return f"{PRODUCTION_DIR}/{build_class_note_filename(discipline, event_dt)}.md"
+    return f"{CLASS_NOTES_DIR}/{build_class_note_filename(discipline, event_dt)}.md"
 
 
 def _extract_existing_annotations(existing_content: str) -> str:
@@ -284,3 +329,49 @@ def build_class_note_content(
         lines.append("<!-- Espaço livre para anotar o conteúdo da aula. -->")
 
     return frontmatter, "\n".join(lines).rstrip() + "\n"
+
+
+def upsert_class_note(
+    *,
+    vault_controller: Any,
+    discipline: str,
+    event_data: dict[str, Any],
+    selected_works: list[WorkMaterial],
+) -> dict[str, Any]:
+    """Cria ou atualiza a nota de aula no vault usando o fluxo padrão."""
+    relative_path = build_class_note_relative_path(discipline, event_data)
+
+    existing_note = None
+    if vault_controller and hasattr(vault_controller, "get_note"):
+        existing_note = vault_controller.get_note(relative_path)
+    existing_content = str((existing_note or {}).get("content") or "")
+
+    frontmatter, content = build_class_note_content(
+        discipline=discipline,
+        event_data=event_data,
+        selected_works=selected_works,
+        existing_content=existing_content,
+    )
+
+    if existing_note and vault_controller and hasattr(vault_controller, "update_note"):
+        vault_controller.update_note(
+            relative_path,
+            content=content,
+            frontmatter=frontmatter,
+        )
+    elif vault_controller and hasattr(vault_controller, "create_note"):
+        vault_controller.create_note(
+            relative_path,
+            content=content,
+            frontmatter=frontmatter,
+            tags=list(frontmatter.get("tags", [])),
+        )
+    else:
+        raise RuntimeError("VaultController indisponível para escrita.")
+
+    return {
+        "relative_path": relative_path,
+        "frontmatter": frontmatter,
+        "content": content,
+        "updated": bool(existing_note),
+    }

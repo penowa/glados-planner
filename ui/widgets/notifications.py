@@ -1,8 +1,16 @@
 """
 Widgets de notificação
 """
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QFrame, QScrollArea
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QFrame,
+    QScrollArea,
+    QHBoxLayout,
+)
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import logging
 
@@ -12,11 +20,13 @@ logger = logging.getLogger('GLaDOS.UI.Notifications')
 class NotificationPanel(QWidget):
     """Painel de notificações"""
     
-    def __init__(self, parent=None):
+    def __init__(self, event_bus=None, parent=None):
         super().__init__(parent)
+        self.event_bus = event_bus
         self.setWindowFlags(Qt.WindowType.Popup)
         self.setFixedSize(400, 500)
         self.setObjectName("notification_panel")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         
         self.setup_ui()
     
@@ -29,7 +39,7 @@ class NotificationPanel(QWidget):
         header.setObjectName("notification_header")
         header_layout = QVBoxLayout()
         
-        title = QLabel("Notificações")
+        title = QLabel("Histórico de notificações")
         title.setObjectName("notification_title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = QFont("Georgia", 14, QFont.Weight.Bold)
@@ -55,10 +65,11 @@ class NotificationPanel(QWidget):
         footer = QFrame()
         footer_layout = QHBoxLayout()
         
-        clear_btn = QPushButton("Limpar Todas")
+        clear_btn = QPushButton("Limpar histórico")
         clear_btn.clicked.connect(self.clear_all)
         
         footer_layout.addWidget(clear_btn)
+        footer_layout.addStretch(1)
         footer.setLayout(footer_layout)
         layout.addWidget(footer)
         
@@ -66,7 +77,7 @@ class NotificationPanel(QWidget):
     
     def set_notifications(self, notifications):
         """Define notificações a exibir"""
-        self.clear_all()
+        self._clear_widgets()
         
         if not notifications:
             label = QLabel("Nenhuma notificação")
@@ -77,13 +88,20 @@ class NotificationPanel(QWidget):
         for notif in notifications:
             widget = NotificationWidget(notif)
             self.notifications_layout.addWidget(widget)
+        self.notifications_layout.addStretch(1)
     
-    def clear_all(self):
-        """Remove todas as notificações"""
+    def _clear_widgets(self):
+        """Remove widgets atuais da lista."""
         while self.notifications_layout.count():
             child = self.notifications_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+
+    def clear_all(self):
+        """Limpa histórico persistido e UI."""
+        if self.event_bus and hasattr(self.event_bus, "clear_notifications"):
+            self.event_bus.clear_notifications()
+        self.set_notifications([])
 
 
 class NotificationWidget(QFrame):
@@ -113,57 +131,9 @@ class NotificationWidget(QFrame):
         timestamp.setObjectName("notification_item_time")
         
         layout.addWidget(title)
-        layout.addWidget(message)
-        layout.addWidget(timestamp)
+        if message.text():
+            layout.addWidget(message)
+        if timestamp.text():
+            layout.addWidget(timestamp)
         
         self.setLayout(layout)
-
-
-class NotificationToast(QWidget):
-    """Toast de notificação temporário"""
-    
-    def __init__(self, notif_type, title, message, parent=None):
-        super().__init__(parent)
-        self.setObjectName("notification_toast")
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        
-        # Configurar baseado no tipo
-        colors = {
-            'error': '#8B0000',
-            'warning': '#FF8C00',
-            'info': '#1E90FF',
-            'success': '#2E8B57'
-        }
-        
-        self.setStyleSheet(f"""
-            QWidget#notification_toast {{
-                background-color: {colors.get(notif_type, '#2D2D2D')};
-                border: none;
-                border-radius: 8px;
-                padding: 10px;
-            }}
-        """)
-        
-        layout = QVBoxLayout()
-        
-        title_label = QLabel(title)
-        title_label.setStyleSheet("color: white; font-weight: bold;")
-        
-        message_label = QLabel(message)
-        message_label.setStyleSheet("color: #F5F5DC;")
-        message_label.setWordWrap(True)
-        
-        layout.addWidget(title_label)
-        layout.addWidget(message_label)
-        
-        self.setLayout(layout)
-        
-        # Auto-fechar após 5 segundos
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(5000, self.close)

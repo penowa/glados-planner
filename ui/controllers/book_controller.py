@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 from enum import Enum
 
 from core.config.settings import settings
+from ui.utils.citation_notes import ensure_citations_note_for_book
 from ui.utils.discipline_links import append_book_note_links, ensure_discipline_note
 
 logger = logging.getLogger('GLaDOS.UI.BookController')
@@ -1499,6 +1500,12 @@ class BookController(QObject):
 
             ensure_discipline_note(vault_root, discipline_name)
             append_book_note_links(vault_root, discipline_name, [book_note_abs])
+            ensure_citations_note_for_book(
+                vault_root,
+                book_note_path=book_note_abs,
+                discipline=discipline_name,
+                discipline_note_path=vault_root / note_path,
+            )
 
             existing_note = self.vault_manager.get_note_by_path(note_path)
             frontmatter = {
@@ -1571,7 +1578,8 @@ class BookController(QObject):
                             title=title,
                             author=author,
                             total_pages=total_pages,
-                            book_id=book_id
+                            book_id=book_id,
+                            source_file=str(file_path),
                         )
                         
                         if added_id:

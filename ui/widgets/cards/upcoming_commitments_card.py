@@ -98,6 +98,12 @@ class UpcomingCommitmentsCard(QFrame):
     def _collect_upcoming_events(self) -> List[Dict[str, Any]]:
         now = datetime.now()
         manager = self._resolve_agenda_manager()
+        if manager and hasattr(manager, "auto_complete_past_events"):
+            try:
+                manager.auto_complete_past_events()
+            except Exception:
+                pass
+
         if manager and hasattr(manager, "events"):
             raw_events = list(getattr(manager, "events", {}).values())
             normalized = [self._normalize_event(event) for event in raw_events]

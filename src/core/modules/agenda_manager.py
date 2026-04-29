@@ -223,6 +223,29 @@ class AgendaManager:
                 "lunch": "12:30",
                 "dinner": "19:30"
             },
+            "protected_time_blocks": [
+                {
+                    "title": "Café da manhã",
+                    "type": "refeicao",
+                    "start": "08:00",
+                    "end": "08:30",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+                {
+                    "title": "Janela de almoço",
+                    "type": "refeicao",
+                    "start": "11:00",
+                    "end": "14:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+                {
+                    "title": "Janela de jantar",
+                    "type": "refeicao",
+                    "start": "18:00",
+                    "end": "20:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+            ],
             "weekly_review": {
                 "weekday": 6,  # domingo
                 "time": "18:00",
@@ -261,6 +284,213 @@ class AgendaManager:
             return dt.strftime("%H:%M")
         except Exception:
             return fallback
+
+    def _parse_hhmm(self, value: str) -> Optional[Tuple[int, int]]:
+        """Converte HH:MM em (hora, minuto)."""
+        raw = str(value or "").strip()
+        try:
+            parsed = datetime.strptime(raw, "%H:%M")
+            return parsed.hour, parsed.minute
+        except Exception:
+            return None
+
+    def _normalized_protected_time_blocks(self) -> List[Dict[str, Any]]:
+        """Retorna blocos protegidos recorrentes em formato estável."""
+        raw_blocks = self.user_preferences.get("protected_time_blocks", [])
+        if not isinstance(raw_blocks, list) or not raw_blocks:
+            raw_blocks = [
+                {
+                    "title": "Café da manhã",
+                    "type": "refeicao",
+                    "start": "08:00",
+                    "end": "08:30",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+                {
+                    "title": "Janela de almoço",
+                    "type": "refeicao",
+                    "start": "11:00",
+                    "end": "14:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+                {
+                    "title": "Janela de jantar",
+                    "type": "refeicao",
+                    "start": "18:00",
+                    "end": "20:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                },
+            ]
+
+        normalized: List[Dict[str, Any]] = []
+        valid_types = {item.value for item in AgendaEventType}
+
+        for index, block in enumerate(raw_blocks):
+            if not isinstance(block, dict):
+                continue
+
+            start_hhmm = self._normalize_hhmm(block.get("start"), "")
+            end_hhmm = self._normalize_hhmm(block.get("end"), "")
+            if not start_hhmm or not end_hhmm:
+                continue
+
+            raw_weekdays = block.get("weekdays", [0, 1, 2, 3, 4, 5, 6])
+            weekdays: List[int] = []
+            if isinstance(raw_weekdays, (list, tuple, set)):
+                for item in raw_weekdays:
+                    try:
+                        weekday = int(item)
+                    except Exception:
+                        continue
+                    if 0 <= weekday <= 6 and weekday not in weekdays:
+                        weekdays.append(weekday)
+            elif raw_weekdays is None:
+                weekdays = [0, 1, 2, 3, 4, 5, 6]
+            else:
+                try:
+                    weekday = int(raw_weekdays)
+                    if 0 <= weekday <= 6:
+                        weekdays = [weekday]
+                except Exception:
+                    weekdays = [0, 1, 2, 3, 4, 5, 6]
+
+            if not weekdays:
+                continue
+
+            block_type = str(block.get("type") or "refeicao").strip().lower()
+            if block_type not in valid_types:
+                block_type = AgendaEventType.REFEICAO.value
+
+            try:
+                priority = EventPriority(int(block.get("priority", EventPriority.BLOQUEIO.value)))
+            except Exception:
+                priority = EventPriority.BLOQUEIO
+
+            normalized.append(
+                {
+                    "title": str(block.get("title") or f"Bloco protegido {index + 1}").strip() or f"Bloco protegido {index + 1}",
+                    "type": block_type,
+                    "start": start_hhmm,
+                    "end": end_hhmm,
+                    "weekdays": weekdays,
+                    "priority": priority,
+                }
+            )
+
+        return normalized
+
+    def _build_virtual_routine_events(self, target_day: date) -> List[AgendaEvent]:
+        """Gera eventos virtuais recorrentes de rotina para um dia."""
+        events: List[AgendaEvent] = []
+        day_anchor = datetime.combine(target_day, datetime.min.time())
+
+        sleep_cfg = self.user_preferences.get("sleep_schedule", {"start": "23:00", "end": "07:00"})
+        sleep_end = self._parse_hhmm(sleep_cfg.get("end", "07:00"))
+        sleep_start = self._parse_hhmm(sleep_cfg.get("start", "23:00"))
+
+        if sleep_end:
+            end_dt = day_anchor.replace(hour=sleep_end[0], minute=sleep_end[1], second=0, microsecond=0)
+            if end_dt > day_anchor:
+                events.append(
+                    AgendaEvent(
+                        id=f"virtual-sleep-morning-{target_day.isoformat()}",
+                        type=AgendaEventType.SONO,
+                        title="Sono",
+                        start=day_anchor,
+                        end=end_dt,
+                        auto_generated=True,
+                        priority=EventPriority.BLOQUEIO,
+                        metadata={"virtual": True, "routine_block": True},
+                    )
+                )
+
+        if sleep_start:
+            start_dt = day_anchor.replace(hour=sleep_start[0], minute=sleep_start[1], second=0, microsecond=0)
+            end_dt = day_anchor.replace(hour=23, minute=59, second=0, microsecond=0)
+            if end_dt > start_dt:
+                events.append(
+                    AgendaEvent(
+                        id=f"virtual-sleep-night-{target_day.isoformat()}",
+                        type=AgendaEventType.SONO,
+                        title="Sono",
+                        start=start_dt,
+                        end=end_dt,
+                        auto_generated=True,
+                        priority=EventPriority.BLOQUEIO,
+                        metadata={"virtual": True, "routine_block": True},
+                    )
+                )
+
+        for index, block in enumerate(self._normalized_protected_time_blocks()):
+            if target_day.weekday() not in block["weekdays"]:
+                continue
+
+            start_parts = self._parse_hhmm(block["start"])
+            end_parts = self._parse_hhmm(block["end"])
+            if not start_parts or not end_parts:
+                continue
+
+            start_dt = day_anchor.replace(hour=start_parts[0], minute=start_parts[1], second=0, microsecond=0)
+            end_dt = day_anchor.replace(hour=end_parts[0], minute=end_parts[1], second=0, microsecond=0)
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+
+            events.append(
+                AgendaEvent(
+                    id=f"virtual-block-{index}-{target_day.isoformat()}",
+                    type=AgendaEventType(block["type"]),
+                    title=block["title"],
+                    start=start_dt,
+                    end=end_dt,
+                    auto_generated=True,
+                    priority=block["priority"],
+                    metadata={"virtual": True, "routine_block": True},
+                )
+            )
+
+        return events
+
+    def get_virtual_fixed_events(self, date_str: str = None) -> List[Dict[str, Any]]:
+        """Expõe eventos virtuais recorrentes para a UI."""
+        if date_str is None:
+            target_day = datetime.now().date()
+        else:
+            raw_date = str(date_str).strip()
+            if "T" in raw_date:
+                raw_date = raw_date.split("T", 1)[0]
+            try:
+                target_day = date.fromisoformat(raw_date)
+            except ValueError:
+                target_day = datetime.now().date()
+        return [event.to_dict() for event in self._build_virtual_routine_events(target_day)]
+
+    def _occupied_ranges_for_day(
+        self,
+        target_day: date,
+        exclude_types: Optional[List[str]] = None,
+        include_virtual_blocks: bool = True,
+    ) -> List[Tuple[datetime, datetime]]:
+        """Lista intervalos ocupados por eventos reais e blocos recorrentes."""
+        ignored_types = {
+            str(item or "").strip().lower()
+            for item in (exclude_types or [])
+            if str(item or "").strip()
+        }
+
+        occupied: List[Tuple[datetime, datetime]] = []
+        for event in self.get_day_events(target_day.isoformat()):
+            if event.type.value in ignored_types:
+                continue
+            occupied.append((event.start, event.end))
+
+        if include_virtual_blocks:
+            for event in self._build_virtual_routine_events(target_day):
+                if event.type.value in ignored_types:
+                    continue
+                occupied.append((event.start, event.end))
+
+        occupied.sort(key=lambda item: item[0])
+        return occupied
 
     def get_routine_preferences(self) -> Dict[str, Any]:
         """Retorna preferências de rotina em formato simplificado para UI."""
@@ -438,6 +668,52 @@ class AgendaManager:
                 json.dump(self.user_preferences, f, indent=2)
         except Exception as e:
             print(f"Erro ao salvar preferências: {e}")
+
+    def _to_local_naive_datetime(self, value: Optional[datetime]) -> Optional[datetime]:
+        """Normaliza datetime para comparação local, sem timezone."""
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value
+        try:
+            return value.astimezone().replace(tzinfo=None)
+        except Exception:
+            try:
+                return value.replace(tzinfo=None)
+            except Exception:
+                return None
+
+    def auto_complete_past_events(self, reference_time: Optional[datetime] = None) -> List[str]:
+        """
+        Marca automaticamente como concluídos os eventos cujo horário final já passou.
+
+        Returns:
+            Lista com IDs dos eventos atualizados nesta execução.
+        """
+        current_time = self._to_local_naive_datetime(reference_time or datetime.now())
+        if current_time is None:
+            return []
+
+        completed_ids: List[str] = []
+        changed = False
+
+        for event in self.events.values():
+            if bool(getattr(event, "completed", False)):
+                continue
+
+            event_end = self._to_local_naive_datetime(getattr(event, "end", None))
+            if event_end is None:
+                continue
+
+            if event_end <= current_time:
+                event.completed = True
+                completed_ids.append(event.id)
+                changed = True
+
+        if changed:
+            self._save_events()
+
+        return completed_ids
     
     # ====== MÉTODOS PÚBLICOS PRINCIPAIS ======
     
@@ -528,6 +804,8 @@ class AgendaManager:
         Returns:
             Lista de eventos ordenados por horário
         """
+        self.auto_complete_past_events()
+
         if date_str is None:
             target_date = datetime.now().date()
         else:
@@ -570,19 +848,21 @@ class AgendaManager:
         """
         from datetime import datetime, timedelta
         
-        # Eventos do dia
-        day_events = self.get_day_events(date)
-        
+        raw_date = str(date).strip()
+        if "T" in raw_date:
+            raw_date = raw_date.split("T", 1)[0]
+        try:
+            target_day = datetime.fromisoformat(f"{raw_date}T00:00").date()
+        except Exception:
+            target_day = datetime.now().date()
+            raw_date = target_day.isoformat()
+
         # Converte para datetime sem depender de locale.
-        day_start = datetime.fromisoformat(f"{date}T{start_hour:02d}:00")
-        day_end = datetime.fromisoformat(f"{date}T{end_hour:02d}:00")
+        day_start = datetime.fromisoformat(f"{raw_date}T{start_hour:02d}:00")
+        day_end = datetime.fromisoformat(f"{raw_date}T{end_hour:02d}:00")
         
         # Blocos ocupados
-        occupied = []
-        for event in day_events:
-            if exclude_types and event.type.value in exclude_types:
-                continue
-            occupied.append((event.start, event.end))
+        occupied = self._occupied_ranges_for_day(target_day, exclude_types=exclude_types, include_virtual_blocks=True)
         
         # Ordena por horário
         occupied.sort(key=lambda x: x[0])
@@ -675,6 +955,31 @@ class AgendaManager:
             duration_factor = 0.8
         
         return period_score * day_factor * duration_factor
+
+    def _reading_day_load_factor(self, target_day: date, strategy: str = "") -> float:
+        """
+        Retorna um fator de carga para leitura no dia.
+
+        Dias úteis recebem carga normal. Em fins de semana, a estratégia padrão
+        é manter leituras mais leves, sem zerar completamente o agendamento.
+        """
+        weekday = target_day.weekday()
+        if weekday < 5:
+            return 1.0
+
+        weekend_strategy = str(
+            self.user_preferences.get("time_optimization", {}).get("weekend_strategy", "light")
+            or "light"
+        ).strip().lower()
+        normalized_strategy = str(strategy or "").strip().lower()
+
+        if weekend_strategy == "off":
+            return 0.0
+        if weekend_strategy == "normal" or normalized_strategy == "intensive":
+            return 1.0
+        if weekday == 5:  # sábado
+            return 0.6
+        return 0.45  # domingo
     
     def allocate_reading_time(self, book_id: str, pages_per_day: float,
                             reading_speed: float = 10.0,
@@ -691,7 +996,7 @@ class AgendaManager:
             book_id: ID do livro
             pages_per_day: Média de páginas por dia
             reading_speed: Velocidade de leitura (páginas/hora)
-            days_off: Dias sem estudo (padrão: [6] - domingo)
+            days_off: Dias explicitamente excluídos do agendamento
             max_daily_minutes: Máximo de minutos por dia
             strategy: Estratégia de alocação (balanced, intensive, spaced)
             
@@ -699,7 +1004,7 @@ class AgendaManager:
             Dicionário com alocações criadas
         """
         if days_off is None:
-            days_off = [6]  # domingo por padrão
+            days_off = []
         
         # Obtém informações do livro
         book_progress = self.reading_manager.get_reading_progress(book_id)
@@ -766,6 +1071,10 @@ class AgendaManager:
         pages_remaining = pages_remaining_total
         sessions_created = 0
         daily_targets: Dict[str, int] = {}
+        day_load_factors = {
+            candidate_day.isoformat(): self._reading_day_load_factor(candidate_day, strategy)
+            for candidate_day in all_candidate_days
+        }
 
         def _time_windows() -> List[Tuple[int, int]]:
             preferred = str(preferred_time or "").strip().lower()
@@ -784,22 +1093,48 @@ class AgendaManager:
                 break
 
             date_str = target_day.isoformat()
-            study_days_left = max(1, len([d for d in all_candidate_days if d >= target_day]))
-            pages_for_day = min(
-                pages_remaining,
-                max(1, int((pages_remaining + study_days_left - 1) / study_days_left)) if deadline else target_pages_per_day,
+            load_factor = max(0.0, float(day_load_factors.get(date_str, 1.0) or 0.0))
+            if load_factor <= 0:
+                continue
+
+            remaining_days = [d for d in all_candidate_days if d >= target_day]
+            remaining_weight = sum(
+                max(0.0, float(day_load_factors.get(day.isoformat(), 1.0) or 0.0))
+                for day in remaining_days
             )
+            if remaining_weight <= 0:
+                remaining_weight = max(1.0, float(len(remaining_days)))
+
+            if deadline:
+                weighted_share = int(round(pages_remaining * (load_factor / remaining_weight)))
+                pages_for_day = min(pages_remaining, max(1, weighted_share))
+            else:
+                pages_for_day = min(
+                    pages_remaining,
+                    max(1, int(round(target_pages_per_day * load_factor))),
+                )
+
             daily_targets[date_str] = pages_for_day
-            minutes_remaining_day = min(max_daily_minutes, max(settings["min_session"], int(pages_for_day * minutes_per_page)))
+            weekday = target_day.weekday()
+            weekend_light = weekday >= 5 and load_factor < 1.0
+            session_minimum = max(20, min(settings["min_session"], 45)) if weekend_light else settings["min_session"]
+            session_cap = 1 if weekend_light else settings["sessions_per_day"]
+            per_day_minutes_cap = max(
+                session_minimum,
+                int(round(max_daily_minutes * load_factor)),
+            )
+            minutes_remaining_day = min(
+                per_day_minutes_cap,
+                max(session_minimum, int(pages_for_day * minutes_per_page)),
+            )
 
             daily_slots: List[Dict[str, Any]] = []
             for window_start, window_end in _time_windows():
                 free_slots = self.find_free_slots(
                     date_str,
-                    duration_minutes=settings["min_session"],
+                    duration_minutes=session_minimum,
                     start_hour=window_start,
                     end_hour=window_end,
-                    exclude_types=["aula", "reunião", "orientação"],
                     consider_preferences=True
                 )
                 daily_slots.extend(free_slots)
@@ -819,7 +1154,7 @@ class AgendaManager:
             for slot in daily_slots:
                 if minutes_remaining_day <= 0 or pages_remaining <= 0:
                     break
-                if sessions_today >= settings["sessions_per_day"]:
+                if sessions_today >= session_cap:
                     break
 
                 try:
@@ -832,13 +1167,15 @@ class AgendaManager:
 
                 allocation_minutes = min(
                     int((slot_end - slot_start).total_seconds() // 60),
-                    settings["max_session"],
+                    min(settings["max_session"], 45) if weekend_light else settings["max_session"],
                     minutes_remaining_day,
                 )
-                if allocation_minutes < settings["min_session"]:
+                if allocation_minutes < session_minimum:
                     continue
 
                 alloc_end = slot_start + timedelta(minutes=allocation_minutes)
+                if any(slot_start < occ_end and alloc_end > occ_start for occ_start, occ_end in self._occupied_ranges_for_day(target_day)):
+                    continue
                 overlaps = any(slot_start < occ_end and alloc_end > occ_start for occ_start, occ_end in occupied_ranges)
                 if overlaps:
                     continue
@@ -1004,6 +1341,8 @@ class AgendaManager:
         Returns:
             Análise completa da semana
         """
+        self.auto_complete_past_events()
+
         if week_start is None:
             # Encontra o último domingo
             today = datetime.now().date()
@@ -1456,6 +1795,8 @@ class AgendaManager:
         Returns:
             Lista de prazos próximos
         """
+        self.auto_complete_past_events()
+
         today = datetime.now()
         cutoff = today + timedelta(days=days)
         
@@ -1491,6 +1832,8 @@ class AgendaManager:
         Returns:
             Lista de sugestões
         """
+        self.auto_complete_past_events()
+
         suggestions = []
         today = datetime.now()
         
@@ -1546,3 +1889,199 @@ class AgendaManager:
             })
         
         return suggestions
+
+    def rebalance_schedule(self, horizon_days: int = 30) -> Dict[str, Any]:
+        """
+        Recalcula e redistribui compromissos futuros flexíveis.
+
+        Regras:
+        - Aulas, provas e seminários permanecem fixos
+        - Eventos concluídos ou já iniciados não são movidos
+        - A redistribuição usa slots livres priorizados por qualidade
+        """
+        now = datetime.now()
+        horizon_end = (now + timedelta(days=max(7, int(horizon_days or 30)))).date()
+        fixed_types = {
+            AgendaEventType.AULA,
+            AgendaEventType.PROVA,
+            AgendaEventType.SEMINARIO,
+            AgendaEventType.ORIENTACAO,
+            AgendaEventType.REUNIAO,
+            AgendaEventType.REVISAO_DOMINICAL,
+        }
+
+        movable_events: List[AgendaEvent] = []
+        protected_events: List[AgendaEvent] = []
+
+        for event in self.events.values():
+            if event.completed:
+                protected_events.append(event)
+                continue
+            if event.end <= now:
+                protected_events.append(event)
+                continue
+            if event.start.date() > horizon_end:
+                protected_events.append(event)
+                continue
+            if event.type in fixed_types or event.priority.value >= EventPriority.FIXO.value:
+                protected_events.append(event)
+                continue
+            movable_events.append(event)
+
+        if not movable_events:
+            return {
+                "success": True,
+                "moved_count": 0,
+                "protected_count": len(protected_events),
+                "unscheduled_count": 0,
+                "updated_dates": [],
+            }
+
+        touched_dates = {
+            event.start.date().isoformat()
+            for event in movable_events + protected_events
+            if now.date() <= event.start.date() <= horizon_end
+        }
+
+        work_start = 8
+        work_end = 22
+
+        free_slots: List[Dict[str, Any]] = []
+        existing_day_load_minutes: Dict[str, int] = {}
+        day_cursor = now.date()
+        while day_cursor <= horizon_end:
+            date_str = day_cursor.isoformat()
+            day_start = datetime.combine(day_cursor, datetime.min.time()).replace(hour=work_start, minute=0)
+            day_end = datetime.combine(day_cursor, datetime.min.time()).replace(hour=work_end, minute=0)
+
+            day_events = [
+                event for event in self.events.values()
+                if event.start.date() == day_cursor
+                and (
+                    event in protected_events
+                    or event.start <= now
+                )
+            ]
+            productive_minutes = 0
+            for event in day_events:
+                if event.type in {
+                    AgendaEventType.LEITURA,
+                    AgendaEventType.PRODUCAO,
+                    AgendaEventType.REVISAO,
+                    AgendaEventType.TRANSCRICAO,
+                    AgendaEventType.CHECKIN,
+                }:
+                    productive_minutes += max(0, int(event.duration_minutes()))
+            existing_day_load_minutes[date_str] = productive_minutes
+
+            occupied_ranges: List[Tuple[datetime, datetime]] = [(event.start, event.end) for event in day_events]
+            occupied_ranges.extend(
+                (event.start, event.end)
+                for event in self._build_virtual_routine_events(day_cursor)
+            )
+            occupied_ranges.sort(key=lambda item: item[0])
+
+            cursor = max(day_start, now if day_cursor == now.date() else day_start)
+            for occ_start, occ_end in occupied_ranges:
+                if occ_end <= cursor:
+                    continue
+                if occ_start > cursor:
+                    duration = int((occ_start - cursor).total_seconds() // 60)
+                    if duration >= 20:
+                        quality = self._calculate_time_quality(cursor, duration)
+                        if day_cursor.weekday() >= 5:
+                            quality *= 0.9
+                        free_slots.append(
+                            {
+                                "start": cursor.isoformat(),
+                                "end": occ_start.isoformat(),
+                                "duration_minutes": duration,
+                                "quality_score": quality,
+                            }
+                        )
+                cursor = max(cursor, occ_end)
+
+            if cursor < day_end:
+                duration = int((day_end - cursor).total_seconds() // 60)
+                if duration >= 20:
+                    quality = self._calculate_time_quality(cursor, duration)
+                    if day_cursor.weekday() >= 5:
+                        quality *= 0.9
+                    free_slots.append(
+                        {
+                            "start": cursor.isoformat(),
+                            "end": day_end.isoformat(),
+                            "duration_minutes": duration,
+                            "quality_score": quality,
+                        }
+                    )
+            day_cursor += timedelta(days=1)
+
+        serialized_events: List[Dict[str, Any]] = []
+        for event in movable_events:
+            deadline = str(event.metadata.get("deadline") or "").strip() if isinstance(event.metadata, dict) else ""
+            serialized_events.append(
+                {
+                    "event_id": event.id,
+                    "title": event.title,
+                    "type": event.type.value,
+                    "start": event.start.isoformat(),
+                    "end": event.end.isoformat(),
+                    "duration_minutes": max(15, int(event.duration_minutes())),
+                    "priority": event.priority.value,
+                    "preferred_time": str(event.metadata.get("preferred_time") or "").strip() if isinstance(event.metadata, dict) else "",
+                    "deadline": deadline,
+                }
+            )
+
+        allocator_result = SmartAllocator.redistribute_events(
+            serialized_events,
+            free_slots,
+            user_preferences={
+                "weekend_bias": 0.92,
+                "existing_day_load_minutes": existing_day_load_minutes,
+                "max_daily_minutes": int(
+                    self.user_preferences.get("work_preferences", {}).get("max_daily_work_hours", 8) or 8
+                ) * 60,
+                "spread_bonus": 0.24,
+                "same_day_bonus": 0.015,
+                "proximity_penalty_per_day": 0.008,
+            },
+        )
+
+        placements = allocator_result.get("placements", [])
+        unscheduled = allocator_result.get("unscheduled", [])
+        placement_by_id = {
+            str(item.get("event_id") or ""): item
+            for item in placements
+            if item.get("event_id")
+        }
+
+        moved_count = 0
+        updated_dates = set(touched_dates)
+        for event in movable_events:
+            placement = placement_by_id.get(event.id)
+            if not placement:
+                continue
+            try:
+                new_start = datetime.fromisoformat(str(placement.get("start") or ""))
+                new_end = datetime.fromisoformat(str(placement.get("end") or ""))
+            except Exception:
+                continue
+            if new_end <= new_start:
+                continue
+            if event.start != new_start or event.end != new_end:
+                updated_dates.add(event.start.date().isoformat())
+                updated_dates.add(new_start.date().isoformat())
+                event.start = new_start
+                event.end = new_end
+                moved_count += 1
+
+        self._save_events()
+        return {
+            "success": True,
+            "moved_count": moved_count,
+            "protected_count": len(protected_events),
+            "unscheduled_count": len(unscheduled),
+            "updated_dates": sorted(updated_dates),
+        }

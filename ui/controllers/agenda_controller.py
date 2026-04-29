@@ -87,7 +87,7 @@ class SchedulingWorker(QThread):
                 book_id=book_id,
                 pages_per_day=pages_per_day,
                 reading_speed=10.0,  # Padrão
-                days_off=[6],  # Domingo
+                days_off=[],
                 max_daily_minutes=180,
                 strategy=strategy,
                 start_date=start_date,
@@ -160,6 +160,7 @@ class AgendaController(QObject):
     deadlines_loaded = pyqtSignal(list)
     optimizations_loaded = pyqtSignal(list)
     free_slots_found = pyqtSignal(str, list)  # (date_str, slots)
+    schedule_rebalanced = pyqtSignal(dict)
     
     # Sistema
     productivity_insights_loaded = pyqtSignal(dict)
@@ -1047,6 +1048,22 @@ class AgendaController(QObject):
         except Exception as e:
             logger.error(f"Erro ao carregar otimizações: {e}")
             self.optimizations_loaded.emit([])
+
+    @pyqtSlot(result=dict)
+    def rebalance_schedule(self) -> Dict:
+        """Recalcula e redistribui compromissos flexíveis da agenda."""
+        try:
+            if self.agenda_manager and hasattr(self.agenda_manager, "rebalance_schedule"):
+                result = self.agenda_manager.rebalance_schedule()
+                self._invalidate_agenda_cache()
+                for date_str in result.get("updated_dates", []) or []:
+                    self.load_agenda(date_str)
+                self.schedule_rebalanced.emit(result)
+                return result
+        except Exception as e:
+            logger.error(f"Erro ao rebalancear agenda: {e}")
+            return {"success": False, "error": str(e), "updated_dates": []}
+        return {"success": False, "error": "Agenda indisponível", "updated_dates": []}
 
     @pyqtSlot(str, int, int, int)
     def find_free_slots(self, date_str: str, duration_minutes: int, start_hour: int = 8, end_hour: int = 22):

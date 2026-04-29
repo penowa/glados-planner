@@ -4,9 +4,13 @@ View de sessão de leitura com Pomodoro e assistente LLM.
 from __future__ import annotations
 
 import html as html_lib
+import hashlib
 import logging
 import re
+import sqlite3
+import subprocess
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -19,6 +23,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -47,6 +52,16 @@ from core.modules.mindmap_review_module import (
 )
 from core.modules.pomodoro_timer import PomodoroTimer
 from core.modules.review_system import ReviewSystem
+from core.modules.zathura_config_manager import ZathuraConfigManager
+from ui.utils.config_manager import ConfigManager
+from ui.utils.citation_notes import (
+    build_citations_note_header as build_shared_citations_note_header,
+    build_citations_note_path,
+    ensure_citations_note_for_book,
+    resolve_citation_note_context,
+)
+from ui.utils.nerd_icons import LEGACY_BOOK_NOTE_PREFIXES, LEGACY_LINK_ICON, NerdIcons, nerd_font
+from ui.utils.session_keybindings import SESSION_SHORTCUT_DEFINITIONS, default_session_shortcuts
 
 try:
     from bs4 import BeautifulSoup  # type: ignore
@@ -450,6 +465,7 @@ class SessionView(QWidget):
         self.reading_controller = self.controllers.get("reading")
         self.agenda_controller = self.controllers.get("agenda")
         self.glados_controller = self.controllers.get("glados")
+        self.config_manager = ConfigManager.instance()
 
         self.current_book_id: Optional[str] = None
         self.current_book_title = "Sessão de leitura"
@@ -464,6 +480,7 @@ class SessionView(QWidget):
         self.page_chapter_map: Dict[int, Path] = {}
         self.chapter_notes: list[Dict[str, Any]] = []
         self.book_source_path: Optional[Path] = None
+        self.current_pdf_path: Optional[Path] = None
         self.current_chapter_path: Optional[Path] = None
         self._pending_note_request: Optional[Dict[str, Any]] = None
         self._manual_book_dir: Optional[Path] = None
@@ -501,6 +518,12 @@ class SessionView(QWidget):
         self._search_current_index = -1
         self._search_match_color = QColor("#FFE08A")
         self._search_active_match_color = QColor("#FFB347")
+        self._zathura_launch_requested_on_activation = False
+        self._zathura_last_launch_signature: Optional[tuple[str, int]] = None
+        self._zathura_process: Optional[subprocess.Popen] = None
+        self._zathura_monitored_pdf_path: Optional[Path] = None
+        self._processed_zathura_bookmark_signatures: set[str] = set()
+        self._configurable_shortcuts: dict[str, QShortcut] = {}
         self.mindmap_review_module = MindmapReviewModule()
         self.review_system = self._resolve_review_system()
 
@@ -508,6 +531,9 @@ class SessionView(QWidget):
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self._tick_ui)
         self.ui_timer.start(1000)
+        self._zathura_process_timer = QTimer(self)
+        self._zathura_process_timer.setInterval(1500)
+        self._zathura_process_timer.timeout.connect(self._poll_zathura_process)
 
         self._setup_ui()
         self._setup_connections()
@@ -631,16 +657,18 @@ class SessionView(QWidget):
             "font-weight: 700; padding: 2px 6px;"
         )
 
-        self.note_button = QPushButton("📝")
+        self.note_button = QPushButton(NerdIcons.NOTE)
         self.note_button.setObjectName("secondary_button")
         self.note_button.setFixedSize(24, 24)
         self.note_button.setToolTip("Anotações")
+        self.note_button.setFont(nerd_font(12))
         self.note_button.setStyleSheet("font-size: 12px; padding: 0px; margin: 0px; margin-top: -2px;")
 
-        self.controls_menu_button = QPushButton("☰")
+        self.controls_menu_button = QPushButton(NerdIcons.MENU)
         self.controls_menu_button.setObjectName("secondary_button")
         self.controls_menu_button.setFixedSize(24, 24)
         self.controls_menu_button.setToolTip("Controles da sessão")
+        self.controls_menu_button.setFont(nerd_font(12))
         self.controls_menu_button.setStyleSheet(
             "font-size: 12px; padding: 0px; margin: 0px; margin-top: -2px;"
         )
@@ -658,13 +686,68 @@ class SessionView(QWidget):
         reading_layout.setContentsMargins(2, 1, 2, 1)
         reading_layout.setSpacing(2)
 
+        self.pdf_session_card = QFrame()
+        self.pdf_session_card.setObjectName("session_pdf_card")
+        self.pdf_session_card.setStyleSheet(
+            "QFrame#session_pdf_card {"
+            "background-color: #141924;"
+            "border: 1px solid #343B4A;"
+            "border-radius: 12px;"
+            "}"
+            "QFrame#session_pdf_card QLabel { color: #E7EDF7; }"
+        )
+        pdf_card_layout = QVBoxLayout(self.pdf_session_card)
+        pdf_card_layout.setContentsMargins(14, 12, 14, 12)
+        pdf_card_layout.setSpacing(8)
+
+        pdf_header = QHBoxLayout()
+        self.pdf_status_title = QLabel("Leitura via Zathura")
+        self.pdf_status_title.setStyleSheet("font-weight: 700; font-size: 14px;")
+        self.pdf_launch_status_label = QLabel("Aguardando livro")
+        self.pdf_launch_status_label.setStyleSheet("color: #9FB0C7;")
+        pdf_header.addWidget(self.pdf_status_title)
+        pdf_header.addStretch(1)
+        pdf_header.addWidget(self.pdf_launch_status_label)
+        pdf_card_layout.addLayout(pdf_header)
+
+        self.pdf_context_label = QLabel(
+            "A sessão abre o PDF original no Zathura e mantém as notas Markdown como referência para resumo, mapa mental e anotação."
+        )
+        self.pdf_context_label.setWordWrap(True)
+        self.pdf_context_label.setStyleSheet("color: #C4D0E0;")
+        pdf_card_layout.addWidget(self.pdf_context_label)
+
+        self.pdf_path_label = QLabel("PDF: não localizado")
+        self.pdf_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.pdf_path_label.setWordWrap(True)
+        self.pdf_path_label.setStyleSheet("color: #DCE6F5;")
+        pdf_card_layout.addWidget(self.pdf_path_label)
+
+        self.reference_note_label = QLabel("Nota de referência: não localizada")
+        self.reference_note_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.reference_note_label.setWordWrap(True)
+        self.reference_note_label.setStyleSheet("color: #9FB0C7;")
+        pdf_card_layout.addWidget(self.reference_note_label)
+
+        pdf_actions = QHBoxLayout()
+        self.launch_pdf_button = QPushButton("Abrir PDF no Zathura")
+        self.relaunch_pdf_button = QPushButton("Reabrir na página atual")
+        self.launch_note_button = QPushButton("Abrir anotação")
+        pdf_actions.addWidget(self.launch_pdf_button)
+        pdf_actions.addWidget(self.relaunch_pdf_button)
+        pdf_actions.addWidget(self.launch_note_button)
+        pdf_actions.addStretch(1)
+        pdf_card_layout.addLayout(pdf_actions)
+
+        reading_layout.addWidget(self.pdf_session_card)
+
         pages_grid = QGridLayout()
         pages_grid.setContentsMargins(0, 0, 0, 0)
         pages_grid.setHorizontalSpacing(4)
         pages_grid.setVerticalSpacing(1)
 
-        self.left_page_title = QLabel("Página 1")
-        self.right_page_title = QLabel("Página 2")
+        self.left_page_title = QLabel("Referência 1")
+        self.right_page_title = QLabel("Referência 2")
         self.left_page_text = QTextEdit()
         self.right_page_text = QTextEdit()
         for page in (self.left_page_text, self.right_page_text):
@@ -697,18 +780,20 @@ class SessionView(QWidget):
             "QPushButton:hover { background-color: rgba(53, 60, 77, 0.95); }"
         )
 
-        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button = QPushButton(NerdIcons.FULLSCREEN)
         self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
         self.fullscreen_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fullscreen_button.setFixedSize(36, 36)
+        self.fullscreen_button.setFont(nerd_font(16))
         self.fullscreen_button.setStyleSheet(overlay_button_style)
         self.fullscreen_button.setParent(self.left_page_text.viewport())
         self.fullscreen_button.raise_()
 
-        self.search_toggle_button = QPushButton("⌕")
+        self.search_toggle_button = QPushButton(NerdIcons.SEARCH)
         self.search_toggle_button.setToolTip("Pesquisar na obra")
         self.search_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.search_toggle_button.setFixedSize(36, 36)
+        self.search_toggle_button.setFont(nerd_font(16))
         self.search_toggle_button.setStyleSheet(overlay_button_style)
         self.search_toggle_button.setParent(self.right_page_text.viewport())
         self.search_toggle_button.raise_()
@@ -717,8 +802,8 @@ class SessionView(QWidget):
         nav = QHBoxLayout(self.nav_widget)
         nav.setContentsMargins(0, 0, 0, 0)
         nav.setSpacing(4)
-        self.prev_pages_button = QPushButton("◀ Páginas anteriores")
-        self.next_pages_button = QPushButton("Próximas páginas ▶")
+        self.prev_pages_button = QPushButton("◀ Referência anterior")
+        self.next_pages_button = QPushButton("Próxima referência ▶")
         self.page_pair_label = QLabel("1-2")
         self.page_pair_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nav.addWidget(self.prev_pages_button)
@@ -928,20 +1013,6 @@ class SessionView(QWidget):
         toast_layout.addWidget(self.review_done_toast_label)
         self.review_done_toast.hide()
 
-        self.shortcut_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
-        self.shortcut_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
-        self.shortcut_up = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
-        self.shortcut_down = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
-        self.shortcut_esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
-        for shortcut in (
-            self.shortcut_left,
-            self.shortcut_right,
-            self.shortcut_up,
-            self.shortcut_down,
-            self.shortcut_esc,
-        ):
-            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-
     def _setup_connections(self):
         self.note_button.clicked.connect(self._open_note_tab)
         self.fullscreen_button.clicked.connect(self._toggle_fullscreen_mode)
@@ -954,6 +1025,9 @@ class SessionView(QWidget):
         self.action_pomodoro_pause.triggered.connect(self._pause_pomodoro)
         self.action_pomodoro_config.triggered.connect(self._open_pomodoro_config_dialog)
 
+        self.launch_pdf_button.clicked.connect(self._open_current_pdf_session)
+        self.relaunch_pdf_button.clicked.connect(lambda: self._open_current_pdf_session(force=True))
+        self.launch_note_button.clicked.connect(self._open_primary_note_reference)
         self.prev_pages_button.clicked.connect(self._go_prev_pages)
         self.next_pages_button.clicked.connect(self._go_next_pages)
         self.chat_summary_button.clicked.connect(self._request_summary_with_annotations)
@@ -970,11 +1044,7 @@ class SessionView(QWidget):
         self.search_next_button.clicked.connect(self._go_to_next_search_match)
         self.search_close_button.clicked.connect(self._hide_search_bar)
 
-        self.shortcut_left.activated.connect(self._on_fullscreen_left)
-        self.shortcut_right.activated.connect(self._on_fullscreen_right)
-        self.shortcut_up.activated.connect(self._on_fullscreen_up)
-        self.shortcut_down.activated.connect(self._on_fullscreen_down)
-        self.shortcut_esc.activated.connect(self._on_fullscreen_escape)
+        self.reload_configurable_shortcuts()
 
         if self.glados_controller:
             self.glados_controller.response_ready.connect(self._on_llm_response)
@@ -983,8 +1053,38 @@ class SessionView(QWidget):
             self.glados_controller.processing_completed.connect(self._on_llm_processing_completed)
             self.glados_controller.error_occurred.connect(self._on_llm_error)
 
+    def _session_shortcut_settings(self) -> dict[str, str]:
+        configured = default_session_shortcuts()
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            key = f"ui/session_shortcuts/{item['id']}"
+            value = str(self.config_manager.get(key, configured[item["id"]]) or "").strip()
+            configured[item["id"]] = value
+        return configured
+
+    def reload_configurable_shortcuts(self):
+        for shortcut in self._configurable_shortcuts.values():
+            shortcut.deleteLater()
+        self._configurable_shortcuts.clear()
+
+        configured = self._session_shortcut_settings()
+        for item in SESSION_SHORTCUT_DEFINITIONS:
+            sequence_text = str(configured.get(item["id"], "") or "").strip()
+            if not sequence_text:
+                continue
+            callback = getattr(self, item["handler"], None)
+            if not callable(callback):
+                continue
+            sequence = QKeySequence(sequence_text)
+            if sequence.isEmpty():
+                continue
+            shortcut = QShortcut(sequence, self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(callback)
+            self._configurable_shortcuts[item["id"]] = shortcut
+
     def on_view_activated(self):
         self._session_closed = False
+        self._zathura_launch_requested_on_activation = False
         if not self._temporary_read_only_session:
             self.refresh_reading_context()
         else:
@@ -995,6 +1095,7 @@ class SessionView(QWidget):
         self._position_search_button()
         self._sync_fullscreen_overlays_geometry()
         self._set_fullscreen_mode(True)
+        self._auto_open_pdf_session()
 
     def start_ad_hoc_reading(self, book_dir: Path):
         """Inicia leitura avulsa a partir de um diretório de livro do vault."""
@@ -1074,6 +1175,7 @@ class SessionView(QWidget):
         page_contents = self._split_text_into_pages(full_text, chars_per_page=self._news_chars_per_page())
 
         self._temporary_read_only_session = True
+        self._zathura_launch_requested_on_activation = False
         self._temporary_news_article = payload
         self._session_closed = False
         self.current_book_id = None
@@ -1088,6 +1190,7 @@ class SessionView(QWidget):
         self.page_chapter_map = {}
         self.chapter_notes = []
         self.book_source_path = None
+        self.current_pdf_path = None
         self.current_chapter_path = None
         self.left_page = 0
         self.total_pages = max(page_contents.keys()) if page_contents else 1
@@ -1340,6 +1443,7 @@ class SessionView(QWidget):
             self._last_synced_page = self.current_page
             self.total_pages = max(total_pages, 0)
             self._load_book_pages(progress)
+            self.current_pdf_path = self._resolve_book_pdf_path(progress)
             self.current_chapter_path = self.page_chapter_map.get(self.current_page)
         else:
             self.current_book_id = None
@@ -1353,6 +1457,7 @@ class SessionView(QWidget):
             self.page_chapter_map = {}
             self.chapter_notes = []
             self.book_source_path = None
+            self.current_pdf_path = None
             self.current_chapter_path = None
 
         self.left_page = self._left_page_from_current(self.current_page)
@@ -1412,7 +1517,7 @@ class SessionView(QWidget):
     def _page_title_for_slot(self, page_number: int, *, is_left: bool) -> str:
         if page_number <= 0:
             return ""
-        return f"Página {page_number}"
+        return f"Referência {page_number}"
 
     def _page_text_for_slot(self, page_number: int) -> str:
         if page_number <= 0:
@@ -1446,6 +1551,8 @@ class SessionView(QWidget):
         self.title_label.setText(self.current_book_title)
         if self.book_source_path:
             self.source_label.setText(f"Fonte: {self.book_source_path.name}")
+        elif self.current_pdf_path:
+            self.source_label.setText(f"PDF: {self.current_pdf_path.name}")
         else:
             self.source_label.setText("Fonte: nota não encontrada")
 
@@ -1454,9 +1561,42 @@ class SessionView(QWidget):
             self.next_pages_button.setEnabled(right < self.total_pages)
         else:
             self.next_pages_button.setEnabled(True)
+        self._refresh_pdf_session_card()
         self._apply_search_highlights()
         self._position_fullscreen_button()
         self._position_search_button()
+
+    def _refresh_pdf_session_card(self):
+        if self._temporary_read_only_session:
+            self.pdf_launch_status_label.setText("Leitura temporária")
+            self.pdf_path_label.setText("PDF: não aplicável para notícia")
+            self.reference_note_label.setText("Nota de referência: indisponível")
+            self.launch_pdf_button.setEnabled(False)
+            self.relaunch_pdf_button.setEnabled(False)
+            self.launch_note_button.setEnabled(False)
+            return
+
+        page = max(1, int(self.current_page or 1))
+        pdf_path = self.current_pdf_path
+        note_path = self._primary_reference_note_path()
+
+        if pdf_path and pdf_path.exists():
+            self.pdf_launch_status_label.setText(f"Pronto para abrir na página {page}")
+            self.pdf_path_label.setText(f"PDF: {pdf_path}")
+            self.launch_pdf_button.setEnabled(True)
+            self.relaunch_pdf_button.setEnabled(True)
+        else:
+            self.pdf_launch_status_label.setText("PDF original não localizado")
+            self.pdf_path_label.setText("PDF: não localizado")
+            self.launch_pdf_button.setEnabled(False)
+            self.relaunch_pdf_button.setEnabled(False)
+
+        if note_path and note_path.exists():
+            self.reference_note_label.setText(f"Nota de referência: {note_path}")
+            self.launch_note_button.setEnabled(True)
+        else:
+            self.reference_note_label.setText("Nota de referência: não localizada")
+            self.launch_note_button.setEnabled(False)
 
     def _apply_news_readability_format(self, editor: QTextEdit, page_number: int):
         doc = editor.document()
@@ -1746,7 +1886,7 @@ class SessionView(QWidget):
             score = page_count
             name_lower = file_path.name.lower()
 
-            if file_path.name.startswith("📖 "):
+            if file_path.name.startswith(f"{LEGACY_BOOK_NOTE_PREFIXES[0]} "):
                 score += 400
             if "completo" in name_lower:
                 score += 300
@@ -1820,6 +1960,683 @@ class SessionView(QWidget):
                     return md_file.parent
 
         return None
+
+    def _resolve_book_pdf_path(self, progress: Dict[str, Any]) -> Optional[Path]:
+        if self._temporary_read_only_session:
+            return None
+
+        manager = getattr(self.reading_controller, "reading_manager", None) if self.reading_controller else None
+        book_id = str(progress.get("book_id") or progress.get("id") or self.current_book_id or "").strip()
+
+        if manager and book_id and hasattr(manager, "get_book_source_path"):
+            try:
+                source_path = manager.get_book_source_path(book_id)
+            except Exception as exc:
+                logger.debug("Falha ao resolver PDF pelo ReadingManager (%s): %s", book_id, exc)
+                source_path = None
+            if source_path and source_path.exists() and source_path.suffix.lower() == ".pdf":
+                return source_path
+
+        book_dir = self._find_book_directory(progress)
+        if not book_dir or not book_dir.exists():
+            return None
+
+        pdf_candidates = sorted(
+            [candidate for candidate in book_dir.iterdir() if candidate.is_file() and candidate.suffix.lower() == ".pdf"],
+            key=lambda item: item.name.lower(),
+        )
+        if pdf_candidates:
+            return pdf_candidates[0]
+
+        return None
+
+    def _current_pdf_resume_page(self) -> int:
+        page = max(1, int(self.current_page or 1))
+        if self.total_pages > 0:
+            page = min(page, int(self.total_pages))
+        return page
+
+    def _auto_open_pdf_session(self):
+        if self._temporary_read_only_session or self._zathura_launch_requested_on_activation:
+            return
+        self._zathura_launch_requested_on_activation = True
+        self._open_current_pdf_session(force=True, show_feedback=False)
+
+    def _open_current_pdf_session(self, force: bool = False, show_feedback: bool = True) -> bool:
+        if self._temporary_read_only_session:
+            return False
+
+        pdf_path = self.current_pdf_path
+        if (not pdf_path or not pdf_path.exists()) and self.current_book_id:
+            progress = self._get_progress(str(self.current_book_id))
+            if progress:
+                pdf_path = self._resolve_book_pdf_path(progress)
+                self.current_pdf_path = pdf_path
+                self._refresh_pdf_session_card()
+
+        if not pdf_path or not pdf_path.exists():
+            self.pdf_launch_status_label.setText("PDF original não localizado")
+            if show_feedback:
+                reply = QMessageBox.question(
+                    self,
+                    "Sessão de leitura",
+                    (
+                        "Não foi possível localizar o PDF original desta obra para abrir no Zathura.\n\n"
+                        "Deseja indicar manualmente onde o PDF está para atualizar o registro?"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    selected_pdf = self._prompt_user_for_pdf_source()
+                    if selected_pdf is not None:
+                        self.current_pdf_path = selected_pdf
+                        self._refresh_pdf_session_card()
+                        return self._open_current_pdf_session(force=True, show_feedback=True)
+            return False
+
+        page = self._current_pdf_resume_page()
+        signature = (str(pdf_path), page)
+        if not force and signature == self._zathura_last_launch_signature:
+            self.pdf_launch_status_label.setText(f"PDF já aberto na página {page}")
+            return True
+
+        try:
+            command = ZathuraConfigManager().build_open_command(pdf_path, page=page)
+            process = subprocess.Popen(command, start_new_session=True)
+            self._zathura_last_launch_signature = signature
+            self._track_zathura_process(process, pdf_path)
+            self.pdf_launch_status_label.setText(f"Zathura aberto na página {page}")
+            return True
+        except Exception as exc:
+            logger.warning("Falha ao abrir Zathura: %s", exc)
+            self.pdf_launch_status_label.setText("Falha ao abrir Zathura")
+            if show_feedback:
+                QMessageBox.warning(
+                    self,
+                    "Sessão de leitura",
+                    f"Não foi possível abrir o Zathura.\n\n{exc}",
+                )
+            return False
+
+    def _prompt_user_for_pdf_source(self) -> Optional[Path]:
+        title = str(self.current_book_title or "Selecione o PDF").strip()
+        selected_file, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Selecionar PDF de {title}",
+            str(Path.home()),
+            "Arquivos PDF (*.pdf)",
+        )
+        selected = Path(selected_file).expanduser() if selected_file else None
+        if selected is None:
+            return None
+        if not selected.exists() or selected.suffix.lower() != ".pdf":
+            QMessageBox.warning(
+                self,
+                "Sessão de leitura",
+                "Selecione um arquivo PDF válido para continuar.",
+            )
+            return None
+
+        if not self._persist_selected_pdf_source(selected):
+            QMessageBox.warning(
+                self,
+                "Sessão de leitura",
+                "Não foi possível atualizar o registro do livro com o PDF selecionado.",
+            )
+            return None
+
+        self.pdf_launch_status_label.setText("Registro do PDF atualizado")
+        return selected
+
+    def _track_zathura_process(self, process: subprocess.Popen, pdf_path: Path):
+        self._zathura_process = process
+        self._zathura_monitored_pdf_path = Path(pdf_path).expanduser().resolve()
+        self._processed_zathura_bookmark_signatures = self._load_processed_zathura_bookmark_signatures()
+        self._sync_zathura_bookmarks()
+        if not self._zathura_process_timer.isActive():
+            self._zathura_process_timer.start()
+
+    def _poll_zathura_process(self):
+        if self._zathura_monitored_pdf_path is not None:
+            self._sync_zathura_bookmarks()
+        process = self._zathura_process
+        if process is None:
+            self._zathura_process_timer.stop()
+            return
+        try:
+            finished = process.poll() is not None
+        except Exception:
+            finished = True
+        if not finished:
+            return
+        self._zathura_process = None
+        self._sync_zathura_bookmarks()
+        self._zathura_process_timer.stop()
+        self._sync_progress_from_closed_zathura()
+
+    def _sync_progress_from_closed_zathura(self):
+        if self._temporary_read_only_session:
+            return
+        pdf_path = self._zathura_monitored_pdf_path
+        self._zathura_monitored_pdf_path = None
+        if pdf_path is None:
+            return
+
+        page = self._read_zathura_last_page(pdf_path)
+        if page is None:
+            logger.debug("Nenhuma pagina recuperada do banco do Zathura para %s", pdf_path)
+            return
+
+        if self.total_pages > 0:
+            page = min(page, int(self.total_pages))
+        if page <= 0:
+            return
+
+        self.current_page = max(1, int(page))
+        self.max_page_reached = max(self.max_page_reached, self.current_page)
+        self.left_page = self._left_page_from_current(self.current_page)
+        self.current_chapter_path = self.page_chapter_map.get(self.current_page)
+        self._refresh_pages()
+        self._save_progress_absolute(self.current_page, notes=f"Zathura fechado. Retomar da página {self.current_page}.")
+        self.pdf_launch_status_label.setText(f"Progresso salvo ao fechar o Zathura: página {self.current_page}")
+
+    def _read_zathura_last_page(self, pdf_path: Path) -> Optional[int]:
+        manager = ZathuraConfigManager()
+        database_path = manager.data_dir / "bookmarks.sqlite"
+        if not database_path.exists():
+            return None
+
+        normalized_target = str(Path(pdf_path).expanduser().resolve())
+        try:
+            with sqlite3.connect(str(database_path)) as connection:
+                row = connection.execute(
+                    "SELECT page FROM fileinfo WHERE file = ?",
+                    (normalized_target,),
+                ).fetchone()
+        except Exception as exc:
+            logger.warning("Falha ao ler banco do Zathura para %s: %s", pdf_path, exc)
+            return None
+
+        if not row:
+            return None
+
+        try:
+            page = int(row[0])
+        except Exception:
+            return None
+
+        # Mantemos a pagina minima em 1; o schema usa um inteiro simples e, na pratica,
+        # esse valor representa a ultima pagina persistida do documento.
+        return max(1, page)
+
+    def _sync_zathura_bookmarks(self):
+        if self._temporary_read_only_session:
+            return
+        pdf_path = self._zathura_monitored_pdf_path
+        if pdf_path is None or not self.current_book_id:
+            return
+
+        for bookmark in self._load_zathura_bookmarks(pdf_path):
+            signature = self._zathura_bookmark_signature(
+                pdf_path,
+                str(bookmark.get("id") or ""),
+                int(bookmark.get("page") or 0),
+            )
+            if signature in self._processed_zathura_bookmark_signatures:
+                continue
+            if not self._append_zathura_bookmark_to_citation_note(bookmark, pdf_path, signature):
+                continue
+            self._processed_zathura_bookmark_signatures.add(signature)
+
+    def _load_zathura_bookmarks(self, pdf_path: Path) -> list[Dict[str, Any]]:
+        manager = ZathuraConfigManager()
+        database_path = manager.data_dir / "bookmarks.sqlite"
+        if not database_path.exists():
+            return []
+
+        normalized_target = str(Path(pdf_path).expanduser().resolve())
+        try:
+            with sqlite3.connect(str(database_path)) as connection:
+                rows = connection.execute(
+                    "SELECT rowid, id, page FROM bookmarks WHERE file = ? ORDER BY rowid ASC",
+                    (normalized_target,),
+                ).fetchall()
+        except Exception as exc:
+            logger.warning("Falha ao ler bookmarks do Zathura para %s: %s", pdf_path, exc)
+            return []
+
+        bookmarks: list[Dict[str, Any]] = []
+        for rowid, bookmark_id, page in rows:
+            bookmarks.append(
+                {
+                    "rowid": int(rowid or 0),
+                    "id": str(bookmark_id or "").strip(),
+                    "page": max(1, int(page or 0)),
+                }
+            )
+        return bookmarks
+
+    def _zathura_bookmark_signature(self, pdf_path: Path, bookmark_id: str, page: int) -> str:
+        raw = f"{Path(pdf_path).expanduser().resolve()}|{bookmark_id.strip()}|{max(1, int(page or 0))}"
+        return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _load_processed_zathura_bookmark_signatures(self) -> set[str]:
+        note_path = self._citations_note_path()
+        if note_path is None or not note_path.exists():
+            return set()
+        try:
+            content = note_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return set()
+        return set(re.findall(r"<!--\s*glados-zathura-bookmark:\s*([0-9a-f]{40})\s*-->", content))
+
+    def _append_zathura_bookmark_to_citation_note(
+        self,
+        bookmark: Dict[str, Any],
+        pdf_path: Path,
+        signature: str,
+    ) -> bool:
+        vault_root = self._get_vault_root()
+        progress = self._get_progress(str(self.current_book_id or "")) if self.current_book_id else {}
+        book_note = self._preferred_book_link_path(progress)
+        discipline_note = self._resolve_discipline_note_path(book_note)
+        discipline_name = discipline_note.stem if discipline_note else ""
+        if vault_root and book_note and book_note.exists():
+            try:
+                ensure_citations_note_for_book(
+                    vault_root,
+                    book_note_path=book_note,
+                    discipline=discipline_name,
+                    discipline_note_path=discipline_note,
+                    source_pdf_path=pdf_path,
+                )
+            except Exception as exc:
+                logger.debug("Falha ao garantir nota de citações antes de importar bookmark: %s", exc)
+
+        note_path = self._citations_note_path()
+        if note_path is None:
+            return False
+
+        page = max(1, int(bookmark.get("page") or 1))
+        chapter_path = self._chapter_path_for_page(page)
+        chapter_number = self._chapter_number_for_path(chapter_path)
+        marker = f"<!-- glados-zathura-bookmark: {signature} -->"
+
+        existing = ""
+        if note_path.exists():
+            try:
+                existing = note_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                existing = ""
+        if marker in existing:
+            return True
+
+        if not existing.strip():
+            existing = self._build_citations_note_header(pdf_path)
+
+        chapter_header = self._citations_chapter_header(chapter_number)
+        if chapter_header not in existing:
+            section_lines = ["", chapter_header]
+            if chapter_path and chapter_path.exists():
+                chapter_link = self._wikilink_for_path(chapter_path, alias=chapter_path.stem)
+                if chapter_link:
+                    section_lines.append(f"- Capítulo: {chapter_link}")
+            existing = existing.rstrip() + "\n" + "\n".join(section_lines) + "\n"
+
+        entry = self._build_citation_entry(
+            excerpt="Insira a citação aqui",
+            page=page,
+            line_start=0,
+            line_end=0,
+            bookmark_id=str(bookmark.get("id") or "").strip(),
+            marker=marker,
+        )
+        updated = self._append_markdown_block_to_section(existing, chapter_header, entry)
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+        self._append_note_link_to_current_chapter(note_path, chapter_path=chapter_path)
+        self.pdf_launch_status_label.setText(f"Citação salva em {note_path.name} (página {page})")
+        return True
+
+    def _build_citations_note_header(self, pdf_path: Path) -> str:
+        progress = self._get_progress(str(self.current_book_id or "")) if self.current_book_id else {}
+        book_note = self._preferred_book_link_path(progress)
+        discipline_note = self._resolve_discipline_note_path(book_note)
+        vault_root = self._get_vault_root()
+        if vault_root and book_note and book_note.exists():
+            context = resolve_citation_note_context(
+                vault_root,
+                book_note_path=book_note,
+                discipline=discipline_note.stem if discipline_note else "",
+                discipline_note_path=discipline_note,
+                source_pdf_path=pdf_path,
+            )
+            if context is not None:
+                return build_shared_citations_note_header(context)
+
+        title = f"Citações {self.current_book_title}".strip()
+        return "\n".join([f"# {title}", "", "## Referências", f"- PDF original: `{pdf_path}`", ""]).rstrip() + "\n"
+
+    def _citations_note_path(self) -> Optional[Path]:
+        vault_root = self._get_vault_root()
+        if not vault_root:
+            return None
+        progress = self._get_progress(str(self.current_book_id or "")) if self.current_book_id else {}
+        book_note = self._preferred_book_link_path(progress)
+        if book_note and book_note.exists():
+            context = resolve_citation_note_context(vault_root, book_note_path=book_note)
+            if context is not None:
+                return build_citations_note_path(vault_root, context.title)
+        title = self.current_book_title or "Livro"
+        return build_citations_note_path(vault_root, title)
+
+    def _preferred_book_link_path(self, progress: Dict[str, Any]) -> Optional[Path]:
+        book_dir = self._find_book_directory(progress) if progress else None
+        if book_dir and book_dir.exists():
+            for candidate in sorted(book_dir.glob("*.md")):
+                if candidate.name.startswith("📖 "):
+                    return candidate
+        if self.book_source_path and self.book_source_path.exists() and self.book_source_path.is_file():
+            return self.book_source_path
+        return self._find_primary_book_note(progress) if progress else None
+
+    def _resolve_discipline_note_path(self, book_note_path: Optional[Path]) -> Optional[Path]:
+        vault_root = self._get_vault_root()
+        if not vault_root:
+            return None
+        discipline_dir = vault_root / "05-DISCIPLINAS"
+        if not discipline_dir.exists():
+            return None
+
+        targets = set()
+        if book_note_path and book_note_path.exists():
+            targets.add(book_note_path.stem)
+            relative = self._relative_note_path_from_abs(book_note_path)
+            if relative:
+                targets.add(relative)
+        if self.current_book_title:
+            targets.add(self.current_book_title)
+
+        for note_path in sorted(discipline_dir.glob("*.md")):
+            try:
+                text = note_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            lowered = text.lower()
+            if any(target and target.lower() in lowered for target in targets):
+                return note_path
+
+        source_hint = str(self.current_pdf_path or "").upper()
+        fallback_map = {
+            "HG144": "Grego Clássico.md",
+            "HG108": "Introdução a Filosofia.md",
+        }
+        for code, filename in fallback_map.items():
+            if code in source_hint:
+                candidate = discipline_dir / filename
+                if candidate.exists():
+                    return candidate
+        return None
+
+    def _wikilink_for_path(self, note_path: Optional[Path], alias: str = "") -> str:
+        if note_path is None:
+            return "-"
+        relative = self._relative_note_path_from_abs(note_path)
+        if not relative:
+            return note_path.stem
+        if alias:
+            return f"[[{relative}|{alias}]]"
+        return f"[[{relative}]]"
+
+    def _chapter_path_for_page(self, page: int) -> Optional[Path]:
+        page_number = max(1, int(page or 1))
+        chapter_path = self.page_chapter_map.get(page_number)
+        if chapter_path and chapter_path.exists():
+            return chapter_path
+        for item in self.chapter_notes:
+            start_page = int(item.get("start_page") or 0)
+            end_page = int(item.get("end_page") or 0)
+            if start_page <= page_number <= end_page:
+                candidate = item.get("path")
+                if isinstance(candidate, Path) and candidate.exists():
+                    return candidate
+        return None
+
+    def _chapter_number_for_path(self, chapter_path: Optional[Path]) -> int:
+        if not chapter_path:
+            return 0
+        for item in self.chapter_notes:
+            if item.get("path") == chapter_path:
+                try:
+                    return int(item.get("number") or 0)
+                except Exception:
+                    return 0
+        return self._extract_chapter_number(chapter_path, "")
+
+    def _citations_chapter_header(self, chapter_number: int) -> str:
+        if chapter_number > 0:
+            return f"## Capítulo {chapter_number}"
+        return "## Capítulo não identificado"
+
+    def _build_citation_entry(
+        self,
+        *,
+        excerpt: str,
+        page: int,
+        line_start: int,
+        line_end: int,
+        bookmark_id: str,
+        marker: str,
+    ) -> str:
+        quote_text = re.sub(r"\s+", " ", str(excerpt or "").replace("\u2029", " ").strip())
+        line_ref = self._format_line_reference(line_start, line_end)
+        abnt_ref = self._abnt_reference_for_quote(page, line_ref)
+        heading = f"### Página {page}"
+        if bookmark_id:
+            heading += f" · bookmark `{bookmark_id}`"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        return "\n".join(
+            [
+                "",
+                heading,
+                f"- Registrado em: {timestamp}",
+                "",
+                f"\"{quote_text}\"",
+                "",
+                abnt_ref,
+                "",
+                marker,
+                "",
+            ]
+        ).rstrip()
+
+    def _append_markdown_block_to_section(self, content: str, section_header: str, block: str) -> str:
+        header_pattern = re.compile(rf"(?m)^{re.escape(section_header)}\s*$")
+        match = header_pattern.search(content)
+        if not match:
+            return content.rstrip() + "\n\n" + section_header + "\n" + block.strip() + "\n"
+
+        section_start = match.end()
+        next_header = re.compile(r"(?m)^##\s+.+$").search(content, section_start)
+        section_end = next_header.start() if next_header else len(content)
+        section_body = content[section_start:section_end].rstrip()
+        if block.strip() in section_body:
+            return content
+        new_section = (section_body + "\n\n" + block.strip() + "\n").lstrip("\n")
+        return content[:section_start] + "\n" + new_section + content[section_end:]
+
+    def _bookmark_excerpt_from_clipboard(self, page_text: str) -> str:
+        haystack = self._normalize_text_for_excerpt_match(page_text)
+        if not haystack:
+            return ""
+
+        commands = [
+            ["wl-paste", "--no-newline", "--primary"],
+            ["wl-paste", "--no-newline"],
+            ["xclip", "-o", "-selection", "primary"],
+            ["xclip", "-o", "-selection", "clipboard"],
+            ["xsel", "--output", "--primary"],
+            ["xsel", "--output", "--clipboard"],
+        ]
+        for command in commands:
+            try:
+                completed = subprocess.run(command, check=True, capture_output=True, text=True)
+            except Exception:
+                continue
+            candidate = (completed.stdout or "").strip()
+            normalized = self._normalize_text_for_excerpt_match(candidate)
+            if len(normalized) < 8:
+                continue
+            if normalized in haystack:
+                return candidate.strip()
+        return ""
+
+    def _normalize_text_for_excerpt_match(self, text: str) -> str:
+        normalized = unicodedata.normalize("NFKC", str(text or ""))
+        normalized = normalized.replace("\u2029", "\n")
+        normalized = normalized.replace("\u00ad", "")
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip()
+
+    def _line_range_for_excerpt(self, page_text: str, excerpt: str) -> tuple[int, int]:
+        lines = page_text.splitlines()
+        nonempty_line_numbers = [idx + 1 for idx, line in enumerate(lines) if line.strip()]
+        if not nonempty_line_numbers:
+            return (0, 0)
+
+        normalized_excerpt = self._normalize_text_for_excerpt_match(excerpt)
+        if not normalized_excerpt:
+            first_line = nonempty_line_numbers[0]
+            last_line = nonempty_line_numbers[-1]
+            return (first_line, last_line)
+
+        chunks: list[str] = []
+        spans: list[tuple[int, int, int]] = []
+        cursor = 0
+        for idx, raw_line in enumerate(lines, start=1):
+            line = self._normalize_text_for_excerpt_match(raw_line)
+            if not line:
+                continue
+            if chunks:
+                chunks.append(" ")
+                cursor += 1
+            start = cursor
+            chunks.append(line)
+            cursor += len(line)
+            end = cursor
+            spans.append((idx, start, end))
+
+        haystack = "".join(chunks)
+        start_index = haystack.find(normalized_excerpt)
+        if start_index < 0:
+            first_line = nonempty_line_numbers[0]
+            last_line = nonempty_line_numbers[-1]
+            return (first_line, last_line)
+
+        end_index = start_index + len(normalized_excerpt)
+        start_line = spans[0][0]
+        end_line = spans[-1][0]
+        for line_no, span_start, span_end in spans:
+            if span_start <= start_index < span_end:
+                start_line = line_no
+                break
+        for line_no, span_start, span_end in spans:
+            if span_start < end_index <= span_end:
+                end_line = line_no
+                break
+            if end_index > span_end:
+                end_line = line_no
+
+        return (start_line, end_line)
+
+    def _format_line_reference(self, start_line: int, end_line: int) -> str:
+        start = max(0, int(start_line or 0))
+        end = max(0, int(end_line or 0))
+        if start <= 0 and end <= 0:
+            return "-"
+        if start > 0 and end > 0 and end != start:
+            return f"{start}-{end}"
+        return str(start or end)
+
+    def _abnt_reference_for_quote(self, page: int, line_ref: str) -> str:
+        author = self._abnt_author_token()
+        year = self._abnt_year_token()
+        page_part = f"p. {max(1, int(page or 1))}"
+        if line_ref and line_ref != "-":
+            return f"({author}, {year}, {page_part}, l. {line_ref})."
+        return f"({author}, {year}, {page_part})."
+
+    def _abnt_author_token(self) -> str:
+        manager = getattr(self.reading_controller, "reading_manager", None) if self.reading_controller else None
+        author = ""
+        if manager and self.current_book_id and self.current_book_id in getattr(manager, "readings", {}):
+            try:
+                author = str(manager.readings[self.current_book_id].author or "").strip()
+            except Exception:
+                author = ""
+        if not author and self.book_source_path and self.book_source_path.exists():
+            try:
+                text = self.book_source_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                text = ""
+            match = re.search(r"(?m)^author:\s*['\"]?(.+?)['\"]?\s*$", text)
+            if match:
+                author = str(match.group(1) or "").strip()
+        if not author:
+            return "AUTOR DESCONHECIDO"
+        if "," in author:
+            return author.split(",", 1)[0].strip().upper()
+        tokens = [token for token in re.split(r"\s+", author) if token]
+        return (tokens[-1] if tokens else author).upper()
+
+    def _abnt_year_token(self) -> str:
+        candidates = [
+            str(self.current_pdf_path or ""),
+            str(self.current_book_title or ""),
+        ]
+        for raw in candidates:
+            years = re.findall(r"(?:17|18|19|20)\d{2}", raw)
+            if years:
+                return years[-1]
+        return "s.d."
+
+    def _persist_selected_pdf_source(self, pdf_path: Path) -> bool:
+        manager = getattr(self.reading_controller, "reading_manager", None) if self.reading_controller else None
+        book_id = str(self.current_book_id or self._manual_book_id or "").strip()
+        if not manager or not book_id:
+            return False
+        try:
+            return bool(manager.update_book_source_path(book_id, str(pdf_path)))
+        except Exception as exc:
+            logger.warning("Falha ao persistir PDF selecionado para %s: %s", book_id, exc)
+            return False
+
+    def _open_primary_note_reference(self):
+        note_path = self._primary_reference_note_path()
+        if not note_path or not note_path.exists():
+            QMessageBox.information(
+                self,
+                "Nota de referência",
+                "Nenhuma nota de referência foi localizada para esta obra.",
+            )
+            return
+        self._open_file_with_desktop(note_path)
+
+    def _primary_reference_note_path(self) -> Optional[Path]:
+        for candidate in (self.current_chapter_path, self.book_source_path):
+            if candidate and candidate.exists() and candidate.is_file():
+                return candidate
+        return None
+
+    def _open_file_with_desktop(self, file_path: Path):
+        target = Path(file_path)
+        if not target.exists():
+            return
+        try:
+            subprocess.Popen(["xdg-open", str(target)], start_new_session=True)
+        except Exception as exc:
+            logger.debug("Falha ao abrir arquivo externo (%s): %s", target, exc)
 
     def _estimate_total_pages_in_dir(self, book_dir: Path) -> int:
         max_page = 0
@@ -2124,7 +2941,7 @@ class SessionView(QWidget):
             self._assistant_expanded_in_fullscreen = False
             self.assistant_tabs.setMaximumHeight(0)
             self.assistant_tabs.setVisible(False)
-            self.fullscreen_button.setText("🡽")
+            self.fullscreen_button.setText(NerdIcons.FULLSCREEN_EXIT)
             self.fullscreen_button.setToolTip("Sair do fullscreen (ESC)")
             self._toggle_main_window_chrome(hidden=True)
             if hasattr(main_window, "showFullScreen") and not self._window_was_fullscreen:
@@ -2136,7 +2953,7 @@ class SessionView(QWidget):
             self.header_widget.setVisible(True)
             self.nav_widget.setVisible(True)
             self.assistant_tabs.setMaximumHeight(16777215)
-            self.fullscreen_button.setText("⛶")
+            self.fullscreen_button.setText(NerdIcons.FULLSCREEN)
             self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
             self._toggle_main_window_chrome(hidden=False)
             if self._assistant_visible_before_fullscreen:
@@ -4194,8 +5011,8 @@ class SessionView(QWidget):
         if link_line in text:
             return
 
-        section_header = "## 🔗 Notas da Sessão"
-        header_pattern = re.compile(r"(?m)^##\s+🔗\s+Notas da Sessão\s*$")
+        section_header = f"## {NerdIcons.LINK} Notas da Sessão"
+        header_pattern = re.compile(rf"(?m)^##\s+(?:{re.escape(LEGACY_LINK_ICON)}|{re.escape(NerdIcons.LINK)})\s+Notas da Sessão\s*$")
         header_match = header_pattern.search(text)
 
         if not header_match:
@@ -4667,10 +5484,13 @@ class SessionView(QWidget):
 
     def cleanup(self):
         self._set_fullscreen_mode(False)
+        self._poll_zathura_process()
         self._finalize_session()
 
         if self.ui_timer.isActive():
             self.ui_timer.stop()
+        if self._zathura_process_timer.isActive():
+            self._zathura_process_timer.stop()
 
         if self.glados_controller:
             try:

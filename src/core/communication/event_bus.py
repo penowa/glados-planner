@@ -1,7 +1,9 @@
 """
 EventBus global para comunicação cross-module - Versão Simplificada
 """
-from PyQt6.QtCore import QObject, pyqtSignal
+from datetime import datetime
+
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from typing import Any, Dict, Callable
 import time
 
@@ -43,7 +45,10 @@ class GlobalEventBus(QObject):
         self._connections = {}
         self._event_history = []
         self._max_history = 1000
+        self._notification_history = []
+        self._max_notification_history = 200
         self._subscribers = {}
+        self.notification.connect(self._record_notification)
         print("✅ GlobalEventBus.__init__() chamado")
     
     @classmethod
@@ -105,3 +110,35 @@ class GlobalEventBus(QObject):
     def get_event_history(self, limit: int = 100) -> list:
         """Retorna histórico recente de eventos"""
         return self._event_history[-limit:] if self._event_history else []
+
+    @pyqtSlot(str, str, str)
+    def _record_notification(self, notif_type: str, title: str, message: str):
+        """Mantém um histórico normalizado das notificações emitidas."""
+        timestamp = datetime.now()
+        entry = {
+            'type': str(notif_type or 'info').strip().lower() or 'info',
+            'title': str(title or 'Notificação').strip() or 'Notificação',
+            'message': str(message or '').strip(),
+            'timestamp': timestamp.strftime('%d/%m %H:%M'),
+            'epoch': timestamp.timestamp(),
+        }
+
+        self._notification_history.append(entry)
+        if len(self._notification_history) > self._max_notification_history:
+            self._notification_history = self._notification_history[-self._max_notification_history:]
+
+    def get_recent_notifications(self, limit: int = 20) -> list:
+        """Retorna notificações recentes em formato pronto para UI."""
+        if not self._notification_history:
+            return []
+        recent = self._notification_history[-limit:]
+        return list(reversed(recent))
+
+    def clear_notifications(self) -> None:
+        """Limpa apenas o histórico normalizado de notificações."""
+        self._notification_history.clear()
+
+    def clear_history(self):
+        """Limpa histórico de eventos e notificações."""
+        self._event_history.clear()
+        self.clear_notifications()

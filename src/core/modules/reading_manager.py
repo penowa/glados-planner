@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
+from pathlib import Path
 
 @dataclass
 class ReadingProgress:
@@ -20,6 +21,8 @@ class ReadingProgress:
     reading_speed: float  # páginas por dia
     estimated_completion: str
     notes: List[str]
+    source_file: str = ""
+    source_format: str = ""
 
 class ReadingManager:
     """Gerencia leituras e progresso"""
@@ -78,7 +81,9 @@ class ReadingManager:
                             last_read=book_data.get('last_read', ''),
                             reading_speed=book_data.get('reading_speed', 10.0),
                             estimated_completion=book_data.get('estimated_completion', ''),
-                            notes=book_data.get('notes', [])
+                            notes=book_data.get('notes', []),
+                            source_file=str(book_data.get('source_file', '') or ''),
+                            source_format=str(book_data.get('source_format', '') or '')
                         )
             except Exception as e:
                 print(f"Erro ao carregar progresso: {e}")
@@ -99,7 +104,9 @@ class ReadingManager:
                     'last_read': progress.last_read,
                     'reading_speed': progress.reading_speed,
                     'estimated_completion': progress.estimated_completion,
-                    'notes': progress.notes
+                    'notes': progress.notes,
+                    'source_file': progress.source_file,
+                    'source_format': progress.source_format,
                 }
             
             # Garante que o diretório existe
@@ -133,7 +140,9 @@ class ReadingManager:
                     "total_pages": progress.total_pages,
                     "completed": progress.total_pages > 0 and progress.current_page >= progress.total_pages,
                     "reading_speed": progress.reading_speed,
-                    "estimated_completion": progress.estimated_completion
+                    "estimated_completion": progress.estimated_completion,
+                    "source_file": progress.source_file,
+                    "source_format": progress.source_format,
                 }
             return {}
         else:
@@ -149,7 +158,9 @@ class ReadingManager:
                     "total_pages": progress.total_pages,
                     "completed": progress.total_pages > 0 and progress.current_page >= progress.total_pages,
                     "reading_speed": progress.reading_speed,
-                    "estimated_completion": progress.estimated_completion
+                    "estimated_completion": progress.estimated_completion,
+                    "source_file": progress.source_file,
+                    "source_format": progress.source_format,
                 }
             return result
     
@@ -195,7 +206,9 @@ class ReadingManager:
                 last_read=now_iso,
                 reading_speed=10.0,  # padrão
                 estimated_completion=self._calculate_estimated_completion(book_id, requested_page),
-                notes=[notes] if notes else []
+                notes=[notes] if notes else [],
+                source_file=str(book_info.get('source_file', '') or ''),
+                source_format=str(book_info.get('source_format', '') or ''),
             )
         else:
             # Atualiza registro existente
@@ -327,6 +340,8 @@ class ReadingManager:
     
     def _get_book_info_from_vault(self, book_id: str) -> Optional[Dict]:
         """Obtém informações do livro do vault"""
+        registry_data = self._load_registry_data(book_id)
+
         # Procura arquivo do livro no vault
         book_files = list(self.vault_path.glob(f"**/*{book_id}*.md"))
         
@@ -343,12 +358,88 @@ class ReadingManager:
                 return {
                     'title': title_match.group(1) if title_match else book_files[0].stem,
                     'author': author_match.group(1) if author_match else 'Desconhecido',
-                    'total_pages': int(pages_match.group(1)) if pages_match else 300
+                    'total_pages': int(pages_match.group(1)) if pages_match else 300,
+                    'source_file': str(registry_data.get('file_path', '') or ''),
+                    'source_format': self._source_format_from_path(registry_data.get('file_path', '')),
                 }
             except:
                 pass
-        
+
+        if registry_data:
+            return {
+                'title': str(registry_data.get('title') or book_id),
+                'author': str(registry_data.get('author') or 'Desconhecido'),
+                'total_pages': int(registry_data.get('total_pages') or 300),
+                'source_file': str(registry_data.get('file_path', '') or ''),
+                'source_format': self._source_format_from_path(registry_data.get('file_path', '')),
+            }
+
         return None
+
+    def _load_registry_data(self, book_id: str) -> Dict[str, Any]:
+        registry_file = self.vault_path / "06-RECURSOS" / "registros_livros" / f"{book_id}.json"
+        if not registry_file.exists():
+            return {}
+        try:
+            with open(registry_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def _source_format_from_path(self, file_path: Any) -> str:
+        raw = str(file_path or "").strip()
+        if not raw:
+            return ""
+        return Path(raw).suffix.lower().lstrip(".")
+
+    def get_book_source_path(self, book_id: str) -> Optional[Path]:
+        progress = self.readings.get(book_id)
+        candidates: List[str] = []
+
+        if progress:
+            candidates.append(str(progress.source_file or "").strip())
+
+        registry_data = self._load_registry_data(book_id)
+        if registry_data:
+            candidates.append(str(registry_data.get("file_path") or "").strip())
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            path = Path(candidate).expanduser()
+            if path.exists():
+                return path
+        return None
+
+    def update_book_source_path(self, book_id: str, source_file: str) -> bool:
+        normalized = str(source_file or "").strip()
+        if not book_id or not normalized:
+            return False
+
+        updated = False
+        progress = self.readings.get(book_id)
+        if progress is not None:
+            progress.source_file = normalized
+            progress.source_format = self._source_format_from_path(normalized)
+            self._save_progress()
+            updated = True
+
+        registry_data = self._load_registry_data(book_id)
+        if registry_data:
+            registry_data["file_path"] = normalized
+            registry_file = self.vault_path / "06-RECURSOS" / "registros_livros" / f"{book_id}.json"
+            try:
+                registry_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(registry_file, 'w', encoding='utf-8') as f:
+                    json.dump(registry_data, f, indent=2, ensure_ascii=False)
+                updated = True
+            except Exception:
+                pass
+
+        return updated
     
     def _update_reading_speed(self, book_id: str):
         """Atualiza velocidade de leitura baseado no histórico"""
@@ -414,7 +505,14 @@ class ReadingManager:
         
         return recommendations
     
-    def add_book(self, title: str, author: str, total_pages: int, book_id: str = None) -> str:
+    def add_book(
+        self,
+        title: str,
+        author: str,
+        total_pages: int,
+        book_id: str = None,
+        source_file: str = "",
+    ) -> str:
         """
         Adiciona um novo livro ao sistema de leitura
         
@@ -443,7 +541,9 @@ class ReadingManager:
                 last_read="",
                 reading_speed=10.0,
                 estimated_completion="",
-                notes=[]
+                notes=[],
+                source_file=str(source_file or ""),
+                source_format=self._source_format_from_path(source_file),
             )
             self._save_progress()
         

@@ -60,11 +60,16 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QApplication,
 )
+from ui.utils.nerd_icons import LEGACY_LINK_ICON, NerdIcons
 
 from core.modules.mindmap_review_module import MindmapReviewModule
 from core.modules.pomodoro_timer import PomodoroTimer
 from core.modules.review_system import ReviewSystem
-from ui.utils.discipline_links import append_book_note_links, find_primary_book_note
+from ui.utils.discipline_links import (
+    append_annotation_note_links,
+    append_book_note_links,
+    find_primary_book_note,
+)
 
 logger = logging.getLogger("GLaDOS.UI.ReviewWorkspaceView")
 
@@ -214,6 +219,179 @@ class PendingDisciplineWorksDialog(QDialog):
             if checked is None:
                 continue
             resolved[work_key] = {
+                "mode": str(checked.property("choice_mode") or "").strip(),
+                "target_id": str(checked.property("choice_target_id") or "").strip(),
+                "label": str(checked.property("choice_label") or "").strip(),
+            }
+        return resolved
+
+    def _apply_styles(self) -> None:
+        self.setStyleSheet(
+            "QDialog{background-color:#171C25; color:#E7ECF5;}"
+            "QLabel{color:#DCE3EF;}"
+            "QFrame#pending_work_card{background:#11161F; border:1px solid #2C3648; border-radius:12px;}"
+            "QListWidget{background:#11161F; border:1px solid #2C3648; border-radius:8px; color:#DCE3EF; padding:4px;}"
+            "QListWidget::item{padding:6px 8px; border-radius:6px;}"
+            "QListWidget::item:selected{background:#222A38;}"
+            "QScrollArea{background:transparent; border:none;}"
+            "QComboBox{background:#11161F; border:1px solid #344055; border-radius:7px; color:#F0F4FB; padding:7px 10px; min-height:30px;}"
+            "QComboBox:hover{border-color:#52627F;}"
+            "QComboBox::drop-down{border:none; width:28px;}"
+            "QComboBox QAbstractItemView{background:#11161F; color:#F0F4FB; border:1px solid #344055; selection-background-color:#253047;}"
+            "QPushButton{background:#202734; color:#EEF3FB; border:1px solid #344055; border-radius:8px; padding:8px 14px;}"
+            "QPushButton:hover{background:#283244; border-color:#4F6283;}"
+            "QPushButton:pressed{background:#1A2230;}"
+            "QPushButton#pending_choice_button{background:#161D28; color:#DDE5F1; border:1px solid #334155; text-align:left; padding:10px 12px;}"
+            "QPushButton#pending_choice_button:hover{background:#1B2431; border-color:#52627F;}"
+            "QPushButton#pending_choice_button:checked{background:#24344B; border:1px solid #79A6E3; color:#F4F8FF;}"
+        )
+
+
+class PendingDisciplineAnnotationsDialog(QDialog):
+    """Permite escolher onde novas anotações órfãs devem nascer no mapa."""
+
+    def __init__(
+        self,
+        *,
+        discipline: str,
+        pending_annotations: List[Dict[str, Any]],
+        parent_choices: List[Dict[str, str]],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Novas anotações no mapa")
+        self.setModal(True)
+        self.resize(780, 420)
+
+        self._pending_annotations = list(pending_annotations or [])
+        self._choice_groups: Dict[str, QButtonGroup] = {}
+        self._apply_styles()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("Escolha em qual ramo conectar as novas anotações")
+        title.setStyleSheet("font-size: 16px; font-weight: 700; color: #F3F6FB;")
+        layout.addWidget(title)
+
+        helper = QLabel(
+            f"Novas anotações foram encontradas na disciplina '{discipline}'. "
+            "Defina em qual ramo do mapa cada anotação deve ficar ligada, "
+            "ou mantenha-a como card órfão."
+        )
+        helper.setWordWrap(True)
+        helper.setStyleSheet("color: #AAB2C2;")
+        layout.addWidget(helper)
+
+        rules = QLabel(
+            "Regras: capítulos e outras anotações não aparecem como destino. "
+            "O vínculo pode ser feito com a raiz da disciplina ou com outro nódulo do mapa."
+        )
+        rules.setWordWrap(True)
+        rules.setStyleSheet("color: #8F9AAF; font-size: 11px;")
+        layout.addWidget(rules)
+
+        summary = QLabel(
+            f"{len(self._pending_annotations)} anotação(ões) aguardando posição no mapa."
+        )
+        summary.setStyleSheet(
+            "background:#11161F; border:1px solid #2C3648; border-radius:8px; "
+            "padding:8px 10px; color:#D7DEEA; font-weight:600;"
+        )
+        layout.addWidget(summary)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        cards_host = QWidget()
+        cards_layout = QVBoxLayout(cards_host)
+        cards_layout.setContentsMargins(0, 0, 6, 0)
+        cards_layout.setSpacing(10)
+
+        for entry in self._pending_annotations:
+            annotation_key = str(entry.get("annotation_key") or "").strip()
+            note_title = str(entry.get("title") or entry.get("relative_path") or "Anotação").strip()
+            relative_path = str(entry.get("relative_path") or "").strip()
+            reason = str(entry.get("reason_label") or "").strip()
+
+            card = QFrame()
+            card.setObjectName("pending_work_card")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(14, 14, 14, 14)
+            card_layout.setSpacing(8)
+
+            heading = QLabel(note_title)
+            heading.setStyleSheet("font-size: 14px; font-weight: 700; color: #F4F7FC;")
+            card_layout.addWidget(heading)
+
+            meta_parts: List[str] = []
+            if relative_path:
+                meta_parts.append(f"Caminho: {relative_path}")
+            if reason:
+                meta_parts.append(reason)
+            if not meta_parts:
+                meta_parts.append("Nova anotação vinculada à disciplina")
+            meta = QLabel(" | ".join(meta_parts))
+            meta.setWordWrap(True)
+            meta.setStyleSheet("color: #9EABBF; font-size: 11px;")
+            card_layout.addWidget(meta)
+
+            hint = QLabel("Escolha abaixo onde essa anotação deve ficar conectada no mapa:")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color: #C7D1E0; font-size: 12px;")
+            card_layout.addWidget(hint)
+
+            options_wrap = QWidget()
+            options_layout = QVBoxLayout(options_wrap)
+            options_layout.setContentsMargins(0, 2, 0, 0)
+            options_layout.setSpacing(8)
+
+            button_group = QButtonGroup(self)
+            button_group.setExclusive(True)
+            for index, choice in enumerate(parent_choices):
+                option_button = QPushButton(str(choice.get("label") or "Destino"))
+                option_button.setCheckable(True)
+                option_button.setObjectName("pending_choice_button")
+                option_button.setProperty("choice_mode", str(choice.get("mode") or ""))
+                option_button.setProperty("choice_target_id", str(choice.get("target_id") or ""))
+                option_button.setProperty("choice_label", str(choice.get("label") or ""))
+                if index == 0:
+                    option_button.setChecked(True)
+                button_group.addButton(option_button, index)
+                options_layout.addWidget(option_button)
+
+            card_layout.addWidget(options_wrap)
+            cards_layout.addWidget(card)
+            if annotation_key:
+                self._choice_groups[annotation_key] = button_group
+
+        cards_layout.addStretch(1)
+        scroll.setWidget(cards_host)
+        layout.addWidget(scroll, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if ok_button is not None:
+            ok_button.setText("Conectar no mapa")
+        if cancel_button is not None:
+            cancel_button.setText("Decidir depois")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selections(self) -> Dict[str, Dict[str, str]]:
+        resolved: Dict[str, Dict[str, str]] = {}
+        for annotation_key, button_group in self._choice_groups.items():
+            checked = button_group.checkedButton()
+            if checked is None:
+                continue
+            resolved[annotation_key] = {
                 "mode": str(checked.property("choice_mode") or "").strip(),
                 "target_id": str(checked.property("choice_target_id") or "").strip(),
                 "label": str(checked.property("choice_label") or "").strip(),
@@ -424,6 +602,10 @@ class CanvasActionDragButton(QPushButton):
 class MindmapCanvasView(QGraphicsView):
     """View gráfica com zoom por scroll e pan por arrasto."""
 
+    _DEFAULT_MIN_ZOOM = 0.25
+    _ABSOLUTE_MIN_ZOOM = 0.01
+    _MAX_ZOOM = 4.0
+
     def __init__(self, scene: QGraphicsScene, parent=None):
         super().__init__(scene, parent)
         self.setRenderHints(
@@ -446,17 +628,55 @@ class MindmapCanvasView(QGraphicsView):
         else:
             self.zoom_by(0.88)
 
+    def _fit_zoom_factor(self) -> Optional[float]:
+        scene_rect = self.sceneRect()
+        viewport_rect = self.viewport().rect()
+        if (
+            not scene_rect.isValid()
+            or scene_rect.width() <= 0
+            or scene_rect.height() <= 0
+            or viewport_rect.width() <= 0
+            or viewport_rect.height() <= 0
+        ):
+            return None
+        return min(
+            viewport_rect.width() / scene_rect.width(),
+            viewport_rect.height() / scene_rect.height(),
+        )
+
+    def _minimum_zoom_factor(self) -> float:
+        fit_zoom = self._fit_zoom_factor()
+        if fit_zoom is None or fit_zoom >= self._DEFAULT_MIN_ZOOM:
+            return self._DEFAULT_MIN_ZOOM
+        return max(self._ABSOLUTE_MIN_ZOOM, fit_zoom * 0.9)
+
     def zoom_by(self, factor: float):
         current = self.transform().m11()
+        if current <= 0:
+            self.resetTransform()
+            current = 1.0
+
         target = current * factor
-        if target < 0.25 or target > 4.0:
+        target = max(self._minimum_zoom_factor(), min(target, self._MAX_ZOOM))
+        if abs(target - current) < 1e-4:
             return
-        self.scale(factor, factor)
-        self._zoom_factor = target
+
+        scale_step = target / current
+        self.scale(scale_step, scale_step)
+        self._zoom_factor = self.transform().m11()
 
     def reset_zoom(self):
+        scene_rect = self.sceneRect()
         self.resetTransform()
         self._zoom_factor = 1.0
+        if scene_rect.isValid():
+            self.centerOn(scene_rect.center())
+
+        fit_zoom = self._fit_zoom_factor()
+        if fit_zoom is not None and fit_zoom < 1.0 and scene_rect.isValid():
+            self.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self.centerOn(scene_rect.center())
+            self._zoom_factor = self.transform().m11()
 
     def pan_by(self, dx: int, dy: int):
         hbar = self.horizontalScrollBar()
@@ -984,6 +1204,7 @@ class ReviewWorkspaceView(QWidget):
         self._editing_card_mode: str = "text"
         self._isolated_spawn_index: int = 0
         self._suppress_pending_work_dialog = False
+        self._suppress_pending_annotation_dialog = False
         self.auto_layout_button: Optional[CanvasActionDragButton] = None
 
         self._fullscreen_active = False
@@ -1078,7 +1299,7 @@ class ReviewWorkspaceView(QWidget):
         self.zoom_out_button = QPushButton("−")
         self.zoom_out_button.setToolTip("Reduzir zoom")
         self.zoom_reset_button = QPushButton("◎")
-        self.zoom_reset_button.setToolTip("Resetar zoom")
+        self.zoom_reset_button.setToolTip("Ajustar mapa à tela")
         self.zoom_in_button = QPushButton("+")
         self.zoom_in_button.setToolTip("Aumentar zoom")
         for button in (self.zoom_out_button, self.zoom_reset_button, self.zoom_in_button):
@@ -2044,6 +2265,8 @@ class ReviewWorkspaceView(QWidget):
         self.status_label.setText("Mapa mental da disciplina carregado")
         if not self._suppress_pending_work_dialog:
             self._prompt_pending_discipline_works_if_needed(discipline_name)
+        if not self._suppress_pending_annotation_dialog:
+            self._prompt_pending_discipline_annotations_if_needed(discipline_name)
         self._schedule_next_question_prompt(reset=True)
         if source_event:
             logger.debug("Review workspace de disciplina aberto com payload: %s", source_event)
@@ -2112,6 +2335,98 @@ class ReviewWorkspaceView(QWidget):
                 f"{integrated} nova(s) obra(s) integrada(s) ao mapa da disciplina"
             )
 
+    def _prompt_pending_discipline_annotations_if_needed(self, discipline: str) -> None:
+        pending = self._collect_pending_discipline_annotations(discipline)
+        if not pending:
+            return
+
+        parent_choices = self._annotation_parent_choices_for_pending()
+        if not parent_choices:
+            parent_choices = [
+                {"mode": "root", "target_id": "node-disciplina", "label": "Raiz da disciplina"},
+                {"mode": "orphan", "target_id": "", "label": "Manter como card órfão"},
+            ]
+
+        dialog = PendingDisciplineAnnotationsDialog(
+            discipline=discipline,
+            pending_annotations=pending,
+            parent_choices=parent_choices,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self.status_label.setText(
+                f"{len(pending)} anotação(ões) pendente(s) aguardando vínculo no mapa da disciplina"
+            )
+            return
+
+        selections = dialog.selections()
+        integrated = 0
+        for annotation in pending:
+            annotation_key = str(annotation.get("annotation_key") or "").strip()
+            if not annotation_key:
+                continue
+            selection = selections.get(annotation_key) or {}
+            mode = str(selection.get("mode") or "root").strip().lower()
+            target_id = str(selection.get("target_id") or "").strip()
+            result = self.integrate_existing_annotation_into_discipline(
+                discipline=discipline,
+                note_path=str(annotation.get("note_path") or "").strip(),
+                title=str(annotation.get("title") or "").strip(),
+                parent_node_id=target_id,
+                create_orphan=(mode == "orphan"),
+                mark_selection_resolved=True,
+            )
+            if bool(result.get("ok")):
+                integrated += 1
+
+        if integrated:
+            self.status_label.setText(
+                f"{integrated} nova(s) anotação(ões) organizada(s) no mapa da disciplina"
+            )
+
+    def _collect_pending_discipline_annotations(self, discipline: str) -> List[Dict[str, Any]]:
+        if self.current_scope_type != "discipline":
+            return []
+
+        linked_annotations = self._linked_annotations_from_discipline_note(discipline)
+        if not linked_annotations:
+            return []
+
+        nodes = self.current_canvas_payload.get("nodes")
+        edges = self.current_canvas_payload.get("edges")
+        if not isinstance(nodes, list):
+            nodes = []
+        if not isinstance(edges, list):
+            edges = []
+
+        existing_nodes = self._existing_annotation_nodes_in_canvas(self.current_canvas_payload)
+        pending: List[Dict[str, Any]] = []
+        for entry in linked_annotations:
+            annotation_key = str(entry.get("annotation_key") or "").strip()
+            if not annotation_key:
+                continue
+            existing_node = existing_nodes.get(annotation_key)
+            if existing_node is None:
+                pending.append(
+                    {
+                        **entry,
+                        "reason": "missing",
+                        "reason_label": "Ainda não apareceu no canvas",
+                    }
+                )
+                continue
+            if not self._annotation_requires_branch_decision(existing_node, edges):
+                continue
+            pending.append(
+                {
+                    **entry,
+                    "node_id": str(existing_node.get("id") or "").strip(),
+                    "reason": "unresolved",
+                    "reason_label": "Ainda sem ramo definido",
+                }
+            )
+        return pending
+
     def _collect_pending_discipline_works(self, discipline: str) -> List[Dict[str, Any]]:
         if self.current_scope_type != "discipline":
             return []
@@ -2163,6 +2478,46 @@ class ReviewWorkspaceView(QWidget):
             discovered.append(book_data)
         return discovered
 
+    def _linked_annotations_from_discipline_note(self, discipline: str) -> List[Dict[str, Any]]:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return []
+
+        note_path = self.current_discipline_note_path or self._resolve_discipline_note_path(discipline)
+        if not note_path or not note_path.exists():
+            return []
+
+        try:
+            content = note_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return []
+
+        discovered: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for token in re.findall(r"\[\[([^\]]+)\]\]", content):
+            target = token.split("|", 1)[0].strip().replace("\\", "/")
+            if not target:
+                continue
+            resolved = self._resolve_reference_in_vault(target)
+            if not resolved or not resolved.exists() or resolved.suffix.lower() != ".md":
+                continue
+            rel = self.mindmap_module._to_relative_vault_path(resolved, vault_root).replace("\\", "/")
+            if not self._is_annotation_file_ref(rel):
+                continue
+            annotation_key = str(rel).strip()
+            if not annotation_key or annotation_key in seen:
+                continue
+            seen.add(annotation_key)
+            discovered.append(
+                {
+                    "annotation_key": annotation_key,
+                    "title": resolved.stem,
+                    "relative_path": rel,
+                    "note_path": str(resolved.resolve(strict=False)),
+                }
+            )
+        return discovered
+
     def _existing_work_keys_in_canvas(self, payload: Dict[str, Any]) -> set[str]:
         nodes = payload.get("nodes") if isinstance(payload.get("nodes"), list) else []
         keys: set[str] = set()
@@ -2181,6 +2536,45 @@ class ReviewWorkspaceView(QWidget):
             if inferred:
                 keys.add(inferred)
         return keys
+
+    def _existing_annotation_nodes_in_canvas(self, payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        nodes = payload.get("nodes") if isinstance(payload.get("nodes"), list) else []
+        annotations: Dict[str, Dict[str, Any]] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            file_ref = str(node.get("file") or "").strip().replace("\\", "/")
+            if not self._is_annotation_file_ref(file_ref):
+                continue
+            annotations[file_ref] = node
+        return annotations
+
+    def _annotation_requires_branch_decision(
+        self,
+        node: Dict[str, Any],
+        edges: List[Dict[str, Any]],
+    ) -> bool:
+        resolved = str(node.get("discipline_annotation_parent_resolved") or "").strip().lower()
+        if resolved in {"1", "true", "yes"}:
+            return False
+
+        node_id = str(node.get("id") or "").strip()
+        if not node_id:
+            return True
+
+        incoming: set[str] = set()
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if str(edge.get("toNode") or "").strip() != node_id:
+                continue
+            from_node = str(edge.get("fromNode") or "").strip()
+            if from_node and from_node != node_id:
+                incoming.add(from_node)
+
+        if not incoming:
+            return True
+        return incoming == {"node-disciplina"}
 
     def _discipline_parent_choices_for_pending(self) -> List[Dict[str, str]]:
         choices: List[Dict[str, str]] = [
@@ -2202,6 +2596,51 @@ class ReviewWorkspaceView(QWidget):
 
         choices.append({"mode": "orphan", "target_id": "", "label": "Criar card órfão"})
         return choices
+
+    def _annotation_parent_choices_for_pending(self) -> List[Dict[str, str]]:
+        choices: List[Dict[str, str]] = [
+            {"mode": "root", "target_id": "node-disciplina", "label": "Raiz da disciplina"},
+        ]
+
+        for candidate in self._discipline_annotation_parent_candidates():
+            node_id = str(candidate.get("node_id") or "").strip()
+            label = str(candidate.get("label") or "").strip()
+            if not node_id or not label:
+                continue
+            choices.append(
+                {
+                    "mode": "branch",
+                    "target_id": node_id,
+                    "label": f"Ligar ao nódulo: {label}",
+                }
+            )
+
+        choices.append({"mode": "orphan", "target_id": "", "label": "Manter como card órfão"})
+        return choices
+
+    def _discipline_annotation_parent_candidates(self) -> List[Dict[str, str]]:
+        nodes = self.current_canvas_payload.get("nodes")
+        if not isinstance(nodes, list):
+            return []
+
+        candidates: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            if not node_id or node_id == "node-disciplina":
+                continue
+            if self._is_chapter_like_node(node) or self._is_annotation_node(node):
+                continue
+            label = self._annotation_parent_label(node)
+            if not label or node_id in seen:
+                continue
+            seen.add(node_id)
+            candidates.append({"node_id": node_id, "label": label})
+
+        candidates.sort(key=lambda item: self._normalize_token(item.get("label") or ""))
+        return candidates
 
     def _discipline_work_anchor_candidates(self) -> List[Dict[str, str]]:
         nodes = self.current_canvas_payload.get("nodes")
@@ -2261,6 +2700,42 @@ class ReviewWorkspaceView(QWidget):
         text = re.sub(r"(?i)^mapa base da obra\s*", "", text).strip()
         text = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
         return text
+
+    def _annotation_parent_label(self, node: Dict[str, Any]) -> str:
+        if self._is_work_anchor_node(node):
+            label = self._compact_work_label(
+                str(node.get("work_title") or node.get("text") or node.get("title") or "")
+            )
+            if label:
+                return f"Obra: {label}"
+
+        node_type = str(node.get("type") or "").strip().lower()
+        file_ref = str(node.get("file") or "").strip().replace("\\", "/")
+        if file_ref:
+            label = Path(file_ref).stem
+            if self._book_metadata_from_relative_path(file_ref):
+                return f"Nota da obra: {label}"
+            return f"Nota: {label}"
+
+        text = str(node.get("title") or node.get("caption") or node.get("text") or "").strip()
+        compact = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
+        if compact:
+            prefix = "Imagem" if node_type == "image" else "Nódulo"
+            return f"{prefix}: {compact[:72]}"
+        return f"Nódulo: {str(node.get('id') or '').strip()}"
+
+    def _is_annotation_file_ref(self, file_ref: str) -> bool:
+        normalized = str(file_ref or "").strip().replace("\\", "/")
+        if not normalized:
+            return False
+        parts = Path(normalized).parts
+        return bool(parts) and parts[0] in {"02-ANOTAÇÕES", "02-ANOTACOES"}
+
+    def _is_annotation_node(self, node: Dict[str, Any]) -> bool:
+        note_kind = str(node.get("note_kind") or "").strip().lower()
+        if note_kind == "annotation":
+            return True
+        return self._is_annotation_file_ref(str(node.get("file") or ""))
 
     def _resolve_reference_in_vault(self, reference: str) -> Optional[Path]:
         vault_root = self._vault_root()
@@ -2361,18 +2836,19 @@ class ReviewWorkspaceView(QWidget):
             label = Path(rel_path).stem
             card_w, card_h = self.mindmap_module._card_dimensions_for_title(label)
             node_id = f"node-disciplina-arquivo-{index + 1}"
-            nodes.append(
-                {
-                    "id": node_id,
-                    "type": "file",
-                    "file": rel_path,
-                    "x": base_x,
-                    "y": base_y + (index * step_y),
-                    "width": card_w,
-                    "height": card_h,
-                    "color": "2" if "01-LEITURAS/" in rel_path else "6",
-                }
-            )
+            node_payload: Dict[str, Any] = {
+                "id": node_id,
+                "type": "file",
+                "file": rel_path,
+                "x": base_x,
+                "y": base_y + (index * step_y),
+                "width": card_w,
+                "height": card_h,
+                "color": "2" if "01-LEITURAS/" in rel_path else "6",
+            }
+            if self._is_annotation_file_ref(rel_path):
+                node_payload["note_kind"] = "annotation"
+            nodes.append(node_payload)
             edges.append(
                 {
                     "id": f"edge-disciplina-arquivo-{index + 1}",
@@ -2471,7 +2947,9 @@ class ReviewWorkspaceView(QWidget):
         create_orphan: bool = False,
     ) -> Dict[str, Any]:
         previous_suppress = self._suppress_pending_work_dialog
+        previous_annotation_suppress = self._suppress_pending_annotation_dialog
         self._suppress_pending_work_dialog = True
+        self._suppress_pending_annotation_dialog = True
         try:
             if not self.open_discipline_review(discipline=discipline):
                 return {"ok": False, "error": "Não foi possível abrir o mapa da disciplina."}
@@ -2671,6 +3149,7 @@ class ReviewWorkspaceView(QWidget):
             }
         finally:
             self._suppress_pending_work_dialog = previous_suppress
+            self._suppress_pending_annotation_dialog = previous_annotation_suppress
 
     def queue_existing_book_for_discipline(
         self,
@@ -2735,6 +3214,308 @@ class ReviewWorkspaceView(QWidget):
             "discipline_note_path": discipline_update.get("note_path", ""),
             "book_dir": str(book_abs),
         }
+
+    def integrate_existing_annotation_into_discipline(
+        self,
+        *,
+        discipline: str,
+        note_path: str,
+        title: str = "",
+        parent_node_id: str = "",
+        create_orphan: bool = False,
+        mark_selection_resolved: bool = True,
+    ) -> Dict[str, Any]:
+        previous_work_suppress = self._suppress_pending_work_dialog
+        previous_annotation_suppress = self._suppress_pending_annotation_dialog
+        self._suppress_pending_work_dialog = True
+        self._suppress_pending_annotation_dialog = True
+        try:
+            if not self.open_discipline_review(discipline=discipline):
+                return {"ok": False, "error": "Não foi possível abrir o mapa da disciplina."}
+
+            vault_root = self._vault_root()
+            if not vault_root:
+                return {"ok": False, "error": "Vault indisponível para vincular a anotação."}
+
+            raw_path = Path(str(note_path or "").strip())
+            if not str(raw_path):
+                return {"ok": False, "error": "Caminho da anotação inválido."}
+
+            note_abs = raw_path if raw_path.is_absolute() else (vault_root / raw_path)
+            note_abs = note_abs.resolve(strict=False)
+            if not note_abs.exists() or not note_abs.is_file() or note_abs.suffix.lower() != ".md":
+                return {"ok": False, "error": f"Anotação não encontrada: {note_abs}"}
+
+            try:
+                relative = note_abs.relative_to(vault_root)
+            except Exception:
+                return {"ok": False, "error": "A anotação precisa estar dentro do vault."}
+
+            if not relative.parts or relative.parts[0] not in {"02-ANOTAÇÕES", "02-ANOTACOES"}:
+                return {"ok": False, "error": "A anotação precisa estar em 02-ANOTAÇÕES."}
+
+            rel = self.mindmap_module._to_relative_vault_path(note_abs, vault_root).replace("\\", "/")
+            note_title = str(title or note_abs.stem).strip() or note_abs.stem
+
+            nodes = self.current_canvas_payload.get("nodes")
+            edges = self.current_canvas_payload.get("edges")
+            if not isinstance(nodes, list):
+                nodes = []
+                self.current_canvas_payload["nodes"] = nodes
+            if not isinstance(edges, list):
+                edges = []
+                self.current_canvas_payload["edges"] = edges
+
+            anchor_id = "node-disciplina"
+            if anchor_id not in {
+                str(node.get("id") or "").strip()
+                for node in nodes
+                if isinstance(node, dict)
+            }:
+                root_title = f"Mapa da disciplina\n{discipline}"
+                root_w, root_h = self.mindmap_module._card_dimensions_for_title(root_title, is_text=True)
+                nodes.insert(
+                    0,
+                    {
+                        "id": anchor_id,
+                        "type": "text",
+                        "text": root_title,
+                        "x": 0,
+                        "y": 0,
+                        "width": root_w,
+                        "height": root_h,
+                        "color": "4",
+                    },
+                )
+
+            target_parent_id = str(parent_node_id or "").strip()
+            if not create_orphan and not target_parent_id:
+                target_parent_id = anchor_id
+            if create_orphan:
+                target_parent_id = ""
+
+            discipline_update = self._append_annotation_links_to_discipline_note(
+                discipline=discipline,
+                linked_paths=[str(note_abs)],
+            )
+
+            existing_nodes = self._existing_annotation_nodes_in_canvas({"nodes": nodes, "edges": edges})
+            existing_node = existing_nodes.get(rel)
+            if existing_node is not None:
+                node_id = str(existing_node.get("id") or "").strip()
+                changed = self._apply_annotation_parent_selection(
+                    nodes=nodes,
+                    edges=edges,
+                    node_id=node_id,
+                    parent_node_id=target_parent_id,
+                    create_orphan=create_orphan,
+                    mark_resolved=mark_selection_resolved,
+                )
+                if changed:
+                    self.current_canvas_payload = {"nodes": nodes, "edges": edges}
+                    self._render_canvas(self.current_canvas_payload, reset_zoom=False)
+                    self._persist_canvas_payload()
+
+                self.status_label.setText(f"Anotação {note_title} atualizada no mapa da disciplina")
+                return {
+                    "ok": True,
+                    "already_present": True,
+                    "discipline_links_added": int(discipline_update.get("added_links", 0) or 0),
+                    "discipline_note_path": discipline_update.get("note_path", ""),
+                    "annotation_path": str(note_abs),
+                    "node_id": node_id,
+                    "edge_updated": changed,
+                }
+
+            card_w, card_h = self.mindmap_module._card_dimensions_for_title(note_title)
+            spawn = self._next_isolated_spawn_point(card_w, card_h)
+            node_id = self._generate_unique_node_id(
+                f"node-disciplina-anotacao-{self._sanitize_filename(note_abs.stem)}"
+            )
+            node_payload: Dict[str, Any] = {
+                "id": node_id,
+                "type": "file",
+                "file": rel,
+                "x": round(float(spawn.x()), 2),
+                "y": round(float(spawn.y()), 2),
+                "width": card_w,
+                "height": card_h,
+                "color": "6",
+                "note_kind": "annotation",
+            }
+            if mark_selection_resolved:
+                node_payload["discipline_annotation_parent_resolved"] = True
+                node_payload["discipline_annotation_parent_mode"] = (
+                    "orphan"
+                    if create_orphan
+                    else ("root" if target_parent_id == anchor_id else "node")
+                )
+                node_payload["discipline_annotation_parent_id"] = target_parent_id
+            nodes.append(node_payload)
+
+            if target_parent_id:
+                edges.append(
+                    {
+                        "id": self._generate_unique_edge_id(),
+                        "fromNode": target_parent_id,
+                        "toNode": node_id,
+                        "fromSide": "right",
+                        "toSide": "left",
+                        "label": "anotação",
+                        "color": "6",
+                    }
+                )
+
+            self.current_canvas_payload = {"nodes": nodes, "edges": edges}
+            self._render_canvas(self.current_canvas_payload, reset_zoom=False)
+            self._persist_canvas_payload()
+            self.status_label.setText(f"Anotação {note_title} integrada à disciplina")
+
+            return {
+                "ok": True,
+                "already_present": False,
+                "discipline_links_added": int(discipline_update.get("added_links", 0) or 0),
+                "discipline_note_path": discipline_update.get("note_path", ""),
+                "annotation_path": str(note_abs),
+                "node_id": node_id,
+            }
+        finally:
+            self._suppress_pending_work_dialog = previous_work_suppress
+            self._suppress_pending_annotation_dialog = previous_annotation_suppress
+
+    def queue_existing_annotation_for_discipline(
+        self,
+        *,
+        discipline: str,
+        note_path: str,
+        title: str = "",
+    ) -> Dict[str, Any]:
+        previous_annotation_suppress = self._suppress_pending_annotation_dialog
+        self._suppress_pending_annotation_dialog = True
+        try:
+            if not self.open_discipline_review(discipline=discipline):
+                return {"ok": False, "error": "Não foi possível abrir o mapa da disciplina."}
+        finally:
+            self._suppress_pending_annotation_dialog = previous_annotation_suppress
+
+        vault_root = self._vault_root()
+        if not vault_root:
+            return {"ok": False, "error": "Vault indisponível para vincular a anotação."}
+
+        raw_path = Path(str(note_path or "").strip())
+        if not str(raw_path):
+            return {"ok": False, "error": "Caminho da anotação inválido."}
+
+        note_abs = raw_path if raw_path.is_absolute() else (vault_root / raw_path)
+        note_abs = note_abs.resolve(strict=False)
+        if not note_abs.exists() or not note_abs.is_file() or note_abs.suffix.lower() != ".md":
+            return {"ok": False, "error": f"Anotação não encontrada: {note_abs}"}
+
+        try:
+            relative = note_abs.relative_to(vault_root)
+        except Exception:
+            return {"ok": False, "error": "A anotação precisa estar dentro do vault."}
+
+        if not relative.parts or relative.parts[0] not in {"02-ANOTAÇÕES", "02-ANOTACOES"}:
+            return {"ok": False, "error": "A anotação precisa estar em 02-ANOTAÇÕES."}
+
+        rel = self.mindmap_module._to_relative_vault_path(note_abs, vault_root).replace("\\", "/")
+        existing_annotations = self._existing_annotation_nodes_in_canvas(self.current_canvas_payload)
+        existing_node = existing_annotations.get(rel)
+
+        discipline_update = self._append_annotation_links_to_discipline_note(
+            discipline=discipline,
+            linked_paths=[str(note_abs)],
+        )
+        pending_before = self._collect_pending_discipline_annotations(discipline)
+        annotation_pending_before = any(
+            str(entry.get("annotation_key") or "").strip() == rel
+            for entry in pending_before
+        )
+        self._prompt_pending_discipline_annotations_if_needed(discipline)
+
+        return {
+            "ok": True,
+            "already_present": existing_node is not None and not annotation_pending_before,
+            "dialog_shown": bool(pending_before),
+            "discipline_links_added": int(discipline_update.get("added_links", 0) or 0),
+            "discipline_note_path": discipline_update.get("note_path", ""),
+            "annotation_path": str(note_abs),
+        }
+
+    def _apply_annotation_parent_selection(
+        self,
+        *,
+        nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+        node_id: str,
+        parent_node_id: str,
+        create_orphan: bool,
+        mark_resolved: bool,
+    ) -> bool:
+        node = self._find_node_payload(nodes, node_id)
+        if not node:
+            return False
+
+        changed = False
+        if str(node.get("note_kind") or "").strip().lower() != "annotation":
+            node["note_kind"] = "annotation"
+            changed = True
+        if str(node.get("color") or "").strip() != "6":
+            node["color"] = "6"
+            changed = True
+
+        if mark_resolved:
+            mode = "orphan" if create_orphan else ("root" if parent_node_id == "node-disciplina" else "node")
+            if str(node.get("discipline_annotation_parent_mode") or "").strip() != mode:
+                node["discipline_annotation_parent_mode"] = mode
+                changed = True
+            if str(node.get("discipline_annotation_parent_id") or "").strip() != str(parent_node_id or "").strip():
+                node["discipline_annotation_parent_id"] = str(parent_node_id or "").strip()
+                changed = True
+            resolved = str(node.get("discipline_annotation_parent_resolved") or "").strip().lower()
+            if resolved not in {"1", "true", "yes"}:
+                node["discipline_annotation_parent_resolved"] = True
+                changed = True
+
+        filtered_edges: List[Dict[str, Any]] = []
+        existing_target_edge = False
+        for edge in edges:
+            if not isinstance(edge, dict):
+                filtered_edges.append(edge)
+                continue
+            if str(edge.get("toNode") or "").strip() != node_id:
+                filtered_edges.append(edge)
+                continue
+            if str(edge.get("label") or "").strip().lower() != "anotação":
+                filtered_edges.append(edge)
+                continue
+
+            from_node = str(edge.get("fromNode") or "").strip()
+            if not create_orphan and from_node == str(parent_node_id or "").strip():
+                existing_target_edge = True
+                filtered_edges.append(edge)
+                continue
+            changed = True
+
+        if len(filtered_edges) != len(edges):
+            edges[:] = filtered_edges
+
+        if not create_orphan and parent_node_id and not existing_target_edge:
+            edges.append(
+                {
+                    "id": self._generate_unique_edge_id(),
+                    "fromNode": parent_node_id,
+                    "toNode": node_id,
+                    "fromSide": "right",
+                    "toSide": "left",
+                    "label": "anotação",
+                    "color": "6",
+                }
+            )
+            changed = True
+
+        return changed
 
     def _list_book_markdown_files(self, book_dir: Path) -> List[Path]:
         files = [path for path in book_dir.rglob("*.md") if path.is_file()]
@@ -3048,6 +3829,30 @@ class ReviewWorkspaceView(QWidget):
             )
         except Exception as exc:
             logger.warning("Falha ao atualizar nota de disciplina com novos links: %s", exc)
+            return {"added_links": 0, "note_path": str(note_path or "")}
+
+        resolved_note_path = Path(str(result.get("note_path") or "")).resolve(strict=False) if result.get("note_path") else note_path
+        if resolved_note_path is not None:
+            self.current_discipline_note_path = resolved_note_path
+        return {
+            "added_links": int(result.get("added_links", 0) or 0),
+            "note_path": str(resolved_note_path or ""),
+        }
+
+    def _append_annotation_links_to_discipline_note(self, *, discipline: str, linked_paths: List[str]) -> Dict[str, Any]:
+        vault_root = self._vault_root()
+        if not vault_root:
+            return {"added_links": 0, "note_path": ""}
+        note_path = self.current_discipline_note_path or self._resolve_discipline_note_path(discipline)
+        try:
+            result = append_annotation_note_links(
+                vault_root,
+                discipline,
+                linked_paths,
+                note_path=note_path,
+            )
+        except Exception as exc:
+            logger.warning("Falha ao atualizar nota de disciplina com links de anotação: %s", exc)
             return {"added_links": 0, "note_path": str(note_path or "")}
 
         resolved_note_path = Path(str(result.get("note_path") or "")).resolve(strict=False) if result.get("note_path") else note_path
@@ -4139,13 +4944,16 @@ class ReviewWorkspaceView(QWidget):
         if link_line in text:
             return
 
-        section_header = "## 🔗 Notas da Revisão"
-        if section_header not in text:
+        section_header = f"## {NerdIcons.LINK} Notas da Revisão"
+        header_pattern = re.compile(rf"(?m)^##\s+(?:{re.escape(LEGACY_LINK_ICON)}|{re.escape(NerdIcons.LINK)})\s+Notas da Revisão\s*$")
+        header_match = header_pattern.search(text)
+        if header_match is None:
             updated = text.rstrip() + f"\n\n{section_header}\n{link_line}\n"
             target.write_text(updated, encoding="utf-8")
             return
 
-        updated = text.replace(section_header, f"{section_header}\n{link_line}", 1)
+        existing_header = header_match.group(0)
+        updated = text.replace(existing_header, f"{existing_header}\n{link_line}", 1)
         target.write_text(updated, encoding="utf-8")
 
     def _open_pomodoro_menu(self):

@@ -38,6 +38,26 @@ def test_load_discipline_works_collects_primary_and_related_notes(tmp_path: Path
     assert works[0].note_targets == ("01-LEITURAS/Autor/Obra/Capitulo 1",)
 
 
+def test_load_discipline_works_resolves_short_obsidian_links(tmp_path: Path):
+    vault_root = tmp_path
+    discipline_note = vault_root / "05-DISCIPLINAS" / "etica.md"
+    primary = vault_root / "01-LEITURAS" / "Autor" / "Obra" / "📖 Obra.md"
+
+    _write(
+        discipline_note,
+        "# Disciplina: Ética\n\n## Obras\n- [[📖 Obra]]\n",
+    )
+    _write(
+        primary,
+        "---\nbook_id: obra-1\ntype: book\n---\n\n# Obra\n",
+    )
+
+    works = load_discipline_works(vault_root, "Ética")
+
+    assert len(works) == 1
+    assert works[0].primary_target == "01-LEITURAS/Autor/Obra/📖 Obra"
+
+
 def test_build_class_note_content_preserves_existing_annotations(tmp_path: Path):
     vault_root = tmp_path
     discipline_note = vault_root / "05-DISCIPLINAS" / "etica.md"
@@ -83,4 +103,4 @@ def test_build_class_note_relative_path_uses_production_folder():
 
     relative_path = build_class_note_relative_path("História da Filosofia", event_data)
 
-    assert relative_path == "03-PRODUÇÃO/Aula de História da Filosofia do dia 07-04-2026.md"
+    assert relative_path == "02-ANOTAÇÕES/Aula de História da Filosofia do dia 07-04-2026.md"

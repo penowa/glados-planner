@@ -185,6 +185,167 @@ class SmartAllocator:
         return plan
 
     @staticmethod
+    def redistribute_events(
+        events: List[Dict[str, Any]],
+        available_slots: List[Dict[str, Any]],
+        user_preferences: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Redistribui eventos em slots livres com heurística de qualidade/proximidade.
+
+        Args:
+            events: lista de eventos flexíveis
+            available_slots: slots livres já calculados
+            user_preferences: preferências opcionais do usuário
+
+        Returns:
+            dict com `placements` e `unscheduled`
+        """
+        preferences = user_preferences or {}
+        slots: List[Dict[str, Any]] = []
+        existing_day_load_minutes = {
+            str(key): int(value or 0)
+            for key, value in (preferences.get("existing_day_load_minutes", {}) or {}).items()
+        }
+        day_load_minutes = dict(existing_day_load_minutes)
+        max_daily_minutes = max(60, int(preferences.get("max_daily_minutes", 360) or 360))
+        spread_bonus = float(preferences.get("spread_bonus", 0.22) or 0.22)
+        same_day_bonus = float(preferences.get("same_day_bonus", 0.02) or 0.02)
+        proximity_penalty_per_day = float(preferences.get("proximity_penalty_per_day", 0.01) or 0.01)
+
+        candidate_days = {
+            SmartAllocator._parse_dt(str(slot.get("start") or "")).date().isoformat()
+            for slot in available_slots or []
+            if SmartAllocator._parse_dt(str(slot.get("start") or ""))
+        }
+        movable_total_minutes = sum(max(15, int(event.get("duration_minutes", 30) or 30)) for event in (events or []))
+        existing_total_minutes = sum(day_load_minutes.values())
+        effective_day_count = max(1, len(candidate_days))
+        target_daily_minutes = int(
+            preferences.get(
+                "target_daily_minutes",
+                max(60, min(max_daily_minutes, round((existing_total_minutes + movable_total_minutes) / effective_day_count))),
+            ) or 60
+        )
+
+        for slot in available_slots or []:
+            start_dt = SmartAllocator._parse_dt(str(slot.get("start") or ""))
+            end_dt = SmartAllocator._parse_dt(str(slot.get("end") or ""))
+            if not start_dt or not end_dt or end_dt <= start_dt:
+                continue
+            slots.append(
+                {
+                    "start": start_dt,
+                    "end": end_dt,
+                    "quality_score": float(slot.get("quality_score", 0.5) or 0.5),
+                }
+            )
+
+        ranked_events = sorted(
+            events or [],
+            key=lambda event: (
+                -int(event.get("priority", 1) or 1),
+                str(event.get("deadline") or "9999-12-31"),
+                str(event.get("start") or ""),
+            ),
+        )
+
+        placements: List[Dict[str, Any]] = []
+        unscheduled: List[Dict[str, Any]] = []
+
+        for event in ranked_events:
+            duration = max(15, int(event.get("duration_minutes", 30) or 30))
+            original_start = SmartAllocator._parse_dt(str(event.get("start") or ""))
+            deadline_dt = SmartAllocator._parse_dt(str(event.get("deadline") or ""))
+            best_idx = -1
+            best_score = float("-inf")
+
+            for idx, slot in enumerate(slots):
+                slot_start = slot["start"]
+                slot_end = slot["end"]
+                slot_duration = int((slot_end - slot_start).total_seconds() // 60)
+                if slot_duration < duration:
+                    continue
+                if deadline_dt and slot_start.date() > deadline_dt.date():
+                    continue
+
+                score = float(slot.get("quality_score", 0.5) or 0.5)
+                day_key = slot_start.date().isoformat()
+                current_day_load = int(day_load_minutes.get(day_key, 0) or 0)
+                if original_start:
+                    day_diff = abs((slot_start.date() - original_start.date()).days)
+                    score -= min(0.16, day_diff * proximity_penalty_per_day)
+                    if slot_start.date() == original_start.date():
+                        score += same_day_bonus
+                    if slot_start.weekday() == original_start.weekday():
+                        score += 0.01
+
+                if current_day_load <= 0:
+                    score += spread_bonus
+                else:
+                    load_ratio = current_day_load / max(1, target_daily_minutes)
+                    score -= min(0.45, load_ratio * 0.18)
+
+                projected_ratio = (current_day_load + duration) / max(1, max_daily_minutes)
+                if projected_ratio > 1.0:
+                    score -= min(0.60, (projected_ratio - 1.0) * 0.8)
+                elif projected_ratio < 0.65:
+                    score += min(0.12, (0.65 - projected_ratio) * 0.2)
+
+                preferred_time = str(event.get("preferred_time") or "").strip().lower()
+                if preferred_time:
+                    hour = slot_start.hour
+                    if ("manhã" in preferred_time or "manha" in preferred_time) and 8 <= hour < 12:
+                        score += 0.08
+                    elif "tarde" in preferred_time and 14 <= hour < 18:
+                        score += 0.08
+                    elif "noite" in preferred_time and 19 <= hour < 22:
+                        score += 0.08
+
+                if slot_start.weekday() >= 5:
+                    weekend_bias = float(
+                        preferences.get("weekend_bias", 0.92 if str(event.get("type") or "") == "leitura" else 0.96)
+                    )
+                    score *= weekend_bias
+
+                score += min(0.10, int(event.get("priority", 1) or 1) * 0.02)
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+
+            if best_idx < 0:
+                unscheduled.append(dict(event))
+                continue
+
+            chosen = slots.pop(best_idx)
+            alloc_start = chosen["start"]
+            alloc_end = alloc_start + timedelta(minutes=duration)
+            placements.append(
+                {
+                    "event_id": event.get("event_id"),
+                    "start": alloc_start.isoformat(),
+                    "end": alloc_end.isoformat(),
+                    "quality_score": round(best_score, 4),
+                }
+            )
+            day_load_minutes[alloc_start.date().isoformat()] = (
+                int(day_load_minutes.get(alloc_start.date().isoformat(), 0) or 0) + duration
+            )
+
+            if alloc_end < chosen["end"]:
+                slots.append(
+                    {
+                        "start": alloc_end,
+                        "end": chosen["end"],
+                        "quality_score": float(chosen.get("quality_score", 0.5) or 0.5),
+                    }
+                )
+
+        placements.sort(key=lambda item: str(item.get("start") or ""))
+        unscheduled.sort(key=lambda item: str(item.get("start") or ""))
+        return {"placements": placements, "unscheduled": unscheduled}
+
+    @staticmethod
     def _parse_dt(value: str) -> datetime | None:
         raw = str(value or "").strip().replace("Z", "+00:00")
         if not raw:

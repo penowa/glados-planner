@@ -10,6 +10,7 @@ from typing import Iterable, Optional
 DISCIPLINE_DIR = "05-DISCIPLINAS"
 AGENDA_SECTION_HEADER = "## Agenda"
 BOOKS_SECTION_HEADER = "## Obras"
+ANNOTATIONS_SECTION_HEADER = "## Anotações"
 LEGACY_BOOKS_SECTION_HEADER = "## Livro processado"
 
 
@@ -264,12 +265,31 @@ def _update_section_lines(
 ) -> str:
     prefix, sections = _normalize_discipline_note_structure(content, discipline)
     updated_sections: list[tuple[str, list[str]]] = []
+    found_header = False
     for header, body_lines in sections:
         if header == header_name:
+            found_header = True
             updated_sections.append((header, updater(list(body_lines))))
         else:
             updated_sections.append((header, body_lines))
+    if not found_header:
+        updated_sections.append((header_name, updater([])))
     return _join_note_parts(prefix, updated_sections)
+
+
+def _resolve_annotation_note_candidate(vault_root: Path, raw_path: object) -> Optional[Path]:
+    candidate = _resolve_book_note_candidate(vault_root, raw_path)
+    if candidate is None:
+        return None
+
+    try:
+        relative = candidate.relative_to(vault_root)
+    except Exception:
+        return None
+
+    if not relative.parts or relative.parts[0] not in {"02-ANOTAÇÕES", "02-ANOTACOES"}:
+        return None
+    return candidate
 
 
 def append_book_note_links(
@@ -314,6 +334,49 @@ def append_book_note_links(
         content,
         discipline,
         BOOKS_SECTION_HEADER,
+        lambda lines: list(lines) + new_lines,
+    )
+    target_note.write_text(updated, encoding="utf-8")
+    return {"added_links": len(new_lines), "note_path": str(target_note)}
+
+
+def append_annotation_note_links(
+    vault_root: Path,
+    discipline: str,
+    note_paths: Iterable[object],
+    *,
+    note_path: Optional[Path] = None,
+) -> dict[str, object]:
+    target_note = note_path or ensure_discipline_note(vault_root, discipline)
+    if not target_note:
+        return {"added_links": 0, "note_path": ""}
+
+    content = _read_note_text(target_note)
+
+    existing_targets: set[str] = set()
+    for token in re.findall(r"\[\[([^\]]+)\]\]", content):
+        normalized = token.split("|", 1)[0].strip().replace("\\", "/")
+        if normalized:
+            existing_targets.add(normalized)
+
+    new_lines: list[str] = []
+    for raw in note_paths:
+        candidate = _resolve_annotation_note_candidate(vault_root, raw)
+        if candidate is None:
+            continue
+        target = _book_link_target(vault_root, candidate)
+        if not target or target in existing_targets:
+            continue
+        existing_targets.add(target)
+        new_lines.append(f"- [[{target}|{candidate.stem}]]")
+
+    if not new_lines:
+        return {"added_links": 0, "note_path": str(target_note)}
+
+    updated = _update_section_lines(
+        content,
+        discipline,
+        ANNOTATIONS_SECTION_HEADER,
         lambda lines: list(lines) + new_lines,
     )
     target_note.write_text(updated, encoding="utf-8")

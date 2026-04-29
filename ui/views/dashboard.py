@@ -16,7 +16,8 @@ from ui.widgets.cards.upcoming_commitments_card import UpcomingCommitmentsCard
 from ui.widgets.cards.event_creation_card import EventCreationDialog
 from ui.widgets.dialogs.class_notes_dialog import ClassNotesDialog
 from ui.widgets.dialogs.weekly_event_editor_dialog import WeeklyEventEditorDialog
-from ui.utils.class_notes import build_class_note_content, build_class_note_relative_path
+from ui.utils.class_notes import upsert_class_note
+from ui.utils.nerd_icons import NerdIcons, nerd_font
 
 logger = logging.getLogger('GLaDOS.UI.Dashboard')
 
@@ -204,18 +205,19 @@ class DashboardView(QWidget):
         # Boas-vindas limpa
         self.greeting_label = QLabel(self.get_time_greeting())
         self.greeting_label.setObjectName("minimal_greeting")
-        self.greeting_label.setFont(QFont("FiraCode Nerd Font Propo", 18, QFont.Weight.Medium))
+        self.greeting_label.setFont(nerd_font(18, weight=QFont.Weight.Medium))
         
         # Data atual sutil
         self.date_label = QLabel(QDateTime.currentDateTime().toString("dddd, dd 'de' MMMM"))
         self.date_label.setObjectName("minimal_date")
-        self.date_label.setFont(QFont("FiraCode Nerd Font Propo", 10))
+        self.date_label.setFont(nerd_font(10))
         self.date_label.setStyleSheet("color: #8F8F8F;")
         
         # Botão de refresh
-        refresh_button = QPushButton("🔄")
+        refresh_button = QPushButton(NerdIcons.REFRESH)
         refresh_button.setObjectName("minimal_refresh_button")
         refresh_button.setFixedSize(32, 32)
+        refresh_button.setFont(nerd_font(14, weight=QFont.Weight.Medium))
         refresh_button.setToolTip("Atualizar dashboard")
         refresh_button.clicked.connect(self.refresh_data)
 
@@ -252,11 +254,11 @@ class DashboardView(QWidget):
         user_display_name = self.user_name or "Usuário"
         hour = QDateTime.currentDateTime().time().hour()
         if hour < 12:
-            return f"🌅 Bom dia {user_display_name}"
+            return f"{NerdIcons.COFFEE} Bom dia {user_display_name}"
         elif hour < 18:
-            return f"☀️ Boa tarde {user_display_name}"
+            return f"{NerdIcons.SUN} Boa tarde {user_display_name}"
         else:
-            return f"🌙 Boa noite {user_display_name}"
+            return f"{NerdIcons.MOON} Boa noite {user_display_name}"
     
     def setup_connections(self):
         """Configura conexões com controllers e cards"""
@@ -397,18 +399,18 @@ class DashboardView(QWidget):
         """Finalizar processamento com sucesso"""
         # Mostrar notificação
         title = result.get("title", "Livro")
-        self.show_notification(f"✓ '{title}' processado com sucesso!", "success")
+        self.show_notification(f"{NerdIcons.SUCCESS} '{title}' processado com sucesso!", "success")
 
         warnings = result.get("warnings", []) if isinstance(result, dict) else []
         if warnings:
-            self.show_notification(f"⚠️ {warnings[0]}", "warning")
+            self.show_notification(f"{NerdIcons.WARNING} {warnings[0]}", "warning")
         
         # Atualizar outras partes do dashboard se necessário
         self.refresh_data()
     
     def on_book_processing_failed(self, pipeline_id, error):
         """Tratar falha no processamento"""
-        self.show_notification(f"✗ Erro no processamento: {error[:100]}...", "error")
+        self.show_notification(f"{NerdIcons.ERROR} Erro no processamento: {error[:100]}...", "error")
 
     @pyqtSlot(str, dict)
     def on_book_scheduled(self, _book_id, scheduling_result):
@@ -417,7 +419,7 @@ class DashboardView(QWidget):
         if self.agenda_card and hasattr(self.agenda_card, "refresh"):
             self.agenda_card.refresh()
         if sessions > 0:
-            self.show_notification(f"📅 {sessions} sessão(ões) de leitura agendadas", "success")
+            self.show_notification(f"{NerdIcons.CALENDAR} {sessions} sessão(ões) de leitura agendadas", "success")
     
     def setup_timers(self):
         """Configura timers para atualizações"""
@@ -523,17 +525,17 @@ class DashboardView(QWidget):
         try:
             if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
                 self.agenda_card.refresh()
-            self.show_notification("✅ Evento criado com sucesso", "success")
+            self.show_notification(f"{NerdIcons.SUCCESS} Evento criado com sucesso", "success")
         except Exception as e:
             logger.error(f"Erro ao atualizar agenda: {e}")
-            self.show_notification(f"❌ Erro ao criar evento: {str(e)[:50]}", "error")
+            self.show_notification(f"{NerdIcons.ERROR} Erro ao criar evento: {str(e)[:50]}", "error")
     
     def handle_event_scheduled(self, event_id):
         """Manipular evento agendado (para leituras)"""
         logger.info(f"Evento agendado: {event_id}")
         
         if event_id.startswith('reading_'):
-            self.show_notification(f"📚 Sessões de leitura agendadas", "success")
+            self.show_notification(f"{NerdIcons.BOOK} Sessões de leitura agendadas", "success")
 
             if self.agenda_card and hasattr(self.agenda_card, 'refresh'):
                 try:
@@ -634,38 +636,14 @@ class DashboardView(QWidget):
         if dialog.exec() != dialog.DialogCode.Accepted or not dialog.selection:
             return
 
-        relative_path = build_class_note_relative_path(discipline, event_data)
-
         try:
-            existing_note = None
-            if self.vault_controller and hasattr(self.vault_controller, "get_note"):
-                existing_note = self.vault_controller.get_note(relative_path)
-            existing_content = str((existing_note or {}).get("content") or "")
-
-            frontmatter, content = build_class_note_content(
+            upsert_class_note(
+                vault_controller=self.vault_controller,
                 discipline=discipline,
                 event_data=event_data,
                 selected_works=dialog.selection.selected_works,
-                existing_content=existing_content,
             )
-
-            if existing_note and self.vault_controller and hasattr(self.vault_controller, "update_note"):
-                self.vault_controller.update_note(
-                    relative_path,
-                    content=content,
-                    frontmatter=frontmatter,
-                )
-            elif self.vault_controller and hasattr(self.vault_controller, "create_note"):
-                self.vault_controller.create_note(
-                    relative_path,
-                    content=content,
-                    frontmatter=frontmatter,
-                    tags=list(frontmatter.get("tags", [])),
-                )
-            else:
-                raise RuntimeError("VaultController indisponível para escrita.")
-
-            self.show_notification("📝 Nota de aula preparada em 03-PRODUÇÃO", "success")
+            self.show_notification(f"{NerdIcons.NOTE} Nota de aula preparada em 02-ANOTAÇÕES", "success")
         except Exception as exc:
             logger.error("Erro ao criar nota de aula: %s", exc)
             QMessageBox.warning(

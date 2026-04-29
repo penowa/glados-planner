@@ -9,10 +9,11 @@ from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 
 import yaml
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import QDate, QEvent, Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QAction, QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPixmap, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDateEdit,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -33,6 +34,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.widgets.cards.add_book_card import AddBookCard
+from ui.utils.citation_notes import backfill_citation_notes
+from ui.utils.nerd_icons import LEGACY_BOOK_FILE_PATTERNS, NerdIcons, nerd_font
 
 logger = logging.getLogger("GLaDOS.UI.LibraryView")
 
@@ -106,23 +109,30 @@ class ScheduleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Agendar sessões de leitura")
         self.setModal(True)
-        self.resize(360, 180)
+        self.resize(380, 210)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        self.pages_per_day = QSpinBox()
-        self.pages_per_day.setRange(1, 200)
-        self.pages_per_day.setValue(20)
+        self.deadline_input = QDateEdit()
+        self.deadline_input.setCalendarPopup(True)
+        self.deadline_input.setDisplayFormat("dd/MM/yyyy")
+        self.deadline_input.setMinimumDate(QDate.currentDate())
+        self.deadline_input.setDate(QDate.currentDate().addDays(30))
 
         self.strategy_combo = QComboBox()
         self.strategy_combo.addItem("Equilibrado", "balanced")
         self.strategy_combo.addItem("Intensivo", "intensive")
-        self.strategy_combo.addItem("Leve", "light")
+        self.strategy_combo.addItem("Leve", "spaced")
 
-        form.addRow("Páginas por dia:", self.pages_per_day)
+        hint = QLabel("A carga diária será calculada automaticamente com base no prazo.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #93A4C3;")
+
+        form.addRow("Data limite:", self.deadline_input)
         form.addRow("Estratégia:", self.strategy_combo)
         layout.addLayout(form)
+        layout.addWidget(hint)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -131,8 +141,8 @@ class ScheduleDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def values(self) -> tuple[int, str]:
-        return int(self.pages_per_day.value()), str(self.strategy_combo.currentData())
+    def values(self) -> tuple[str, str]:
+        return self.deadline_input.date().toString("yyyy-MM-dd"), str(self.strategy_combo.currentData())
 
 
 class LibraryBookTile(QFrame):
@@ -361,6 +371,7 @@ class LibraryView(QWidget):
         self.sort_mode = "recent"
         self.sort_toggle_button: Optional[QPushButton] = None
         self._render_retry_count = 0
+        self._citation_notes_backfill_done = False
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.timeout.connect(self._render_books_grid)
@@ -391,8 +402,9 @@ class LibraryView(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("📚 Biblioteca")
+        title = QLabel(f"{NerdIcons.BOOK} Biblioteca")
         title.setObjectName("library_title")
+        title.setFont(nerd_font(18, weight=QFont.Weight.Medium))
         subtitle = QLabel("Coleção visual inspirada em estantes editoriais")
         subtitle.setObjectName("library_subtitle")
 
@@ -831,7 +843,7 @@ class LibraryView(QWidget):
         return None
 
     def _find_index_note(self, book_dir: Path) -> Optional[Path]:
-        for pattern in ("📖 *.md", "📚 *.md", "*.md"):
+        for pattern in (*LEGACY_BOOK_FILE_PATTERNS, "*.md"):
             matches = sorted(book_dir.glob(pattern), key=lambda p: p.name.lower())
             if matches:
                 return matches[0]
@@ -1046,9 +1058,23 @@ class LibraryView(QWidget):
                 logger.error("Falha ao carregar biblioteca em %s: %s", root, exc)
         self._books_cache = books
         logger.info("Library refresh concluído | livros_total=%d | roots=%s", len(books), checked_roots)
+        self._run_citation_notes_backfill()
         if self.empty_label:
             self.empty_label.setToolTip("")
         self._render_books_grid()
+
+    def _run_citation_notes_backfill(self) -> None:
+        if self._citation_notes_backfill_done:
+            return
+        vault_root = self._vault_root()
+        if not vault_root:
+            return
+        try:
+            result = backfill_citation_notes(vault_root)
+            self._citation_notes_backfill_done = True
+            logger.info("Backfill de notas de citações concluído: %s", result)
+        except Exception as exc:
+            logger.warning("Falha no backfill de notas de citações: %s", exc)
 
     def _apply_status_and_search_filters(self, books: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         filtered = list(books)
@@ -1343,11 +1369,16 @@ class LibraryView(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        pages_per_day, strategy = dialog.values()
+        deadline, strategy = dialog.values()
         book_id = self._ensure_book_in_reading_manager(metadata)
 
         if self.agenda_controller and hasattr(self.agenda_controller, "schedule_reading"):
-            self.agenda_controller.schedule_reading(str(book_id), float(pages_per_day), strategy)
+            self.agenda_controller.schedule_reading(
+                str(book_id),
+                pages_per_day=0.0,
+                strategy=strategy,
+                deadline=deadline,
+            )
             self._set_schedule_feedback(book_dir, "Agendamento iniciado")
             QMessageBox.information(self, "Agendamento", "Agendamento iniciado com sucesso.")
             return
@@ -1357,6 +1388,10 @@ class LibraryView(QWidget):
                 book_id=str(book_id),
                 title=metadata.get("title"),
                 total_pages=int(metadata.get("total_pages", 0) or 0),
+                config={
+                    "deadline": deadline,
+                    "strategy": strategy,
+                },
             )
             if result.get("success"):
                 self._set_schedule_feedback(book_dir, "Agendado")

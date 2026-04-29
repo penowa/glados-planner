@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QSizePolicy, QFrame, QLabel, 
     QPushButton, QToolBar, QStatusBar, QMessageBox,
     QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox,
-    QGraphicsOpacityEffect
+    QGraphicsOpacityEffect, QSystemTrayIcon
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QPointF, QRect, QEasingCurve, QPropertyAnimation
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QResizeEvent
@@ -24,6 +24,7 @@ from ui.utils.shortcut_manager import ShortcutManager
 from ui.utils.responsive import ResponsiveManager
 from ui.utils.animation import FadeAnimation, SlideAnimation
 from ui.utils.config_manager import ConfigManager
+from ui.utils.system_notifier import SystemNotifier
 
 # Views
 from ui.views.dashboard import DashboardView
@@ -207,6 +208,7 @@ class MainWindow(QMainWindow):
         self.config = config
         self.config_manager = ConfigManager.instance()
         self.custom_user_name, self.custom_assistant_name = self._resolve_custom_identity(config)
+        self.system_notifier = SystemNotifier(self, "GLaDOS's Planner")
         
         # Estado interno
         self.current_theme = "philosophy_dark"
@@ -223,6 +225,8 @@ class MainWindow(QMainWindow):
         self._header_more_buttons: Dict[str, QPushButton] = {}
         self._header_more_geo_anim: QPropertyAnimation | None = None
         self._header_more_opacity_anim: QPropertyAnimation | None = None
+        self._tray_icon: QSystemTrayIcon | None = None
+        self._tray_menu: QMenu | None = None
         
         # Configurações de UI
         self.animations_enabled = True
@@ -253,7 +257,7 @@ class MainWindow(QMainWindow):
         self.move(x, y)
         
         # Ícone da aplicação
-        # self.setWindowIcon(QIcon("ui/resources/icons/app.png"))
+        self.setWindowIcon(self.system_notifier.icon())
         
         # Configurações de estado
         self.setAnimated(self.animations_enabled)
@@ -860,6 +864,8 @@ class MainWindow(QMainWindow):
     
     def setup_systems(self):
         """Configura sistemas auxiliares"""
+        self.setup_system_tray()
+
         # 1. Sistema responsivo
         ResponsiveManager.instance().register_window(self)
         
@@ -868,6 +874,57 @@ class MainWindow(QMainWindow):
         
         # 3. Verificar sistema ao iniciar
         QTimer.singleShot(1000, self.run_system_check)
+
+    def setup_system_tray(self):
+        """Configura o ícone da aplicação na tray do sistema."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            logger.info("System tray indisponivel neste ambiente.")
+            return
+
+        tray_icon = QSystemTrayIcon(self.windowIcon(), self)
+        tray_icon.setToolTip("GLaDOS's Planner")
+
+        tray_menu = QMenu(self)
+        open_agenda_action = tray_menu.addAction("Abrir agenda")
+        minimize_action = tray_menu.addAction("Minimizar para a tray")
+        tray_menu.addSeparator()
+        close_action = tray_menu.addAction("Fechar aplicação")
+
+        open_agenda_action.triggered.connect(self.show_agenda_from_tray)
+        minimize_action.triggered.connect(self.minimize_to_tray)
+        close_action.triggered.connect(self.close_application)
+
+        tray_icon.setContextMenu(tray_menu)
+        tray_icon.activated.connect(self._on_tray_activated)
+        tray_icon.show()
+
+        self._tray_icon = tray_icon
+        self._tray_menu = tray_menu
+        self.system_notifier.set_tray_icon(tray_icon)
+
+    @pyqtSlot(QSystemTrayIcon.ActivationReason)
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason):
+        """Abre a agenda no clique principal da tray."""
+        if reason in {
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        }:
+            self.show_agenda_from_tray()
+
+    def show_agenda_from_tray(self):
+        """Exibe a janela principal focando a view da agenda."""
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+
+        self.raise_()
+        self.activateWindow()
+        self.change_view("agenda")
+
+    def minimize_to_tray(self):
+        """Oculta a janela principal, mantendo a aplicação na tray."""
+        self.hide()
     
     def setup_shortcuts(self):
         """Configura atalhos de teclado globais"""
@@ -1202,11 +1259,7 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            self.cleanup()
             self.close()
-            # Fechar completamente a aplicação
-            from PyQt6.QtWidgets import QApplication
-            QApplication.instance().quit()
 
     def open_session_quick_access(self):
         """Acesso alternativo para a SessionView."""
@@ -1735,7 +1788,7 @@ class MainWindow(QMainWindow):
             evening_action.setEnabled(evening_pending)
             menu.addSeparator()
 
-        system_notifications_action = menu.addAction("🔔 Ver notificações do sistema")
+        system_notifications_action = menu.addAction("📜 Histórico de notificações")
 
         if self._pending_review_prompts:
             menu.addSeparator()
@@ -1769,8 +1822,9 @@ class MainWindow(QMainWindow):
         """Mostra painel com notificações do sistema"""
         from ui.widgets.notifications import NotificationPanel
         
-        panel = NotificationPanel()
+        panel = NotificationPanel(self.event_bus, self)
         panel.set_notifications(self.event_bus.get_recent_notifications())
+        self._notification_panel = panel
         
         # Posicionar abaixo do botão
         pos = self.notification_button.mapToGlobal(QPoint(0, self.notification_button.height()))
@@ -1906,31 +1960,45 @@ class MainWindow(QMainWindow):
     
     def show_error_notification(self, title: str, message: str):
         """Mostra notificação de erro"""
-        from ui.widgets.notifications import NotificationToast
-        
-        toast = NotificationToast('error', title, message, self)
-        toast.show()
+        self._show_system_notification('error', title, message)
     
     def show_warning_notification(self, title: str, message: str):
         """Mostra notificação de aviso"""
-        from ui.widgets.notifications import NotificationToast
-        
-        toast = NotificationToast('warning', title, message, self)
-        toast.show()
+        self._show_system_notification('warning', title, message)
     
     def show_info_notification(self, title: str, message: str):
         """Mostra notificação de informação"""
-        from ui.widgets.notifications import NotificationToast
-        
-        toast = NotificationToast('info', title, message, self)
-        toast.show()
+        self._show_system_notification('info', title, message)
     
     def show_success_notification(self, title: str, message: str):
         """Mostra notificação de sucesso"""
-        from ui.widgets.notifications import NotificationToast
-        
-        toast = NotificationToast('success', title, message, self)
-        toast.show()
+        self._show_system_notification('success', title, message)
+
+    def _show_system_notification(self, notif_type: str, title: str, message: str):
+        """Encaminha notificações visuais ao sistema operacional."""
+        normalized_title = str(title or "Notificação").strip() or "Notificação"
+        normalized_message = str(message or "").strip()
+        status_message = (
+            f"{normalized_title}: {normalized_message}"
+            if normalized_message
+            else normalized_title
+        )
+
+        if hasattr(self, "status_bar") and self.status_bar:
+            self.status_bar.showMessage(status_message, 5000)
+
+        delivered = self.system_notifier.notify(
+            notif_type=notif_type,
+            title=normalized_title,
+            message=normalized_message,
+            timeout_ms=5000,
+        )
+        if not delivered:
+            logger.warning(
+                "Notificação nativa indisponível (%s): %s",
+                notif_type,
+                normalized_title,
+            )
     
     def show_help(self):
         """Mostra diálogo de ajuda"""
@@ -2280,6 +2348,9 @@ class MainWindow(QMainWindow):
         
         # Executar limpeza
         self.cleanup()
+
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
         
         # Aceitar fechamento
         event.accept()
