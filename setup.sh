@@ -3,7 +3,7 @@
 
 set -e  # Exit on error
 
-echo "🚀 Configurando Philosophy Planner..."
+echo "🚀 Configurando Glados Planner..."
 
 # Colors for output
 RED='\033[0;31m'
@@ -38,8 +38,8 @@ cat > config/settings.yaml << 'EOF'
 # Philosophy Planner - Configuration
 
 app:
-  name: "Philosophy Planner"
-  version: "0.1.0"
+  name: "Planner"
+  version: "1.0.0"
   debug: true
   log_level: "INFO"
 

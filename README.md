@@ -15,12 +15,11 @@
 
 ##  Features
 
--  **Gestão Inteligente de Leituras** - Cronograma, progresso, revisão espaçada
+-  **Gestão de Leituras** - Cronograma, progresso, revisão espaçada, gestão de biblioteca
 -  **Agenda** - Calendário acadêmico integrado
 -  **Assistente LLM Local** - Análise de textos com modelos privados
 -  **Integração Obsidian** - Sincronia bidirecional com seu vault
--  **Pomodoro** - Foco
--  **Estatísticas** - Analise de produtividade e aprendizado
+-  **Estatísticas** - Análise de produtividade e aprendizado
 
 ## Quick Start
 
