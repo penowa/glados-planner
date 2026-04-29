@@ -1062,7 +1062,13 @@ class MainWindow(QMainWindow):
 
     def should_show_onboarding_dialog(self) -> bool:
         """Verifica preferencia persistida para exibicao do onboarding."""
-        required_onboarding_version = "tutorial_v2"
+        try:
+            from ui.widgets.dialogs.onboarding_dialog import OnboardingDialog
+            required_onboarding_version = str(
+                getattr(OnboardingDialog, "ONBOARDING_VERSION", "tutorial_v3") or "tutorial_v3"
+            ).strip()
+        except Exception:
+            required_onboarding_version = "tutorial_v3"
         current_onboarding_version = str(
             self.config_manager.get("ui/onboarding_dialog_version", "")
         ).strip()

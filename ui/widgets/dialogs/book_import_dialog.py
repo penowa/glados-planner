@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
                             QLabel, QLineEdit, QComboBox, QCheckBox, 
                             QGroupBox, QPushButton, QSpinBox, QTextEdit,
                             QTabWidget, QWidget, QFormLayout, QDateTimeEdit,
-                            QMessageBox, QScrollArea)
+                            QMessageBox, QScrollArea, QProgressBar)
 from PyQt6.QtCore import Qt, pyqtSignal, QDateTime
 from PyQt6.QtGui import QFont, QIcon
 import os
@@ -27,16 +27,29 @@ class BookImportDialog(QDialog):
     import_confirmed = pyqtSignal(dict)  # Configurações confirmadas
     import_cancelled = pyqtSignal()
     
-    def __init__(self, file_path, initial_metadata=None, parent=None):
+    def __init__(self, file_path, initial_metadata=None, parent=None, book_controller=None):
         super().__init__(parent)
         self.file_path = file_path
         self.initial_metadata = initial_metadata or {}
+        self.book_controller = book_controller
         self.field_confidence_labels = {}
         self.confidence_summary_label = None
         self._vault_root = self._resolve_vault_root()
+        self.processing_summary_label = None
+        self.processing_recommendations = None
+        self.runtime_group = None
+        self.runtime_stage_label = None
+        self.runtime_message_label = None
+        self.runtime_progress_bar = None
+        self.runtime_log = None
+        self.current_pipeline_id = None
+        self._awaiting_pipeline_start = False
+        self._processing_active = False
+        self._processing_finished = False
         
         self.setup_ui()
         self.load_initial_data()
+        self._connect_processing_signals()
         
         self.setWindowTitle("Configurar Importação de Livro")
         self.setMinimumSize(700, 600)
@@ -67,6 +80,8 @@ class BookImportDialog(QDialog):
         self.setup_scheduling_tab()
         
         main_layout.addWidget(self.tab_widget)
+
+        self._setup_runtime_feedback(main_layout)
         
         # Botões de ação
         button_layout = QHBoxLayout()
@@ -83,6 +98,45 @@ class BookImportDialog(QDialog):
         button_layout.addWidget(self.import_button)
         
         main_layout.addLayout(button_layout)
+
+    def _setup_runtime_feedback(self, parent_layout):
+        """Adiciona área de progresso do processamento."""
+        self.runtime_group = QGroupBox("Andamento da Importação")
+        self.runtime_group.setVisible(False)
+        runtime_layout = QVBoxLayout(self.runtime_group)
+
+        self.runtime_stage_label = QLabel("Aguardando início...")
+        self.runtime_stage_label.setStyleSheet("font-weight: 600;")
+        runtime_layout.addWidget(self.runtime_stage_label)
+
+        self.runtime_progress_bar = QProgressBar()
+        self.runtime_progress_bar.setRange(0, 100)
+        self.runtime_progress_bar.setValue(0)
+        runtime_layout.addWidget(self.runtime_progress_bar)
+
+        self.runtime_message_label = QLabel("O progresso aparecerá aqui quando a importação começar.")
+        self.runtime_message_label.setWordWrap(True)
+        self.runtime_message_label.setStyleSheet("color: #707070; font-size: 11px;")
+        runtime_layout.addWidget(self.runtime_message_label)
+
+        self.runtime_log = QTextEdit()
+        self.runtime_log.setReadOnly(True)
+        self.runtime_log.setMinimumHeight(90)
+        runtime_layout.addWidget(self.runtime_log)
+
+        parent_layout.addWidget(self.runtime_group)
+
+    def _connect_processing_signals(self):
+        """Conecta o diálogo aos sinais do controller para mostrar progresso real."""
+        if not self.book_controller:
+            return
+        try:
+            self.book_controller.book_processing_started.connect(self._on_processing_started)
+            self.book_controller.book_processing_progress.connect(self._on_processing_progress)
+            self.book_controller.book_processing_completed.connect(self._on_processing_completed)
+            self.book_controller.book_processing_failed.connect(self._on_processing_failed)
+        except Exception as exc:
+            logger.warning("Falha ao conectar sinais de progresso do livro: %s", exc)
         
     def setup_metadata_tab(self):
         """Configurar tab de metadados"""
@@ -229,6 +283,7 @@ class BookImportDialog(QDialog):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["Padrão", "Rápido (Rascunho)", "Alta Qualidade", "Acadêmico"])
         self.quality_combo.setCurrentText("Padrão")
+        self.quality_combo.currentTextChanged.connect(self._update_processing_insights)
         quality_layout.addWidget(QLabel("Nível de qualidade:"))
         quality_layout.addWidget(self.quality_combo)
         
@@ -241,6 +296,7 @@ class BookImportDialog(QDialog):
         
         self.ocr_checkbox = QCheckBox("Usar OCR se necessário (para PDFs escaneados)")
         self.ocr_checkbox.setChecked(True)
+        self.ocr_checkbox.toggled.connect(self._update_processing_insights)
         extraction_layout.addWidget(self.ocr_checkbox)
         
         self.llm_enhancement_checkbox = QCheckBox("Usar IA para aprimorar extração (recomendado)")
@@ -248,10 +304,38 @@ class BookImportDialog(QDialog):
         extraction_layout.addWidget(self.llm_enhancement_checkbox)
         
         self.preserve_layout_checkbox = QCheckBox("Preservar layout original (imagens, tabelas)")
+        self.preserve_layout_checkbox.toggled.connect(self._update_processing_insights)
         extraction_layout.addWidget(self.preserve_layout_checkbox)
         
         extraction_group.setLayout(extraction_layout)
         layout.addWidget(extraction_group)
+
+        ocr_group = QGroupBox("OCR e Retomada")
+        ocr_layout = QVBoxLayout()
+
+        self.scan_heavy_checkbox = QCheckBox("Priorizar modo OCR pesado para PDFs escaneados")
+        self.scan_heavy_checkbox.setChecked(False)
+        self.scan_heavy_checkbox.toggled.connect(self._update_processing_insights)
+        ocr_layout.addWidget(self.scan_heavy_checkbox)
+
+        self.resume_ocr_checkbox = QCheckBox("Retomar OCR salvo automaticamente quando houver cache")
+        self.resume_ocr_checkbox.setChecked(True)
+        self.resume_ocr_checkbox.toggled.connect(self._update_processing_insights)
+        ocr_layout.addWidget(self.resume_ocr_checkbox)
+
+        self.processing_summary_label = QLabel("Analisando estratégia de processamento...")
+        self.processing_summary_label.setWordWrap(True)
+        self.processing_summary_label.setStyleSheet("color: #707070; font-size: 11px;")
+        ocr_layout.addWidget(self.processing_summary_label)
+
+        self.processing_recommendations = QTextEdit()
+        self.processing_recommendations.setReadOnly(True)
+        self.processing_recommendations.setMinimumHeight(110)
+        self.processing_recommendations.setPlaceholderText("Recomendações de OCR e processamento aparecerão aqui.")
+        ocr_layout.addWidget(self.processing_recommendations)
+
+        ocr_group.setLayout(ocr_layout)
+        layout.addWidget(ocr_group)
         
         # Estatísticas do arquivo
         stats_group = QGroupBox("Informações do Arquivo")
@@ -368,6 +452,11 @@ class BookImportDialog(QDialog):
         self.start_date_edit.setDateTime(QDateTime.currentDateTime().addDays(1))
         self.start_date_edit.setCalendarPopup(True)
         reading_layout.addRow("Data de início:", self.start_date_edit)
+
+        self.deadline_date_edit = QDateTimeEdit()
+        self.deadline_date_edit.setDateTime(QDateTime.currentDateTime().addDays(30))
+        self.deadline_date_edit.setCalendarPopup(True)
+        reading_layout.addRow("Data limite:", self.deadline_date_edit)
         
         self.reading_time_combo = QComboBox()
         self.reading_time_combo.addItems([
@@ -392,6 +481,9 @@ class BookImportDialog(QDialog):
             "Leve (apenas finais de semana)",
             "Personalizado"
         ])
+        self.start_date_edit.dateTimeChanged.connect(self._update_schedule_estimate)
+        self.deadline_date_edit.dateTimeChanged.connect(self._update_schedule_estimate)
+        self.pages_per_day_spin.valueChanged.connect(self._update_schedule_estimate)
         strategy_layout.addWidget(QLabel("Estratégia:"))
         strategy_layout.addWidget(self.strategy_combo)
         
@@ -446,6 +538,11 @@ class BookImportDialog(QDialog):
 
             requires_ocr = bool(self.initial_metadata.get("requires_ocr", False))
             self.ocr_checkbox.setChecked(requires_ocr)
+            self.scan_heavy_checkbox.setChecked(requires_ocr)
+            self.preserve_layout_checkbox.setChecked(bool(self.initial_metadata.get("preserve_layout", requires_ocr)))
+
+            if requires_ocr and self.quality_combo.currentText() == "Padrão":
+                self.quality_combo.setCurrentText("Alta Qualidade")
             
             # Calcular tempo estimado baseado em páginas
             if pages > 0:
@@ -459,9 +556,264 @@ class BookImportDialog(QDialog):
                 pages_per_day = self.pages_per_day_spin.value()
                 days = pages / pages_per_day
                 self.estimate_label.setText(f"Duração estimada: {days:.0f} dias")
-        
+        self._update_schedule_estimate()
+
+        self._update_processing_insights()
+
+    def _metadata_recommendations(self) -> list[str]:
+        """Compõe recomendações a partir dos metadados iniciais."""
+        recommendations = list(self.initial_metadata.get("recommendations", []) or [])
+        pages = int(self.initial_metadata.get("pages", 0) or 0)
+        requires_ocr = bool(self.initial_metadata.get("requires_ocr", False))
+
+        if requires_ocr:
+            recommendations.append(
+                "Este arquivo parece escaneado. O processamento deve usar OCR pesado e pode levar mais tempo."
+            )
+            recommendations.append(
+                "Se a importação parar no meio, uma nova execução poderá continuar do progresso salvo."
+            )
+        if pages >= 300:
+            recommendations.append(
+                "Livro longo detectado. Considere processar em qualidade alta apenas se a extração padrão ficar ruim."
+            )
+        if not recommendations:
+            recommendations.append("PDF/EPUB com perfil comum. O processamento padrão deve ser suficiente.")
+
+        deduped = []
+        seen = set()
+        for item in recommendations:
+            normalized = str(item).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
+
+    def _update_processing_insights(self):
+        """Atualiza resumo de OCR/processamento conforme estado do diálogo."""
+        if not self.processing_summary_label or not self.processing_recommendations:
+            return
+
+        requires_ocr = bool(self.initial_metadata.get("requires_ocr", False))
+        pages = int(self.initial_metadata.get("pages", 0) or 0)
+        quality = self.quality_combo.currentText()
+        use_ocr = self.ocr_checkbox.isChecked()
+        heavy_mode = self.scan_heavy_checkbox.isChecked()
+        resume_mode = self.resume_ocr_checkbox.isChecked()
+        preserve_layout = self.preserve_layout_checkbox.isChecked()
+
+        if requires_ocr and use_ocr:
+            summary = (
+                "PDF escaneado detectado. O importador deve usar OCR com cache por página e "
+                "retomada automática do progresso."
+            )
+        elif requires_ocr and not use_ocr:
+            summary = (
+                "PDF escaneado detectado, mas o OCR foi desativado. A extração de texto provavelmente falhará."
+            )
+        else:
+            summary = "Texto nativo detectado ou OCR não parece obrigatório. O fluxo padrão deve ser usado."
+
+        details = [
+            f"Qualidade selecionada: {quality}.",
+            "Modo OCR pesado: ativado." if heavy_mode else "Modo OCR pesado: automático.",
+            "Retomada de OCR: ativada." if resume_mode else "Retomada de OCR: desativada.",
+            "Preservação de layout: ativada." if preserve_layout else "Preservação de layout: desativada.",
+        ]
+
+        if pages:
+            if requires_ocr:
+                details.append(
+                    f"Estimativa inicial: {pages} página(s). Em scan pesado, a primeira execução pode ser lenta."
+                )
+            else:
+                details.append(f"Estimativa inicial: {pages} página(s).")
+
+        self.processing_summary_label.setText(summary + "\n\n" + " ".join(details))
+
+        recommendations = self._metadata_recommendations()
+        if requires_ocr and use_ocr and resume_mode:
+            recommendations.append(
+                "O cache de OCR será reaproveitado em novas tentativas para evitar retrabalho."
+            )
+        if requires_ocr and quality == "Acadêmico":
+            recommendations.append(
+                "O modo acadêmico prioriza fidelidade, mas pode aumentar bastante o tempo de processamento."
+            )
+        elif requires_ocr and quality == "Rápido (Rascunho)":
+            recommendations.append(
+                "O modo rascunho reduz custo, mas não é indicado para PDFs escaneados difíceis."
+            )
+
+        self.processing_recommendations.setPlainText(
+            "\n".join(f"• {item}" for item in recommendations)
+        )
+
+    def _update_schedule_estimate(self):
+        """Atualiza estimativa do plano de leitura com base no prazo."""
+        if not hasattr(self, "estimate_label"):
+            return
+
+        pages = int(self.initial_metadata.get("pages", 0) or 0)
+        start_dt = self.start_date_edit.dateTime()
+        deadline_dt = self.deadline_date_edit.dateTime()
+        if deadline_dt < start_dt:
+            self.estimate_label.setText("Duração estimada: ajuste a data limite para depois do início")
+            return
+
+        days_window = max(1, start_dt.daysTo(deadline_dt) + 1)
+        if pages <= 0:
+            self.estimate_label.setText(f"Janela de leitura: {days_window} dia(s)")
+            return
+
+        suggested_pages = max(1, (pages + days_window - 1) // days_window)
+        manual_pages = int(self.pages_per_day_spin.value() or 1)
+        self.estimate_label.setText(
+            f"Janela de leitura: {days_window} dia(s) | "
+            f"Meta sugerida para cumprir o prazo: {suggested_pages} pág/dia | "
+            f"Meta atual: {manual_pages} pág/dia"
+        )
+
+    def _append_runtime_log(self, text: str):
+        """Acrescenta mensagem ao log do processamento."""
+        if not self.runtime_log or not text:
+            return
+        existing = self.runtime_log.toPlainText().strip()
+        self.runtime_log.setPlainText((existing + "\n" + text).strip() if existing else text)
+        cursor = self.runtime_log.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.runtime_log.setTextCursor(cursor)
+
+    def _stage_bounds(self, stage: str) -> tuple[int, int]:
+        """Mapeia estágio do pipeline para faixa do progresso global."""
+        mapping = {
+            "initialization": (0, 8),
+            "analysis": (8, 18),
+            "extraction": (18, 70),
+            "structuring": (70, 82),
+            "llm_enhancement": (82, 90),
+            "integration": (90, 97),
+            "scheduling": (97, 100),
+            "completed": (100, 100),
+        }
+        return mapping.get(stage, (0, 100))
+
+    def _overall_progress(self, stage: str, percent: int) -> int:
+        """Converte progresso do estágio em progresso global."""
+        start, end = self._stage_bounds(stage)
+        if end <= start:
+            return max(0, min(100, end))
+        bounded = max(0, min(100, int(percent)))
+        span = end - start
+        return max(0, min(100, start + round(span * (bounded / 100))))
+
+    def _friendly_stage_name(self, stage: str) -> str:
+        """Nome amigável do estágio atual."""
+        names = {
+            "initialization": "Inicializando",
+            "analysis": "Analisando arquivo",
+            "extraction": "Extraindo conteúdo",
+            "structuring": "Estruturando notas",
+            "llm_enhancement": "Aprimorando com IA",
+            "integration": "Integrando ao sistema",
+            "scheduling": "Agendando leitura",
+            "completed": "Concluído",
+        }
+        return names.get(stage or "", stage or "Processando")
+
+    def _set_inputs_enabled(self, enabled: bool):
+        """Habilita/desabilita edição durante o processamento."""
+        self.tab_widget.setEnabled(enabled)
+        self.import_button.setEnabled(enabled or self._processing_finished)
+
+    def _set_runtime_waiting(self):
+        """Mostra feedback de espera antes do pipeline emitir o primeiro evento."""
+        if not self.runtime_group:
+            return
+        self.runtime_group.setVisible(True)
+        self.runtime_progress_bar.setValue(2)
+        self.runtime_stage_label.setText("Preparando importação...")
+        self.runtime_message_label.setText(
+            "O processamento está sendo iniciado. Você pode acompanhar o andamento aqui ou fechar e deixá-lo em segundo plano."
+        )
+        self.runtime_log.clear()
+        self._append_runtime_log("Importação solicitada. Aguardando início do pipeline...")
+
+    def _finalize_runtime_ui(self, success: bool, message: str):
+        """Atualiza a UI ao fim do processamento."""
+        self._processing_active = False
+        self._processing_finished = True
+        self._awaiting_pipeline_start = False
+        self.runtime_group.setVisible(True)
+        self.runtime_progress_bar.setValue(100 if success else max(self.runtime_progress_bar.value(), 1))
+        self.runtime_stage_label.setText("Importação concluída" if success else "Importação com falha")
+        self.runtime_message_label.setText(message)
+        self.import_button.setText("Fechar")
+        self.import_button.setEnabled(True)
+        self.cancel_button.setText("Fechar")
+        self._append_runtime_log(message)
+
+    def _on_processing_started(self, pipeline_id: str, file_name: str, settings: dict):
+        """Recebe o início do pipeline e ativa a barra de progresso."""
+        target_path = str((settings or {}).get("file_path") or "").strip()
+        if os.path.abspath(target_path) != os.path.abspath(str(self.file_path)):
+            return
+        if not self._awaiting_pipeline_start and self.current_pipeline_id != pipeline_id:
+            return
+
+        self.current_pipeline_id = pipeline_id
+        self._processing_active = True
+        self._awaiting_pipeline_start = False
+        self.runtime_group.setVisible(True)
+        self.runtime_progress_bar.setValue(3)
+        self.runtime_stage_label.setText("Inicializando")
+        self.runtime_message_label.setText(f"Pipeline {pipeline_id} iniciado para {file_name}.")
+        self.cancel_button.setText("Fechar em segundo plano")
+        self.import_button.setEnabled(False)
+        self._append_runtime_log(f"Pipeline {pipeline_id} iniciado.")
+
+    def _on_processing_progress(self, pipeline_id: str, stage: str, percent: int, message: str):
+        """Atualiza barra e mensagens conforme o pipeline avança."""
+        if pipeline_id != self.current_pipeline_id:
+            return
+
+        self.runtime_group.setVisible(True)
+        self.runtime_stage_label.setText(self._friendly_stage_name(stage))
+        self.runtime_progress_bar.setValue(self._overall_progress(stage, percent))
+        self.runtime_message_label.setText(message or self._friendly_stage_name(stage))
+        self._append_runtime_log(f"{self._friendly_stage_name(stage)}: {message or f'{percent}%'}")
+
+    def _on_processing_completed(self, pipeline_id: str, result: dict):
+        """Finaliza o monitoramento quando a importação termina com sucesso."""
+        if pipeline_id != self.current_pipeline_id:
+            return
+
+        warnings = list((result or {}).get("warnings", []) or [])
+        title = str((result or {}).get("title") or self.title_input.text().strip() or "Livro")
+        message = f"'{title}' foi processado com sucesso."
+        if warnings:
+            message += f" Aviso: {warnings[0]}"
+            for warning in warnings:
+                self._append_runtime_log(f"Aviso: {warning}")
+
+        self._set_inputs_enabled(False)
+        self._finalize_runtime_ui(True, message)
+
+    def _on_processing_failed(self, pipeline_id: str, error: str):
+        """Exibe falha do pipeline e permite ao usuário fechar o diálogo."""
+        if pipeline_id != self.current_pipeline_id:
+            return
+
+        self._set_inputs_enabled(False)
+        self._finalize_runtime_ui(False, f"Falha no processamento: {error}")
+
     def confirm_import(self):
         """Confirmar importação com as configurações selecionadas"""
+        if self._processing_finished:
+            self.accept()
+            return
+
         # Validar dados obrigatórios
         if not self.title_input.text().strip():
             QMessageBox.warning(self, "Atenção", "Por favor, insira um título para o livro.")
@@ -482,6 +834,16 @@ class BookImportDialog(QDialog):
 
         if discipline_name:
             self._ensure_discipline_exists(discipline_name)
+
+        if self.deadline_date_edit.dateTime() < self.start_date_edit.dateTime():
+            QMessageBox.warning(
+                self,
+                "Prazo inválido",
+                "A data limite da leitura deve ser igual ou posterior à data de início.",
+            )
+            self.tab_widget.setCurrentIndex(3)
+            self.deadline_date_edit.setFocus()
+            return
             
         # Coletar todas as configurações
         config = {
@@ -500,6 +862,8 @@ class BookImportDialog(QDialog):
             "use_ocr": self.ocr_checkbox.isChecked(),
             "use_llm": self.llm_enhancement_checkbox.isChecked(),
             "preserve_layout": self.preserve_layout_checkbox.isChecked(),
+            "scan_heavy_mode": self.scan_heavy_checkbox.isChecked(),
+            "resume_ocr": self.resume_ocr_checkbox.isChecked(),
             
             # Notas
             "note_structure": "Automático: completo + capítulos + metadados",
@@ -511,17 +875,28 @@ class BookImportDialog(QDialog):
             "auto_schedule": self.auto_schedule_checkbox.isChecked(),
             "pages_per_day": self.pages_per_day_spin.value(),
             "start_date": self.start_date_edit.dateTime().toString(Qt.DateFormat.ISODate),
+            "deadline": self.deadline_date_edit.dateTime().date().toString("yyyy-MM-dd"),
             "preferred_time": self.reading_time_combo.currentText(),
             "strategy": self.strategy_combo.currentText(),
             
             # Arquivo
             "file_path": self.file_path,
-            "file_name": os.path.basename(self.file_path)
+            "file_name": os.path.basename(self.file_path),
+            "detected_requires_ocr": bool(self.initial_metadata.get("requires_ocr", False)),
+            "processing_recommendations": self._metadata_recommendations(),
         }
         
         # Emitir sinal com configurações
+        if self.book_controller:
+            self._awaiting_pipeline_start = True
+            self._processing_finished = False
+            self.current_pipeline_id = None
+            self._set_inputs_enabled(False)
+            self._set_runtime_waiting()
+            self.import_button.setText("Importando...")
         self.import_confirmed.emit(config)
-        self.accept()
+        if not self.book_controller:
+            self.accept()
 
     def _resolve_vault_root(self):
         candidates = [getattr(getattr(core_settings, "paths", None), "vault", "")]
@@ -561,5 +936,6 @@ class BookImportDialog(QDialog):
         
     def reject(self):
         """Cancelar importação"""
-        self.import_cancelled.emit()
+        if not self._processing_active and not self._processing_finished:
+            self.import_cancelled.emit()
         super().reject()

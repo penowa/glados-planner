@@ -454,12 +454,12 @@ class EventCreationCard(PhilosophyCard):
         self.recurrence_combo.currentIndexChanged.connect(
             lambda idx: self.recurrence_stack.setCurrentIndex(idx)
         )
-        
+
         # Conecta mudanças de datas/tempos
-        self.start_date_input.dateTimeChanged.connect(self._update_duration)
-        self.start_time_input.timeChanged.connect(self._update_duration)
-        self.end_date_input.dateTimeChanged.connect(self._update_duration)
-        self.end_time_input.timeChanged.connect(self._update_duration)
+        self.start_date_input.dateTimeChanged.connect(self._on_start_datetime_changed)
+        self.start_time_input.timeChanged.connect(self._on_start_time_changed)
+        self.end_date_input.dateTimeChanged.connect(self._on_end_datetime_changed)
+        self.end_time_input.timeChanged.connect(self._on_end_time_changed)
         self.all_day_check.toggled.connect(self._on_all_day_toggled)
         
         # Conecta seleção de livro
@@ -561,15 +561,55 @@ class EventCreationCard(PhilosophyCard):
         if checked:
             # Configura para dia inteiro (00:00 - 23:59)
             start_date = self.start_date_input.date()
+            self.start_date_input.setDate(start_date)
             self.start_time_input.setTime(QTime(0, 0))
             self.end_date_input.setDate(start_date)
             self.end_time_input.setTime(QTime(23, 59))
             self._update_duration()
+
+    def _build_datetime_from_inputs(self, date_input, time_input) -> QDateTime:
+        """Combina data do QDateTimeEdit com hora do QTimeEdit correspondente."""
+        base_dt = date_input.dateTime()
+        return QDateTime(base_dt.date(), time_input.time())
+
+    def _get_start_end_datetimes(self) -> Tuple[QDateTime, QDateTime]:
+        """Retorna início e fim já sincronizados entre campos de data e hora."""
+        return (
+            self._build_datetime_from_inputs(self.start_date_input, self.start_time_input),
+            self._build_datetime_from_inputs(self.end_date_input, self.end_time_input),
+        )
+
+    def _on_start_datetime_changed(self, value: QDateTime):
+        self.start_time_input.blockSignals(True)
+        self.start_time_input.setTime(value.time())
+        self.start_time_input.blockSignals(False)
+        self._update_duration()
+
+    def _on_end_datetime_changed(self, value: QDateTime):
+        self.end_time_input.blockSignals(True)
+        self.end_time_input.setTime(value.time())
+        self.end_time_input.blockSignals(False)
+        self._update_duration()
+
+    def _on_start_time_changed(self, value: QTime):
+        current_dt = self.start_date_input.dateTime()
+        if current_dt.time() != value:
+            self.start_date_input.blockSignals(True)
+            self.start_date_input.setDateTime(QDateTime(current_dt.date(), value))
+            self.start_date_input.blockSignals(False)
+        self._update_duration()
+
+    def _on_end_time_changed(self, value: QTime):
+        current_dt = self.end_date_input.dateTime()
+        if current_dt.time() != value:
+            self.end_date_input.blockSignals(True)
+            self.end_date_input.setDateTime(QDateTime(current_dt.date(), value))
+            self.end_date_input.blockSignals(False)
+        self._update_duration()
             
     def _update_duration(self):
         """Atualiza label de duração"""
-        start_dt = self.start_date_input.dateTime()
-        end_dt = self.end_date_input.dateTime()
+        start_dt, end_dt = self._get_start_end_datetimes()
         
         if start_dt >= end_dt:
             self.duration_label.setText("⚠️ Data inválida")
@@ -624,8 +664,7 @@ class EventCreationCard(PhilosophyCard):
             errors.append("Título é obrigatório")
             
         # Validação de datas
-        start_dt = self.start_date_input.dateTime()
-        end_dt = self.end_date_input.dateTime()
+        start_dt, end_dt = self._get_start_end_datetimes()
         
         if start_dt >= end_dt:
             errors.append("Data/hora de início deve ser anterior ao fim")
@@ -662,8 +701,7 @@ class EventCreationCard(PhilosophyCard):
         }
         
         # Data e hora
-        start_dt = self.start_date_input.dateTime()
-        end_dt = self.end_date_input.dateTime()
+        start_dt, end_dt = self._get_start_end_datetimes()
         
         event_data['start'] = start_dt.toString(Qt.DateFormat.ISODate)
         event_data['end'] = end_dt.toString(Qt.DateFormat.ISODate)
@@ -790,8 +828,6 @@ class EventCreationCard(PhilosophyCard):
         if end_dt <= start_dt:
             return []
 
-        duration = end_dt - start_dt
-
         if recurrence_type == "none" or recurrence_type == "custom":
             single = dict(event_data)
             single["id"] = str(uuid.uuid4())
@@ -804,6 +840,19 @@ class EventCreationCard(PhilosophyCard):
                 until_date = datetime.fromisoformat(str(end_date_str)).date()
             except Exception:
                 until_date = None
+
+        if (
+            recurrence_type != "none"
+            and until_date is not None
+            and end_dt.date() == until_date
+            and start_dt.date() < until_date
+            and end_dt.time() > start_dt.time()
+        ):
+            # Alguns fluxos preenchem `end` com a data limite da série e o horário de fim
+            # da ocorrência. Nesse caso, preservamos a duração intradiária esperada.
+            end_dt = datetime.combine(start_dt.date(), end_dt.time())
+
+        duration = end_dt - start_dt
 
         if until_date is None:
             horizon = self.RECURRENCE_DEFAULT_DAYS.get(recurrence_type, 30)
@@ -984,10 +1033,9 @@ class EventCreationCard(PhilosophyCard):
         try:
             date = QDate.fromString(date_str, "yyyy-MM-dd")
             if date.isValid():
-                current_dt = self.start_date_input.dateTime()
-                current_dt.setDate(date)
-                self.start_date_input.setDateTime(current_dt)
+                self.start_date_input.setDate(date)
                 self.end_date_input.setDate(date)
+                self._update_duration()
         except:
             pass
 

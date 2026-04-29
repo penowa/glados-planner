@@ -425,7 +425,8 @@ class AddBookCard(PhilosophyCard):
             "language": "",
             "genre": "",
             "tags": [],
-            "confidence_by_field": {}
+            "confidence_by_field": {},
+            "recommendations": [],
         }
 
         confidence = metadata["confidence_by_field"]
@@ -508,6 +509,10 @@ class AddBookCard(PhilosophyCard):
                         page = doc[0]
                         text = page.get_text()
                         metadata["requires_ocr"] = len(text.strip()) < 100
+                        if metadata["requires_ocr"]:
+                            metadata["recommendations"].append(
+                                "PDF escaneado detectado. O diálogo vai sugerir OCR pesado com retomada."
+                            )
 
                     # Fallback para campos faltantes: tentar inferir pela capa/primeiras páginas.
                     sampled_text = ""
@@ -535,6 +540,11 @@ class AddBookCard(PhilosophyCard):
                         metadata["isbn"] = _extract_isbn(sampled_text)
                         if metadata["isbn"]:
                             _set_confidence("isbn", 0.6, "ISBN inferido do texto inicial do PDF")
+
+                    if len(doc) >= 300:
+                        metadata["recommendations"].append(
+                            "Livro extenso detectado. O OCR inicial pode ser lento, mas o progresso será salvo."
+                        )
                     
             elif file_path.endswith('.epub'):
                 import zipfile
@@ -607,6 +617,7 @@ class AddBookCard(PhilosophyCard):
             metadata["language"] = "Português"
             _set_confidence("language", 0.2, "Fallback padrão do sistema")
         metadata["tags"] = list(dict.fromkeys(metadata["tags"]))  # remove duplicatas preservando ordem
+        metadata["recommendations"] = list(dict.fromkeys(metadata.get("recommendations", [])))
             
         return metadata
     

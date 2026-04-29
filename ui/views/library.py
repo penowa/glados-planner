@@ -1403,7 +1403,7 @@ class LibraryView(QWidget):
     def show_import_dialog(self, file_path, initial_metadata):
         from ui.widgets.dialogs.book_import_dialog import BookImportDialog
 
-        dialog = BookImportDialog(file_path, initial_metadata, self)
+        dialog = BookImportDialog(file_path, initial_metadata, self, book_controller=self.book_controller)
         dialog.import_confirmed.connect(lambda config: self.start_book_processing(config))
         if self.add_book_card:
             dialog.import_cancelled.connect(self.add_book_card.reset_to_idle)
@@ -1432,6 +1432,14 @@ class LibraryView(QWidget):
             "use_llm": bool(config.get("use_llm", True)),
             "auto_schedule": bool(config.get("auto_schedule", True)),
             "discipline": str(config.get("discipline", "")).strip(),
+            "processing_config": {
+                "use_ocr": bool(config.get("use_ocr", True)),
+                "preserve_layout": bool(config.get("preserve_layout", False)),
+                "scan_heavy_mode": bool(config.get("scan_heavy_mode", False)),
+                "resume_ocr": bool(config.get("resume_ocr", True)),
+                "detected_requires_ocr": bool(config.get("detected_requires_ocr", False)),
+                "recommendations": list(config.get("processing_recommendations", []) or []),
+            },
             "metadata": {
                 "title": config.get("title", ""),
                 "author": config.get("author", ""),
@@ -1450,6 +1458,7 @@ class LibraryView(QWidget):
             "scheduling_config": {
                 "pages_per_day": config.get("pages_per_day", 20),
                 "start_date": config.get("start_date", ""),
+                "deadline": config.get("deadline", ""),
                 "preferred_time": config.get("preferred_time", ""),
                 "strategy": config.get("strategy", ""),
             },

@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 from enum import Enum
 
 from core.config.settings import settings
+from ui.utils.discipline_links import append_book_note_links, ensure_discipline_note
 
 logger = logging.getLogger('GLaDOS.UI.BookController')
 
@@ -387,12 +388,16 @@ class BookProcessingPipeline(QThread):
         """Fallback: gera capítulo único com texto bruto extraído diretamente do PDF."""
         try:
             import fitz  # PyMuPDF
+            from core.modules.pdf_processor import PDFProcessorOCR
 
             page_blocks: List[str] = []
             with fitz.open(str(self.file_path)) as doc:
                 total_pages = len(doc)
                 for idx in range(total_pages):
-                    page_text = (doc[idx].get_text("text") or "").strip()
+                    page_text = PDFProcessorOCR.extract_page_text_preserving_layout(
+                        doc[idx],
+                        preserve_layout=True,
+                    )
                     if not page_text:
                         continue
                     page_blocks.append(f"--- Página {idx + 1} ---\n{page_text}")
@@ -1486,17 +1491,14 @@ class BookController(QObject):
             safe_title = self._sanitize_filename(metadata.title)
             safe_discipline = self._sanitize_filename(discipline_name)
             note_path = f"05-DISCIPLINAS/{safe_discipline}.md"
+            vault_root = Path(self.vault_manager.vault_path)
+            book_note_abs = vault_root / "01-LEITURAS" / safe_author / safe_title / f"📖 {safe_title}.md"
 
             discipline_tag = self._discipline_tag(discipline_name)
-            book_link = f"[[01-LEITURAS/{safe_author}/{safe_title}/📖 {safe_title}|{metadata.title}]]"
-
-            intro = (
-                f"# Disciplina: {discipline_name}\n\n"
-                "A assistente está organizando os conteúdos desta disciplina para facilitar revisão contínua.\n\n"
-                "## Livro processado\n"
-            )
-            link_line = f"- {book_link}\n"
             tag_line = f"- #{discipline_tag}\n"
+
+            ensure_discipline_note(vault_root, discipline_name)
+            append_book_note_links(vault_root, discipline_name, [book_note_abs])
 
             existing_note = self.vault_manager.get_note_by_path(note_path)
             frontmatter = {
@@ -1507,11 +1509,7 @@ class BookController(QObject):
             }
 
             if existing_note:
-                content = existing_note.content or ""
-                if "## Livro processado" not in content:
-                    content = content.rstrip() + "\n\n## Livro processado\n"
-                if link_line.strip() not in content:
-                    content = content.rstrip() + "\n" + link_line
+                content = (vault_root / note_path).read_text(encoding="utf-8", errors="ignore")
                 if f"#{discipline_tag}" not in content:
                     content = content.rstrip() + "\n" + tag_line
 
@@ -1528,7 +1526,9 @@ class BookController(QObject):
                     frontmatter=merged_frontmatter,
                 )
             else:
-                content = intro + link_line + tag_line
+                content = (vault_root / note_path).read_text(encoding="utf-8", errors="ignore")
+                if f"#{discipline_tag}" not in content:
+                    content = content.rstrip() + "\n" + tag_line + "\n"
                 self.vault_manager.create_note(
                     note_path,
                     content=content,
@@ -1646,7 +1646,7 @@ class BookController(QObject):
         return result
     
     def schedule_book_reading(self, book_id: str, title: str = None, 
-                             total_pages: int = None) -> Dict:
+                             total_pages: int = None, config: Dict | None = None) -> Dict:
         """Agenda leitura automática do livro"""
         result = {
             "book_id": book_id,
@@ -1683,19 +1683,45 @@ class BookController(QObject):
                 total_pages=total_pages
             )
             
-            # Calcular páginas por dia
-            pages_per_day = self._calculate_pages_per_day(total_pages)
-            
+            scheduling_config = dict(config or {})
+            deadline = str(scheduling_config.get("deadline") or "").strip()
+            start_date = str(scheduling_config.get("start_date") or "").strip()
+            preferred_time = str(scheduling_config.get("preferred_time") or "").strip()
+            raw_strategy = str(scheduling_config.get("strategy") or self.default_scheduling_strategy or "balanced").strip().lower()
+            strategy_map = {
+                "equilibrado (recomendado)": "balanced",
+                "equilibrado": "balanced",
+                "balanced": "balanced",
+                "intensivo (terminar rápido)": "intensive",
+                "intensivo": "intensive",
+                "intensive": "intensive",
+                "leve (apenas finais de semana)": "spaced",
+                "leve": "spaced",
+                "light": "spaced",
+                "spaced": "spaced",
+                "personalizado": "balanced",
+            }
+            strategy = strategy_map.get(raw_strategy, "balanced")
+            pages_per_day = float(scheduling_config.get("pages_per_day") or 0)
+
+            if pages_per_day <= 0:
+                pages_per_day = self._calculate_pages_per_day(total_pages)
+
             # Chamar AgendaController para alocar tempo
             result["scheduling_attempted"] = True
             result["pages_per_day"] = pages_per_day
-            result["strategy"] = self.default_scheduling_strategy
-            
+            result["strategy"] = strategy
+            result["start_date"] = start_date
+            result["deadline"] = deadline
+
             # Usar método síncrono para garantir execução
             scheduling_result = self._execute_scheduling(
                 book_id=book_id,
                 pages_per_day=pages_per_day,
-                strategy=self.default_scheduling_strategy
+                strategy=strategy,
+                start_date=start_date,
+                deadline=deadline,
+                preferred_time=preferred_time,
             )
             
             # Processar resultado
@@ -1764,7 +1790,9 @@ class BookController(QObject):
         except Exception as e:
             logger.warning(f"Não foi possível sincronizar livro {book_id} para agenda: {e}")
     
-    def _execute_scheduling(self, book_id: str, pages_per_day: float, strategy: str) -> Dict:
+    def _execute_scheduling(self, book_id: str, pages_per_day: float, strategy: str,
+                            start_date: str = "", deadline: str = "",
+                            preferred_time: str = "") -> Dict:
         """Executa agendamento de forma síncrona com fallback"""
         try:
             # Usar método síncrono do AgendaController
@@ -1772,7 +1800,10 @@ class BookController(QObject):
                 return self.agenda_controller.allocate_reading_time(
                     book_id=book_id,
                     pages_per_day=pages_per_day,
-                    strategy=strategy
+                    strategy=strategy,
+                    start_date=start_date,
+                    deadline=deadline,
+                    preferred_time=preferred_time,
                 )
             elif hasattr(self.agenda_controller, 'allocate_reading_time_async'):
                 # Se for assíncrono, usar QEventLoop para sincronizar
@@ -1790,7 +1821,7 @@ class BookController(QObject):
                 
                 # Iniciar agendamento
                 self.agenda_controller.allocate_reading_time_async(
-                    book_id, pages_per_day, strategy
+                    book_id, pages_per_day, strategy, start_date, deadline, preferred_time
                 )
                 
                 # Aguardar resultado (timeout de 10 segundos)

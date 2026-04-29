@@ -4,6 +4,7 @@ import logging
 import json
 import hashlib
 import re
+import shutil
 import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -39,6 +40,7 @@ except ImportError:
         settings = Settings()
 
 from .obsidian.vault_manager import ObsidianVaultManager
+from ui.utils.discipline_links import append_book_note_links, ensure_discipline_note
 
 logger = logging.getLogger(__name__)
 
@@ -273,42 +275,127 @@ class BookProcessor:
         metadata = BookMetadata()
         recommendations = []
         
+        metadata.title = filepath.stem
+
         try:
             import fitz  # PyMuPDF
-            
+
             with fitz.open(filepath) as doc:
-                # Metadados básicos
-                pdf_metadata = doc.metadata
-                metadata.title = pdf_metadata.get('title', filepath.stem)
-                metadata.author = pdf_metadata.get('author', '')
+                pdf_metadata = doc.metadata or {}
+                detected_title = str(pdf_metadata.get('title') or '').strip()
+                detected_author = str(pdf_metadata.get('author') or '').strip()
+
+                metadata.title = detected_title or filepath.stem
+                metadata.author = detected_author
                 metadata.total_pages = len(doc)
-                
-                # Verificar se é PDF escaneado (requer OCR)
-                first_page = doc.load_page(0)
-                text = first_page.get_text()
-                
-                if len(text.strip()) < 50:  # Pouco texto -> provavelmente escaneado
-                    metadata.requires_ocr = True
-                    metadata.has_images = True
-                    recommendations.append("PDF parece ser escaneado. Será necessário OCR.")
-                
-                # Verificar imagens
-                for i in range(min(5, len(doc))):
-                    page = doc.load_page(i)
+
+                sample_pages = self._build_pdf_sample_pages(metadata.total_pages)
+                text_lengths: List[int] = []
+                image_pages = 0
+
+                for page_index in sample_pages:
+                    page = doc.load_page(page_index)
+                    text = self._extract_pdf_page_text_sample(page)
+                    text_lengths.append(len(text.strip()))
                     if page.get_images():
-                        metadata.has_images = True
-                        break
-                
-                # Tentar detectar capítulos (heurística simples)
+                        image_pages += 1
+
+                avg_text_length = sum(text_lengths) / max(len(text_lengths), 1)
+                low_text_pages = sum(1 for size in text_lengths if size < 80)
+
+                metadata.has_images = image_pages > 0
+                metadata.requires_ocr = (
+                    metadata.total_pages > 0 and
+                    (low_text_pages >= max(2, len(sample_pages) // 2) or avg_text_length < 120)
+                )
+
+                if metadata.requires_ocr:
+                    recommendations.append(
+                        "PDF com pouco texto nativo detectado em várias páginas. OCR provavelmente será necessário."
+                    )
+                    if shutil.which("tesseract") is None:
+                        recommendations.append(
+                            "OCR necessário, mas o binário `tesseract` não está instalado no sistema."
+                        )
+                elif avg_text_length < 300:
+                    recommendations.append(
+                        "PDF com extração textual fraca/irregular. O processamento pode alternar entre texto nativo e OCR."
+                    )
+
+                if metadata.has_images and not metadata.requires_ocr:
+                    recommendations.append(
+                        "PDF híbrido detectado: há imagens e texto nativo. Algumas páginas podem precisar de OCR."
+                    )
+
                 if self.config['detect_chapters']:
                     metadata.chapters = self._detect_pdf_chapters(doc)
-        
+
         except ImportError:
-            recommendations.append("PyMuPDF não instalado. Instale com: pip install pymupdf")
+            fallback_meta = self._analyze_pdf_with_fallback(filepath)
+            metadata.title = fallback_meta.get("title") or metadata.title
+            metadata.author = fallback_meta.get("author") or metadata.author
+            metadata.total_pages = int(fallback_meta.get("total_pages") or metadata.total_pages or 0)
+            recommendations.append(
+                "PyMuPDF não instalado. A análise foi feita com fallback limitado; a transcrição completa exigirá pymupdf."
+            )
         except Exception as e:
             logger.warning(f"Erro na análise do PDF: {e}")
+            fallback_meta = self._analyze_pdf_with_fallback(filepath)
+            metadata.title = fallback_meta.get("title") or metadata.title
+            metadata.author = fallback_meta.get("author") or metadata.author
+            metadata.total_pages = int(fallback_meta.get("total_pages") or metadata.total_pages or 0)
         
         return metadata, recommendations
+
+    def _build_pdf_sample_pages(self, total_pages: int) -> List[int]:
+        """Seleciona páginas de amostra ao longo do documento."""
+        if total_pages <= 0:
+            return [0]
+
+        candidates = {
+            0,
+            min(1, total_pages - 1),
+            min(2, total_pages - 1),
+            total_pages // 3,
+            total_pages // 2,
+            max(total_pages - 3, 0),
+            max(total_pages - 2, 0),
+            total_pages - 1,
+        }
+        return sorted(page for page in candidates if 0 <= page < total_pages)
+
+    def _extract_pdf_page_text_sample(self, page) -> str:
+        """Extrai amostra textual de uma página para diagnóstico."""
+        try:
+            from .pdf_processor import PDFProcessorOCR
+
+            text, _ = PDFProcessorOCR()._extract_best_page_text(page)
+            return text
+        except Exception:
+            try:
+                return (page.get_text("text", sort=True) or "").strip()
+            except Exception:
+                return ""
+
+    def _analyze_pdf_with_fallback(self, filepath: Path) -> Dict[str, Any]:
+        """Obtém metadados mínimos quando PyMuPDF não está disponível."""
+        fallback = {
+            "title": filepath.stem,
+            "author": "",
+            "total_pages": 0,
+        }
+
+        try:
+            from PyPDF2 import PdfReader
+
+            reader = PdfReader(str(filepath))
+            info = reader.metadata or {}
+            fallback["title"] = str(getattr(info, "title", "") or info.get("/Title") or filepath.stem).strip() or filepath.stem
+            fallback["author"] = str(getattr(info, "author", "") or info.get("/Author") or "").strip()
+            fallback["total_pages"] = len(reader.pages)
+            return fallback
+        except Exception:
+            return fallback
     
     def _analyze_epub(self, filepath: Path) -> Tuple[BookMetadata, List[str]]:
         """Analisa um arquivo EPUB."""
@@ -367,6 +454,7 @@ class BookProcessor:
 
             chapters = self._normalize_chapters(result.get('chapters', []))
             warnings = result.get('warnings', [])
+            page_cache_dir = result.get('page_cache_dir')
 
             if not result.get('success', True):
                 # Degradação graciosa: mantém processamento quando há conteúdo parcial utilizável.
@@ -379,6 +467,11 @@ class BookProcessor:
                         *warnings,
                         "Processamento parcial concluído: algumas páginas ficaram sem texto após OCR."
                     ]
+                    if page_cache_dir:
+                        warnings = [
+                            *warnings,
+                            f"Cache de OCR salvo em {page_cache_dir}. Uma nova execução continuará do progresso existente."
+                        ]
                     chapter_warning = self._build_chapter_detection_warning(metadata, chapters)
                     if chapter_warning:
                         warnings = [*warnings, chapter_warning]
@@ -413,6 +506,11 @@ class BookProcessor:
             chapter_warning = self._build_chapter_detection_warning(metadata, chapters)
             if chapter_warning:
                 warnings = [*warnings, chapter_warning]
+            if page_cache_dir:
+                warnings = [
+                    *warnings,
+                    f"Cache de OCR salvo em {page_cache_dir}."
+                ]
 
             return ProcessingResult(
                 status=ProcessingStatus.COMPLETED,
@@ -616,16 +714,14 @@ class BookProcessor:
         safe_title = self._sanitize_filename(metadata.title)
         safe_discipline = self._sanitize_filename(discipline_name)
         note_path = f"05-DISCIPLINAS/{safe_discipline}.md"
+        vault_root = Path(self.vault_manager.vault_path)
+        book_note_abs = vault_root / "01-LEITURAS" / safe_author / safe_title / f"📖 {safe_title}.md"
 
         discipline_tag = self._discipline_tag(discipline_name)
-        book_link = f"[[01-LEITURAS/{safe_author}/{safe_title}/📖 {safe_title}|{metadata.title}]]"
-        intro = (
-            f"# Disciplina: {discipline_name}\n\n"
-            "A assistente está organizando os conteúdos desta disciplina para manter o estudo conectado.\n\n"
-            "## Livro processado\n"
-        )
-        link_line = f"- {book_link}\n"
         tag_line = f"- #{discipline_tag}\n"
+
+        ensure_discipline_note(vault_root, discipline_name)
+        append_book_note_links(vault_root, discipline_name, [book_note_abs])
 
         existing_note = self.vault_manager.get_note_by_path(note_path)
         frontmatter = {
@@ -636,11 +732,7 @@ class BookProcessor:
         }
 
         if existing_note:
-            content = existing_note.content or ""
-            if "## Livro processado" not in content:
-                content = content.rstrip() + "\n\n## Livro processado\n"
-            if link_line.strip() not in content:
-                content = content.rstrip() + "\n" + link_line
+            content = (vault_root / note_path).read_text(encoding="utf-8", errors="ignore")
             if f"#{discipline_tag}" not in content:
                 content = content.rstrip() + "\n" + tag_line
 
@@ -658,9 +750,12 @@ class BookProcessor:
             )
             return
 
+        content = (vault_root / note_path).read_text(encoding="utf-8", errors="ignore")
+        if f"#{discipline_tag}" not in content:
+            content = content.rstrip() + "\n" + tag_line + "\n"
         self.vault_manager.create_note(
             note_path,
-            content=intro + link_line + tag_line,
+            content=content,
             frontmatter=frontmatter,
         )
     
@@ -1166,7 +1261,14 @@ class ChapterProcessor:
                     break
                 
                 page = doc.load_page(page_num)
-                text = page.get_text()
+                try:
+                    from .pdf_processor import PDFProcessorOCR
+                    text = PDFProcessorOCR.extract_page_text_preserving_layout(
+                        page,
+                        preserve_layout=True,
+                    )
+                except Exception:
+                    text = page.get_text("text", sort=True)
                 chapter_text += f"\n\n--- Página {page_num + 1} ---\n\n{text}"
             
             # Detectar título do capítulo

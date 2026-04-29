@@ -2786,7 +2786,7 @@ class DisciplineChatView(QWidget):
             return
 
         workspace = self._review_workspace_view()
-        if workspace is None or not hasattr(workspace, "integrate_existing_book_into_discipline"):
+        if workspace is None or not hasattr(workspace, "queue_existing_book_for_discipline"):
             self._append_history_message(
                 self._current_conversation,
                 "assistant",
@@ -2796,7 +2796,7 @@ class DisciplineChatView(QWidget):
             return
 
         try:
-            result = workspace.integrate_existing_book_into_discipline(
+            result = workspace.queue_existing_book_for_discipline(
                 discipline=self._current_conversation,
                 book_dir=str(selected.get("book_dir") or "").strip(),
                 author=str(selected.get("author") or "").strip(),
@@ -2807,17 +2807,24 @@ class DisciplineChatView(QWidget):
             result = {"ok": False, "error": str(exc)}
 
         if bool(result.get("ok")):
-            added_notes = int(result.get("added_note_nodes", 0) or 0)
-            imported_nodes = int(result.get("imported_canvas_nodes", 0) or 0)
             note_links = int(result.get("discipline_links_added", 0) or 0)
+            if bool(result.get("already_present")):
+                message = (
+                    "O livro já estava presente no mapa da disciplina.\n"
+                    f"- Livro: {selected.get('label', 'N/A')}\n"
+                    f"- Novos links na nota da disciplina: {note_links}"
+                )
+            else:
+                message = (
+                    "Livro existente enviado para vínculo no mapa da disciplina.\n"
+                    f"- Livro: {selected.get('label', 'N/A')}\n"
+                    f"- Novos links na nota da disciplina: {note_links}\n"
+                    "- Se houver pendência, o diálogo de vínculo foi aberto no mapa mental."
+                )
             self._append_history_message(
                 self._current_conversation,
                 "assistant",
-                "Livro existente vinculado à disciplina com sucesso.\n"
-                f"- Livro: {selected.get('label', 'N/A')}\n"
-                f"- Notas adicionadas ao mapa: {added_notes}\n"
-                f"- Nós importados do mapa da obra: {imported_nodes}\n"
-                f"- Novos links na nota da disciplina: {note_links}",
+                message,
             )
         else:
             self._append_history_message(
@@ -2844,19 +2851,24 @@ class DisciplineChatView(QWidget):
             return
 
         holder: Dict[str, Dict] = {}
-        dialog = BookImportDialog(selected, {"title": Path(selected).stem}, self)
+        dialog = BookImportDialog(
+            selected,
+            {"title": Path(selected).stem},
+            self,
+            book_controller=self.controllers.get("book"),
+        )
         if hasattr(dialog, "discipline_input"):
             if hasattr(dialog.discipline_input, "setEditText"):
                 dialog.discipline_input.setEditText(self._current_conversation)
             elif hasattr(dialog.discipline_input, "setText"):
                 dialog.discipline_input.setText(self._current_conversation)
         dialog.import_confirmed.connect(lambda cfg: holder.update({"config": cfg}))
+        dialog.import_confirmed.connect(self._start_book_processing)
         dialog.exec()
 
         config = holder.get("config")
         if not config:
             return
-        self._start_book_processing(config)
 
     def _start_book_processing(self, config: Dict) -> None:
         book_controller = self.controllers.get("book")
@@ -2875,6 +2887,14 @@ class DisciplineChatView(QWidget):
             "use_llm": bool(config.get("use_llm", True)),
             "auto_schedule": bool(config.get("auto_schedule", True)),
             "discipline": str(config.get("discipline", "")).strip() or self._current_conversation,
+            "processing_config": {
+                "use_ocr": bool(config.get("use_ocr", True)),
+                "preserve_layout": bool(config.get("preserve_layout", False)),
+                "scan_heavy_mode": bool(config.get("scan_heavy_mode", False)),
+                "resume_ocr": bool(config.get("resume_ocr", True)),
+                "detected_requires_ocr": bool(config.get("detected_requires_ocr", False)),
+                "recommendations": list(config.get("processing_recommendations", []) or []),
+            },
             "metadata": {
                 "title": config.get("title", ""),
                 "author": config.get("author", ""),
@@ -2893,6 +2913,7 @@ class DisciplineChatView(QWidget):
             "scheduling_config": {
                 "pages_per_day": config.get("pages_per_day", 20),
                 "start_date": config.get("start_date", ""),
+                "deadline": config.get("deadline", ""),
                 "preferred_time": config.get("preferred_time", ""),
                 "strategy": config.get("strategy", ""),
             },

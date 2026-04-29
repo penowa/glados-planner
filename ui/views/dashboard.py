@@ -4,16 +4,19 @@ View principal do dashboard com design minimalista e limpo
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy
+    QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QDateTime, pyqtSlot
 from PyQt6.QtGui import QFont
 import logging
+from pathlib import Path
 
 from ui.widgets.cards.agenda_card import AgendaCard
 from ui.widgets.cards.upcoming_commitments_card import UpcomingCommitmentsCard
 from ui.widgets.cards.event_creation_card import EventCreationDialog
+from ui.widgets.dialogs.class_notes_dialog import ClassNotesDialog
 from ui.widgets.dialogs.weekly_event_editor_dialog import WeeklyEventEditorDialog
+from ui.utils.class_notes import build_class_note_content, build_class_note_relative_path
 
 logger = logging.getLogger('GLaDOS.UI.Dashboard')
 
@@ -34,6 +37,7 @@ class DashboardView(QWidget):
         self.book_controller = controllers.get('book') if controllers else None
         self.agenda_controller = controllers.get('agenda') if controllers else None
         self.reading_controller = controllers.get('reading') if controllers else None
+        self.vault_controller = controllers.get('vault') if controllers else None
         self.daily_checkin_controller = controllers.get('daily_checkin') if controllers else None
         self.agenda_backend = self._resolve_agenda_backend()
         
@@ -270,6 +274,8 @@ class DashboardView(QWidget):
                 self.agenda_card.start_reading_session.connect(self.handle_start_session)
             if hasattr(self.agenda_card, 'start_review_session'):
                 self.agenda_card.start_review_session.connect(self.handle_start_review_session)
+            if hasattr(self.agenda_card, 'start_class_notes'):
+                self.agenda_card.start_class_notes.connect(self.handle_start_class_notes)
             if hasattr(self.agenda_card, 'edit_reading_session'):
                 self.agenda_card.edit_reading_session.connect(self.handle_edit_session)
             if hasattr(self.agenda_card, 'skip_reading_session'):
@@ -305,7 +311,7 @@ class DashboardView(QWidget):
         """Mostrar diálogo de configuração de importação"""
         from ui.widgets.dialogs.book_import_dialog import BookImportDialog
         
-        dialog = BookImportDialog(file_path, initial_metadata, self)
+        dialog = BookImportDialog(file_path, initial_metadata, self, book_controller=self.book_controller)
         dialog.import_confirmed.connect(
             lambda config: self.start_book_processing(config)
         )
@@ -336,6 +342,14 @@ class DashboardView(QWidget):
                 "quality": quality_map.get(config["quality"], "standard"),
                 "use_llm": config["use_llm"],
                 "auto_schedule": config["auto_schedule"],
+                "processing_config": {
+                    "use_ocr": bool(config.get("use_ocr", True)),
+                    "preserve_layout": bool(config.get("preserve_layout", False)),
+                    "scan_heavy_mode": bool(config.get("scan_heavy_mode", False)),
+                    "resume_ocr": bool(config.get("resume_ocr", True)),
+                    "detected_requires_ocr": bool(config.get("detected_requires_ocr", False)),
+                    "recommendations": list(config.get("processing_recommendations", []) or []),
+                },
                 
                 # Configurações avançadas
                 "metadata": {
@@ -358,6 +372,7 @@ class DashboardView(QWidget):
                 "scheduling_config": {
                     "pages_per_day": config["pages_per_day"],
                     "start_date": config["start_date"],
+                    "deadline": config.get("deadline", ""),
                     "preferred_time": config["preferred_time"],
                     "strategy": config["strategy"]
                 }
@@ -599,6 +614,65 @@ class DashboardView(QWidget):
         """Abre workspace de revisão para evento de revisão da agenda."""
         logger.info(f"Abrindo revisão agendada: {event_data.get('id', 'N/A')}")
         self.review_workspace_requested.emit(dict(event_data or {}))
+
+    def handle_start_class_notes(self, event_data):
+        """Abre fluxo de anotações em aula para eventos próximos de aula."""
+        logger.info(f"Abrindo anotações de aula para evento: {event_data.get('id', 'N/A')}")
+
+        vault_root = self._resolve_vault_root()
+        if not vault_root:
+            QMessageBox.warning(self, "Vault", "Vault indisponível para criar a nota da aula.")
+            return
+
+        metadata = event_data.get("metadata", {}) if isinstance(event_data, dict) else {}
+        discipline = str(event_data.get("discipline") or metadata.get("discipline") or "").strip()
+        if not discipline:
+            QMessageBox.information(self, "Disciplina", "Este evento de aula não possui disciplina vinculada.")
+            return
+
+        dialog = ClassNotesDialog(vault_root=vault_root, event_data=event_data, parent=self)
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.selection:
+            return
+
+        relative_path = build_class_note_relative_path(discipline, event_data)
+
+        try:
+            existing_note = None
+            if self.vault_controller and hasattr(self.vault_controller, "get_note"):
+                existing_note = self.vault_controller.get_note(relative_path)
+            existing_content = str((existing_note or {}).get("content") or "")
+
+            frontmatter, content = build_class_note_content(
+                discipline=discipline,
+                event_data=event_data,
+                selected_works=dialog.selection.selected_works,
+                existing_content=existing_content,
+            )
+
+            if existing_note and self.vault_controller and hasattr(self.vault_controller, "update_note"):
+                self.vault_controller.update_note(
+                    relative_path,
+                    content=content,
+                    frontmatter=frontmatter,
+                )
+            elif self.vault_controller and hasattr(self.vault_controller, "create_note"):
+                self.vault_controller.create_note(
+                    relative_path,
+                    content=content,
+                    frontmatter=frontmatter,
+                    tags=list(frontmatter.get("tags", [])),
+                )
+            else:
+                raise RuntimeError("VaultController indisponível para escrita.")
+
+            self.show_notification("📝 Nota de aula preparada em 03-PRODUÇÃO", "success")
+        except Exception as exc:
+            logger.error("Erro ao criar nota de aula: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Nota de aula",
+                f"Não foi possível criar a nota da aula.\n\n{exc}",
+            )
     
     def handle_edit_session(self, session_data):
         """Editar sessão de leitura (agora vindo da agenda)"""
@@ -620,6 +694,24 @@ class DashboardView(QWidget):
         else:
             # Atualizar dados da próxima sessão
             self.refresh_data()
+
+    def _resolve_vault_root(self):
+        candidates = []
+        if self.vault_controller:
+            candidates.append(getattr(self.vault_controller, "vault_path", None))
+            manager = getattr(self.vault_controller, "vault_manager", None)
+            if manager is not None:
+                candidates.append(getattr(manager, "vault_path", None))
+        if self.agenda_backend and hasattr(self.agenda_backend, "agenda_manager"):
+            candidates.append(getattr(self.agenda_backend.agenda_manager, "vault_path", None))
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            path = Path(candidate).expanduser().resolve(strict=False)
+            if path.exists():
+                return path
+        return None
     
     # ============ SLOTS ============
     

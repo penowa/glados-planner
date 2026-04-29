@@ -35,6 +35,7 @@ class AgendaCard(PhilosophyCard):
     navigate_to_agenda = pyqtSignal()
     start_reading_session = pyqtSignal(dict)
     start_review_session = pyqtSignal(dict)
+    start_class_notes = pyqtSignal(dict)
     edit_reading_session = pyqtSignal(dict)
     skip_reading_session = pyqtSignal(dict)
 
@@ -431,8 +432,13 @@ class AgendaCard(PhilosophyCard):
         next_event = getattr(self, "next_event_data", None) or {}
         is_reading = self._is_reading_event(next_event)
         is_review = self._is_review_event(next_event)
+        is_class = self._is_class_event(next_event)
 
-        if (is_reading or is_review) and delta.total_seconds() <= 300:
+        if is_class and delta.total_seconds() <= 900:
+            self.timer_label.setVisible(False)
+            self.start_session_button.setVisible(True)
+            self.start_session_button.setText("Abrir anotações da aula")
+        elif (is_reading or is_review) and delta.total_seconds() <= 300:
             self.timer_label.setVisible(False)
             self.start_session_button.setVisible(True)
             if is_review:
@@ -464,9 +470,16 @@ class AgendaCard(PhilosophyCard):
         event_type = str(event.get("type", "")).strip().lower()
         return event_type in {"revisao", "revisão"}
 
+    def _is_class_event(self, event: Dict[str, Any]) -> bool:
+        event_type = str(event.get("type", "")).strip().lower()
+        return event_type == "aula"
+
     def _start_next_reading_session(self):
         event_data = getattr(self, "next_event_data", None)
         if not event_data:
+            return
+        if self._is_class_event(event_data):
+            self.start_class_notes.emit(event_data)
             return
         if self._is_review_event(event_data):
             self.start_review_session.emit(event_data)

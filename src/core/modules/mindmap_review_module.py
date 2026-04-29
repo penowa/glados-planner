@@ -187,6 +187,70 @@ class MindmapReviewModule:
             return {"nodes": [], "edges": []}
         return {"nodes": nodes, "edges": edges}
 
+    def strip_chapter_nodes(self, payload: Dict[str, Any]) -> MindmapIncrementalResult:
+        nodes = payload.get("nodes")
+        edges = payload.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            return MindmapIncrementalResult(payload={"nodes": [], "edges": []}, added_nodes=0, added_edges=0)
+
+        chapter_ids = {
+            str(node.get("id") or "").strip()
+            for node in nodes
+            if isinstance(node, dict) and self._is_chapter_node(node)
+        }
+        chapter_ids.discard("")
+        if not chapter_ids:
+            return MindmapIncrementalResult(payload={"nodes": nodes, "edges": edges}, added_nodes=0, added_edges=0)
+
+        filtered_nodes = [
+            node
+            for node in nodes
+            if not (isinstance(node, dict) and str(node.get("id") or "").strip() in chapter_ids)
+        ]
+        root_id = self._find_anchor_node_id(filtered_nodes)
+
+        filtered_edges: list[Dict[str, Any]] = []
+        existing_edge_ids: set[str] = set()
+        rewired_targets: list[tuple[str, str, Optional[str]]] = []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            from_id = str(edge.get("fromNode") or "").strip()
+            to_id = str(edge.get("toNode") or "").strip()
+            if from_id in chapter_ids or to_id in chapter_ids:
+                if root_id and from_id in chapter_ids and to_id and to_id not in chapter_ids:
+                    rewired_targets.append(
+                        (
+                            to_id,
+                            str(edge.get("label") or "").strip(),
+                            str(edge.get("color") or "").strip() or None,
+                        )
+                    )
+                continue
+            filtered_edges.append(dict(edge))
+            edge_id = str(edge.get("id") or "").strip()
+            if edge_id:
+                existing_edge_ids.add(edge_id)
+
+        added_edges = 0
+        if root_id:
+            for target_id, label, color in rewired_targets:
+                if self._ensure_edge(
+                    filtered_edges,
+                    existing_edge_ids,
+                    from_node=root_id,
+                    to_node=target_id,
+                    label=label or "ligação principal",
+                    color=color,
+                ):
+                    added_edges += 1
+
+        return MindmapIncrementalResult(
+            payload={"nodes": filtered_nodes, "edges": filtered_edges},
+            added_nodes=-len(chapter_ids),
+            added_edges=added_edges,
+        )
+
     def merge_incremental_canvas(
         self,
         payload: Dict[str, Any],
@@ -196,6 +260,7 @@ class MindmapReviewModule:
         user_notes: list[dict[str, str]],
         summary_path: Optional[Path],
     ) -> MindmapIncrementalResult:
+        payload = self.strip_chapter_nodes(payload).payload
         nodes = payload.get("nodes")
         edges = payload.get("edges")
         if not isinstance(nodes, list):
@@ -225,41 +290,10 @@ class MindmapReviewModule:
         added_nodes = 0
         added_edges = 0
 
-        chapter_node_id: Optional[str] = None
-        if chapter_path and chapter_path.exists():
-            chapter_file = self._to_relative_vault_path(chapter_path, vault_root)
-            chapter_node_id = file_node_by_path.get(chapter_file)
-            if not chapter_node_id:
-                chapter_node_id = self._unique_id("node-capitulo", existing_ids)
-                card_w, card_h = self._card_dimensions_for_title(Path(chapter_file).stem)
-                nodes.append(
-                    {
-                        "id": chapter_node_id,
-                        "type": "file",
-                        "file": chapter_file,
-                        "x": anchor_x + 460,
-                        "y": anchor_y + 180,
-                        "width": card_w,
-                        "height": card_h,
-                        "color": self.COLOR_CHAPTER,
-                    }
-                )
-                file_node_by_path[chapter_file] = chapter_node_id
-                added_nodes += 1
-            if self._ensure_edge(
-                edges,
-                existing_edge_ids,
-                from_node=anchor_id,
-                to_node=chapter_node_id,
-                label="capítulo atual",
-                color=self.EDGE_COLOR_CHAPTER,
-            ):
-                added_edges += 1
-
         notes_base_y = anchor_y - 120
         note_step_y = 110
         notes_added_so_far = 0
-        source_id_for_children = chapter_node_id or anchor_id
+        source_id_for_children = anchor_id
 
         for note in user_notes:
             note_path_str = str(note.get("path") or "").strip()
@@ -357,6 +391,47 @@ class MindmapReviewModule:
             if isinstance(node, dict) and str(node.get("id") or "") == node_id:
                 return node
         return None
+
+    def _find_anchor_node_id(self, nodes: list[Dict[str, Any]]) -> str:
+        for candidate_id in ("node-livro", "node-disciplina"):
+            if self._find_node_by_id(nodes, candidate_id):
+                return candidate_id
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            signal = self._normalize_text(
+                " ".join(
+                    [
+                        str(node.get("id") or ""),
+                        str(node.get("text") or ""),
+                        str(node.get("title") or ""),
+                    ]
+                )
+            )
+            if "mapa base da obra" in signal or "mapa da disciplina" in signal:
+                return node_id
+        return ""
+
+    def _is_chapter_node(self, node: Dict[str, Any]) -> bool:
+        if str(node.get("color") or "").strip() == self.COLOR_CHAPTER:
+            return True
+
+        signal = self._normalize_text(
+            " ".join(
+                [
+                    str(node.get("id") or ""),
+                    str(node.get("type") or ""),
+                    str(node.get("file") or ""),
+                    str(node.get("text") or ""),
+                    str(node.get("title") or ""),
+                ]
+            )
+        )
+        return "capitulo" in signal or "capítulo" in signal or "chapter" in signal
 
     def _ensure_anchor_node(
         self,

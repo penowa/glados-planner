@@ -61,6 +61,9 @@ class SchedulingWorker(QThread):
         book_id = self.kwargs.get('book_id')
         pages_per_day = self.kwargs.get('pages_per_day', 10.0)
         strategy = self.kwargs.get('strategy', 'balanced')
+        start_date = self.kwargs.get('start_date')
+        deadline = self.kwargs.get('deadline')
+        preferred_time = self.kwargs.get('preferred_time', '')
         
         # Validações
         if not book_id or not book_id.strip():
@@ -86,7 +89,10 @@ class SchedulingWorker(QThread):
                 reading_speed=10.0,  # Padrão
                 days_off=[6],  # Domingo
                 max_daily_minutes=180,
-                strategy=strategy
+                strategy=strategy,
+                start_date=start_date,
+                deadline=deadline,
+                preferred_time=preferred_time,
             )
             
             # Verificar erro no resultado
@@ -221,7 +227,9 @@ class AgendaController(QObject):
     
     @pyqtSlot(str, float, str)
     def schedule_reading(self, book_id: str, pages_per_day: float = None, 
-                        strategy: str = "balanced", retry_on_failure: bool = True) -> str:
+                        strategy: str = "balanced", retry_on_failure: bool = True,
+                        start_date: str = None, deadline: str = None,
+                        preferred_time: str = "") -> str:
         """
         Agenda leitura de forma robusta com retry e validação
         
@@ -264,13 +272,19 @@ class AgendaController(QObject):
                 "max_attempts": self.MAX_SCHEDULING_ATTEMPTS if retry_on_failure else 1,
                 "status": "pending",
                 "pages_per_day": pages_per_day,
-                "strategy": strategy
+                "strategy": strategy,
+                "start_date": start_date,
+                "deadline": deadline,
+                "preferred_time": preferred_time,
             }
         finally:
             self.operations_mutex.unlock()
         
         # Executar agendamento
-        self._execute_scheduling_operation(book_id, operation_id, pages_per_day, strategy)
+        self._execute_scheduling_operation(
+            book_id, operation_id, pages_per_day, strategy,
+            start_date=start_date, deadline=deadline, preferred_time=preferred_time
+        )
         
         return operation_id
 
@@ -390,7 +404,9 @@ class AgendaController(QObject):
             return max(5, base_pages)   # Livros longos: mínimo 5 páginas/dia
     
     def _execute_scheduling_operation(self, book_id: str, operation_id: str, 
-                                     pages_per_day: float, strategy: str):
+                                     pages_per_day: float, strategy: str,
+                                     start_date: str = None, deadline: str = None,
+                                     preferred_time: str = ""):
         """Executa operação de agendamento em worker separado"""
         # Criar worker
         worker = SchedulingWorker(
@@ -398,7 +414,10 @@ class AgendaController(QObject):
             operation='allocate_reading',
             book_id=book_id,
             pages_per_day=pages_per_day,
-            strategy=strategy
+            strategy=strategy,
+            start_date=start_date,
+            deadline=deadline,
+            preferred_time=preferred_time,
         )
         
         # Atualizar status da operação
@@ -527,7 +546,10 @@ class AgendaController(QObject):
                     book_id=book_id,
                     operation_id=operation["operation_id"],
                     pages_per_day=operation["pages_per_day"],
-                    strategy=operation["strategy"]
+                    strategy=operation["strategy"],
+                    start_date=operation.get("start_date"),
+                    deadline=operation.get("deadline"),
+                    preferred_time=operation.get("preferred_time", ""),
                 )
         finally:
             self.operations_mutex.unlock()
@@ -555,13 +577,18 @@ class AgendaController(QObject):
     
     @pyqtSlot(str, float, str)
     def allocate_reading_time_async(self, book_id: str, pages_per_day: float,
-                                  strategy: str = "balanced"):
+                                  strategy: str = "balanced", start_date: str = None,
+                                  deadline: str = None, preferred_time: str = ""):
         """Método compatível para integração com BookController"""
-        return self.schedule_reading(book_id, pages_per_day, strategy)
+        return self.schedule_reading(
+            book_id, pages_per_day, strategy,
+            start_date=start_date, deadline=deadline, preferred_time=preferred_time
+        )
     
     @pyqtSlot(str, float, str, result=dict)
     def allocate_reading_time(self, book_id: str, pages_per_day: float,
-                            strategy: str = "balanced") -> Dict:
+                            strategy: str = "balanced", start_date: str = None,
+                            deadline: str = None, preferred_time: str = "") -> Dict:
         """Versão síncrona para uso direto"""
         # Usar evento loop para sincronizar
         from PyQt6.QtCore import QEventLoop
@@ -585,7 +612,10 @@ class AgendaController(QObject):
         self.reading_scheduling_failed.connect(on_failed)
         
         # Iniciar agendamento
-        operation_id = self.schedule_reading(book_id, pages_per_day, strategy, False)
+        operation_id = self.schedule_reading(
+            book_id, pages_per_day, strategy, False,
+            start_date=start_date, deadline=deadline, preferred_time=preferred_time
+        )
         
         # Aguardar resultado (timeout de 15 segundos)
         QTimer.singleShot(15000, event_loop.quit)

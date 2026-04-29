@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.request import Request, urlopen
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -455,7 +455,7 @@ class SessionView(QWidget):
         self.current_book_title = "Sessão de leitura"
         self.current_page = 1
         self.total_pages = 0
-        self.left_page = 1
+        self.left_page = 0
         self.session_start_page = 1
         self.max_page_reached = 1
         self._last_synced_page = 0
@@ -470,6 +470,9 @@ class SessionView(QWidget):
         self._manual_book_id: Optional[str] = None
         self._selected_excerpt_for_note: str = ""
         self._selected_excerpt_chapter_path: Optional[Path] = None
+        self._selected_excerpt_page: int = 0
+        self._selected_excerpt_line_start: int = 0
+        self._selected_excerpt_line_end: int = 0
         self._excerpt_note_capture_mode = False
         self._fullscreen_mode = False
         self._window_was_fullscreen = False
@@ -493,7 +496,7 @@ class SessionView(QWidget):
         self._review_summary_saved_in_run = False
         self._temporary_read_only_session = False
         self._temporary_news_article: Dict[str, Any] = {}
-        self._search_matches: list[Dict[str, int]] = []
+        self._search_matches: list[Dict[str, Any]] = []
         self._search_term = ""
         self._search_current_index = -1
         self._search_match_color = QColor("#FFE08A")
@@ -667,6 +670,7 @@ class SessionView(QWidget):
         for page in (self.left_page_text, self.right_page_text):
             page.setReadOnly(True)
             page.setObjectName("session_page_text")
+            page.installEventFilter(self)
             page.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
             page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             page.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -685,19 +689,29 @@ class SessionView(QWidget):
         pages_grid.addWidget(self.right_page_text, 1, 1)
         reading_layout.addLayout(pages_grid)
 
-        self.fullscreen_button = QPushButton("⛶")
-        self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
-        self.fullscreen_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fullscreen_button.setFixedSize(36, 36)
-        self.fullscreen_button.setStyleSheet(
+        overlay_button_style = (
             "QPushButton {"
             "background-color: rgba(35, 39, 51, 0.9); color: #FFFFFF; "
             "border: 1px solid #4A5263; border-radius: 18px; font-size: 17px;"
             "}"
             "QPushButton:hover { background-color: rgba(53, 60, 77, 0.95); }"
         )
+
+        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
+        self.fullscreen_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fullscreen_button.setFixedSize(36, 36)
+        self.fullscreen_button.setStyleSheet(overlay_button_style)
         self.fullscreen_button.setParent(self.left_page_text.viewport())
         self.fullscreen_button.raise_()
+
+        self.search_toggle_button = QPushButton("⌕")
+        self.search_toggle_button.setToolTip("Pesquisar na obra")
+        self.search_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.search_toggle_button.setFixedSize(36, 36)
+        self.search_toggle_button.setStyleSheet(overlay_button_style)
+        self.search_toggle_button.setParent(self.right_page_text.viewport())
+        self.search_toggle_button.raise_()
 
         self.nav_widget = QWidget()
         nav = QHBoxLayout(self.nav_widget)
@@ -712,16 +726,49 @@ class SessionView(QWidget):
         nav.addWidget(self.next_pages_button)
         reading_layout.addWidget(self.nav_widget)
 
-        self.search_bar = QFrame()
+        self.search_bar = QFrame(self.reading_panel)
         self.search_bar.setObjectName("session_search_bar")
+        self.search_bar.setFrameShape(QFrame.Shape.StyledPanel)
+        self.search_bar.setStyleSheet(
+            "QFrame#session_search_bar {"
+            "background-color: rgba(24, 28, 36, 0.97);"
+            "border: 1px solid #4A5263;"
+            "border-radius: 10px;"
+            "}"
+            "QFrame#session_search_bar QLabel { color: #E7EDF7; }"
+            "QFrame#session_search_bar QLineEdit {"
+            "background-color: #FAFAFA;"
+            "color: #111111;"
+            "border: 1px solid #5B6478;"
+            "border-radius: 6px;"
+            "padding: 6px 8px;"
+            "}"
+            "QFrame#session_search_bar QPushButton {"
+            "background-color: #2A3140;"
+            "color: #F3F6FB;"
+            "border: 1px solid #5B6478;"
+            "border-radius: 6px;"
+            "padding: 6px 10px;"
+            "}"
+            "QFrame#session_search_bar QPushButton:disabled {"
+            "color: #8B93A6;"
+            "border-color: #474F61;"
+            "background-color: #232A37;"
+            "}"
+        )
         search_layout = QHBoxLayout(self.search_bar)
-        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setContentsMargins(10, 10, 10, 10)
         search_layout.setSpacing(6)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Pesquisar em toda a obra (Ctrl+F)...")
+        self.search_input.setPlaceholderText("Pesquisar em toda a obra...")
         self.search_prev_button = QPushButton("◀ Anterior")
         self.search_next_button = QPushButton("Próxima ▶")
         self.search_counter_label = QLabel("0/0")
+        self.search_location_label = QLabel("Sem resultados")
+        self.search_location_label.setMinimumWidth(220)
+        self.search_excerpt_label = QLabel("")
+        self.search_excerpt_label.setWordWrap(True)
+        self.search_excerpt_label.setMaximumWidth(320)
         self.search_close_button = QPushButton("Fechar")
         self.search_prev_button.setEnabled(False)
         self.search_next_button.setEnabled(False)
@@ -729,9 +776,11 @@ class SessionView(QWidget):
         search_layout.addWidget(self.search_prev_button)
         search_layout.addWidget(self.search_next_button)
         search_layout.addWidget(self.search_counter_label)
+        search_layout.addWidget(self.search_location_label)
+        search_layout.addWidget(self.search_excerpt_label, 1)
         search_layout.addWidget(self.search_close_button)
         self.search_bar.setVisible(False)
-        reading_layout.addWidget(self.search_bar)
+        self.search_bar.raise_()
 
         self.assistant_tabs = QTabWidget()
         self.assistant_tabs.setObjectName("session_assistant_tabs")
@@ -757,6 +806,7 @@ class SessionView(QWidget):
 
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True)
+        self.chat_history.installEventFilter(self)
         self.chat_preset_combo = QComboBox()
         self.chat_preset_combo.addItems(["Rápido", "Balanceado", "Qualidade"])
         self.chat_preset_combo.setCurrentText("Balanceado")
@@ -799,6 +849,7 @@ class SessionView(QWidget):
         note_header = QHBoxLayout()
         self.note_title_input = QLineEdit()
         self.note_title_input.setPlaceholderText("Título da nota")
+        self.note_title_input.installEventFilter(self)
         note_header.addWidget(self.chat_summary_button)
         self.note_save_button = QPushButton("Salvar")
         note_header.addWidget(self.note_title_input, 1)
@@ -810,6 +861,7 @@ class SessionView(QWidget):
 
         self.note_editor = QTextEdit()
         self.note_editor.setPlaceholderText("Escreva sua anotação aqui...")
+        self.note_editor.installEventFilter(self)
         self.note_editor.setStyleSheet(
             "background-color: #FFFFFF; color: #111111; "
             "font-family: Georgia, 'Times New Roman', serif;"
@@ -881,22 +933,19 @@ class SessionView(QWidget):
         self.shortcut_up = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
         self.shortcut_down = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
         self.shortcut_esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
-        self.shortcut_find = QShortcut(QKeySequence.StandardKey.Find, self)
-        self.shortcut_find_ctrl = QShortcut(QKeySequence("Ctrl+F"), self)
         for shortcut in (
             self.shortcut_left,
             self.shortcut_right,
             self.shortcut_up,
             self.shortcut_down,
             self.shortcut_esc,
-            self.shortcut_find,
-            self.shortcut_find_ctrl,
         ):
-            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
 
     def _setup_connections(self):
         self.note_button.clicked.connect(self._open_note_tab)
         self.fullscreen_button.clicked.connect(self._toggle_fullscreen_mode)
+        self.search_toggle_button.clicked.connect(self._open_search_bar)
         self.pomodoro_timer_label.clicked.connect(self._toggle_pomodoro_from_timer)
         self.controls_menu_button.clicked.connect(self._open_controls_menu)
         self.action_back_dashboard.triggered.connect(self._on_back_clicked)
@@ -926,8 +975,6 @@ class SessionView(QWidget):
         self.shortcut_up.activated.connect(self._on_fullscreen_up)
         self.shortcut_down.activated.connect(self._on_fullscreen_down)
         self.shortcut_esc.activated.connect(self._on_fullscreen_escape)
-        self.shortcut_find.activated.connect(self._open_search_bar)
-        self.shortcut_find_ctrl.activated.connect(self._open_search_bar)
 
         if self.glados_controller:
             self.glados_controller.response_ready.connect(self._on_llm_response)
@@ -945,6 +992,7 @@ class SessionView(QWidget):
             self._apply_session_mode_ui()
         self._tick_ui()
         self._position_fullscreen_button()
+        self._position_search_button()
         self._sync_fullscreen_overlays_geometry()
         self._set_fullscreen_mode(True)
 
@@ -1041,7 +1089,7 @@ class SessionView(QWidget):
         self.chapter_notes = []
         self.book_source_path = None
         self.current_chapter_path = None
-        self.left_page = 1
+        self.left_page = 0
         self.total_pages = max(page_contents.keys()) if page_contents else 1
         self._refresh_pages()
         self._apply_session_mode_ui()
@@ -1350,24 +1398,49 @@ class SessionView(QWidget):
 
     def _left_page_from_current(self, current_page: int) -> int:
         if current_page <= 1:
-            return 1
-        return current_page if current_page % 2 == 1 else current_page - 1
+            return 0
+        return current_page if current_page % 2 == 0 else current_page - 1
+
+    def _right_page_from_left(self, left_page: int) -> int:
+        return 1 if int(left_page) <= 0 else int(left_page) + 1
+
+    def _visible_spread_label(self, left_page: int, right_page: int) -> str:
+        if left_page <= 0:
+            return str(right_page)
+        return f"{left_page}-{right_page}"
+
+    def _page_title_for_slot(self, page_number: int, *, is_left: bool) -> str:
+        if page_number <= 0:
+            return ""
+        return f"Página {page_number}"
+
+    def _page_text_for_slot(self, page_number: int) -> str:
+        if page_number <= 0:
+            return ""
+        return self._sanitize_page_display_text(self._build_page_content(page_number))
+
+    def _spread_anchor_page(self, left_page: int, right_page: int) -> int:
+        if right_page > 0 and (self.total_pages <= 0 or right_page <= self.total_pages):
+            return right_page
+        return max(1, left_page)
 
     def _refresh_pages(self):
-        left = max(self.left_page, 1)
-        right = left + 1
+        left = max(self.left_page, 0)
+        right = self._right_page_from_left(left)
 
-        left_text = self._sanitize_page_display_text(self._build_page_content(left))
-        right_text = self._sanitize_page_display_text(self._build_page_content(right))
-        self.left_page_title.setText(f"Página {left}")
-        self.right_page_title.setText(f"Página {right}")
+        left_text = self._page_text_for_slot(left)
+        right_text = self._page_text_for_slot(right)
+        self.left_page_title.setText(self._page_title_for_slot(left, is_left=True))
+        self.right_page_title.setText(self._page_title_for_slot(right, is_left=False))
         self.left_page_text.setPlainText(left_text)
         self.right_page_text.setPlainText(right_text)
         if self._temporary_read_only_session:
-            self._apply_news_readability_format(self.left_page_text, left)
-            self._apply_news_readability_format(self.right_page_text, right)
+            if left > 0:
+                self._apply_news_readability_format(self.left_page_text, left)
+            if right > 0:
+                self._apply_news_readability_format(self.right_page_text, right)
 
-        self.page_pair_label.setText(f"{left}-{right}")
+        self.page_pair_label.setText(self._visible_spread_label(left, right))
         total_text = "?" if self.total_pages <= 0 else str(self.total_pages)
         self.progress_label.setText(f"Página atual: {self.current_page} de {total_text}")
         self.title_label.setText(self.current_book_title)
@@ -1376,13 +1449,14 @@ class SessionView(QWidget):
         else:
             self.source_label.setText("Fonte: nota não encontrada")
 
-        self.prev_pages_button.setEnabled(left > 1)
+        self.prev_pages_button.setEnabled(left > 0)
         if self.total_pages > 0:
             self.next_pages_button.setEnabled(right < self.total_pages)
         else:
             self.next_pages_button.setEnabled(True)
         self._apply_search_highlights()
         self._position_fullscreen_button()
+        self._position_search_button()
 
     def _apply_news_readability_format(self, editor: QTextEdit, page_number: int):
         doc = editor.document()
@@ -1479,11 +1553,21 @@ class SessionView(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_fullscreen_button()
+        self._position_search_button()
         self._sync_fullscreen_overlays_geometry()
 
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Escape and self.search_bar.isVisible():
+                self._hide_search_bar()
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
+
     def keyPressEvent(self, event):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_F:
-            self._open_search_bar()
+        if event.key() == Qt.Key.Key_Escape and self.search_bar.isVisible():
+            self._hide_search_bar()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1498,11 +1582,22 @@ class SessionView(QWidget):
         self.fullscreen_button.move(x, y)
         self.fullscreen_button.raise_()
 
+    def _position_search_button(self):
+        viewport = self.right_page_text.viewport()
+        if not viewport:
+            return
+        margin = 10
+        x = max(margin, viewport.width() - self.search_toggle_button.width() - margin)
+        y = max(margin, viewport.height() - self.search_toggle_button.height() - margin)
+        self.search_toggle_button.move(x, y)
+        self.search_toggle_button.raise_()
+
     def _sync_fullscreen_overlays_geometry(self):
         if not hasattr(self, "reading_panel"):
             return
         panel_rect = self.reading_panel.rect()
         self.pomodoro_overlay.setGeometry(panel_rect)
+        self._position_search_popup()
 
         card_width = min(560, max(320, panel_rect.width() - 100))
         card_height = 64
@@ -1527,6 +1622,8 @@ class SessionView(QWidget):
         self.review_done_toast.raise_()
 
     def _build_page_content(self, page_number: int) -> str:
+        if page_number <= 0:
+            return ""
         if self.total_pages > 0 and page_number > self.total_pages:
             return "Fim do livro."
 
@@ -1761,9 +1858,10 @@ class SessionView(QWidget):
         return value
 
     def _go_prev_pages(self):
-        if self.left_page > 1:
-            self.left_page = max(1, self.left_page - 2)
-            self.current_page = self.left_page
+        if self.left_page > 0:
+            self.left_page = max(0, self.left_page - 2)
+            right_page = self._right_page_from_left(self.left_page)
+            self.current_page = self._spread_anchor_page(self.left_page, right_page)
             self.current_chapter_path = self.page_chapter_map.get(self.current_page)
             self._refresh_pages()
             self._sync_progress_realtime()
@@ -1773,8 +1871,9 @@ class SessionView(QWidget):
         if self.total_pages > 0 and next_left > self.total_pages:
             return
         self.left_page = next_left
-        self.current_page = self.left_page
-        self.max_page_reached = max(self.max_page_reached, self.left_page)
+        right_page = self._right_page_from_left(self.left_page)
+        self.current_page = self._spread_anchor_page(self.left_page, right_page)
+        self.max_page_reached = max(self.max_page_reached, self.current_page)
         self.current_chapter_path = self.page_chapter_map.get(self.current_page)
         self._refresh_pages()
         self._sync_progress_realtime()
@@ -1809,6 +1908,8 @@ class SessionView(QWidget):
 
     def _open_search_bar(self):
         self.search_bar.setVisible(True)
+        self._position_search_popup()
+        self.search_bar.raise_()
         self.search_input.setFocus()
         self.search_input.selectAll()
 
@@ -1820,35 +1921,63 @@ class SessionView(QWidget):
         self._search_current_index = -1
         self._apply_search_highlights()
 
+    def _position_search_popup(self):
+        if not hasattr(self, "search_bar") or not hasattr(self, "reading_panel"):
+            return
+        self.search_bar.adjustSize()
+        panel_rect = self.reading_panel.rect()
+        popup_size = self.search_bar.sizeHint()
+        x = max(12, panel_rect.width() - popup_size.width() - 16)
+        y = 16
+        self.search_bar.move(x, y)
+
     def _on_search_term_changed(self, text: str):
         term = (text or "").strip()
         self._search_term = term
         self._search_matches = self._build_search_matches(term)
         self._search_current_index = -1
         if self._search_matches:
-            self._search_current_index = self._preferred_search_index()
+            self._go_to_search_index(self._preferred_search_index())
+            return
         self._update_search_controls()
         self._apply_search_highlights()
 
-    def _build_search_matches(self, term: str) -> list[Dict[str, int]]:
+    def _build_search_matches(self, term: str) -> list[Dict[str, Any]]:
         if len(term) < 2:
             return []
 
         pattern = re.compile(re.escape(term), re.IGNORECASE)
-        matches: list[Dict[str, int]] = []
+        matches: list[Dict[str, Any]] = []
         for page_number in self._iter_searchable_pages():
             text = self._sanitize_page_display_text(self._build_page_content(page_number))
             if not text or (text.startswith("[") and text.endswith("]")):
                 continue
             for match in pattern.finditer(text):
+                start = int(match.start())
+                end = int(match.end())
+                line_number = int(text.count("\n", 0, start) + 1)
+                excerpt = self._build_search_excerpt(text, start, end)
                 matches.append(
                     {
                         "page": int(page_number),
-                        "start": int(match.start()),
-                        "end": int(match.end()),
+                        "start": start,
+                        "end": end,
+                        "line": line_number,
+                        "excerpt": excerpt,
                     }
                 )
         return matches
+
+    def _build_search_excerpt(self, text: str, start: int, end: int, radius: int = 44) -> str:
+        excerpt_start = max(0, int(start) - radius)
+        excerpt_end = min(len(text), int(end) + radius)
+        excerpt = text[excerpt_start:excerpt_end].replace("\n", " ")
+        excerpt = re.sub(r"\s+", " ", excerpt).strip()
+        if excerpt_start > 0:
+            excerpt = f"...{excerpt}"
+        if excerpt_end < len(text):
+            excerpt = f"{excerpt}..."
+        return excerpt
 
     def _iter_searchable_pages(self) -> list[int]:
         if self.page_contents:
@@ -1913,7 +2042,7 @@ class SessionView(QWidget):
         editor.setTextCursor(cursor)
         editor.ensureCursorVisible()
 
-    def _current_search_match(self) -> Optional[Dict[str, int]]:
+    def _current_search_match(self) -> Optional[Dict[str, Any]]:
         if self._search_current_index < 0 or self._search_current_index >= len(self._search_matches):
             return None
         return self._search_matches[self._search_current_index]
@@ -1955,6 +2084,25 @@ class SessionView(QWidget):
         total = len(self._search_matches)
         current = self._search_current_index + 1 if self._search_current_index >= 0 and total else 0
         self.search_counter_label.setText(f"{current}/{total}")
+        current_match = self._current_search_match()
+        if current_match:
+            page = int(current_match.get("page", 0))
+            line = int(current_match.get("line", 0))
+            excerpt = str(current_match.get("excerpt") or "").strip()
+            self.search_location_label.setText(f"Página {page}, linha {line}")
+            self.search_excerpt_label.setText(excerpt)
+            self.search_location_label.setToolTip(f"Ocorrência atual em Página {page}, linha {line}")
+            self.search_excerpt_label.setToolTip(excerpt)
+        elif self._search_term:
+            self.search_location_label.setText("Nenhuma ocorrência")
+            self.search_excerpt_label.setText("Nenhum trecho encontrado para este termo.")
+            self.search_location_label.setToolTip("")
+            self.search_excerpt_label.setToolTip("")
+        else:
+            self.search_location_label.setText("Sem resultados")
+            self.search_excerpt_label.setText("")
+            self.search_location_label.setToolTip("")
+            self.search_excerpt_label.setToolTip("")
         enabled = total > 0
         self.search_prev_button.setEnabled(enabled)
         self.search_next_button.setEnabled(enabled)
@@ -2002,6 +2150,7 @@ class SessionView(QWidget):
             self._window_was_maximized = False
 
         self._position_fullscreen_button()
+        self._position_search_button()
         self._sync_fullscreen_overlays_geometry()
 
     def _toggle_main_window_chrome(self, hidden: bool):
@@ -3309,7 +3458,9 @@ class SessionView(QWidget):
             self.note_title_input.setText(f"Anotação - {self.current_book_title}")
 
         if excerpt_capture_mode:
-            self.note_editor.clear()
+            self.note_editor.setPlainText(
+                self._build_note_document(related_links=[], excerpt=self._selected_excerpt_for_note.strip())
+            )
             self.note_editor.setFocus()
             self.chat_status_label.setText("Capturando anotação do trecho selecionado")
             return
@@ -3357,23 +3508,37 @@ class SessionView(QWidget):
 
     def _build_note_document(self, related_links: list[str], excerpt: str) -> str:
         title = self.note_title_input.text().strip() or f"Anotação - {self.current_book_title}"
-        source_name = "não identificado"
-        if self.current_chapter_path:
-            source_name = self.current_chapter_path.stem
-        elif self.book_source_path:
-            source_name = self.book_source_path.stem
+        chapter_path = self._selected_excerpt_chapter_path or self.current_chapter_path
+        source_name = (
+            chapter_path.stem
+            if chapter_path
+            else (self.book_source_path.stem if self.book_source_path else "não identificado")
+        )
+        chapter_ref = f"[[{chapter_path.stem}]]" if chapter_path and chapter_path.is_file() else "-"
+        book_ref = (
+            f"[[{self.book_source_path.stem}]]"
+            if self.book_source_path and self.book_source_path.is_file()
+            else self.current_book_title
+        )
+        page_ref = self._selected_excerpt_page or self.current_page
+        line_ref = self._format_selected_excerpt_line_range()
+        excerpt_ref = excerpt.strip() or "-"
 
         lines = [
             f"# {title}",
             "",
-            "## Cabeçalho",
+            "## Referência do grifo",
             f"- Data: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            f"- Livro: {self.current_book_title}",
-            f"- Página da sessão: {self.current_page}",
+            f"- Livro: {book_ref}",
+            f"- Capítulo: {chapter_ref}",
+            f"- Página: {page_ref}",
+            f"- Linhas grifadas: {line_ref}",
             f"- Origem: [[{source_name}]]",
+            f"- Trecho grifado: {excerpt_ref}",
+            "",
+            "## Contexto",
+            "- ",
         ]
-        if excerpt:
-            lines.append(f"- Trecho selecionado: {excerpt}")
 
         lines.extend(["", "## Notas Relacionadas"])
         if related_links:
@@ -3415,11 +3580,7 @@ class SessionView(QWidget):
             QMessageBox.warning(self, "Conteúdo vazio", "Adicione conteúdo antes de salvar.")
             return
 
-        content = user_content
-        if self._excerpt_note_capture_mode:
-            content = self._build_excerpt_note_document(user_content)
-
-        note_path = self._write_note_to_personal_with_title(content, title)
+        note_path = self._write_note_to_personal_with_title(user_content, title)
         if not note_path:
             QMessageBox.warning(self, "Erro ao salvar", "Não foi possível criar a anotação no vault.")
             return
@@ -3432,6 +3593,9 @@ class SessionView(QWidget):
             )
             self._selected_excerpt_for_note = ""
             self._selected_excerpt_chapter_path = None
+            self._selected_excerpt_page = 0
+            self._selected_excerpt_line_start = 0
+            self._selected_excerpt_line_end = 0
         self._set_excerpt_note_capture_mode(False)
 
         self.chat_history.append(f"Sistema: Nota salva em {note_path.name}")
@@ -3449,11 +3613,11 @@ class SessionView(QWidget):
             menu.addSeparator()
             create_note_action = menu.addAction("Criar nota do trecho")
             create_note_action.triggered.connect(
-                lambda: self._create_note_from_excerpt(selected_text)
+                lambda: self._create_note_from_excerpt(editor, selected_text)
             )
         menu.exec(editor.mapToGlobal(pos))
 
-    def _create_note_from_excerpt(self, selected_text: str):
+    def _create_note_from_excerpt(self, editor: QTextEdit, selected_text: str):
         excerpt_title = self._normalize_excerpt_title(selected_text)
         if not excerpt_title:
             QMessageBox.warning(self, "Trecho inválido", "Selecione um trecho válido para criar a nota.")
@@ -3461,8 +3625,34 @@ class SessionView(QWidget):
 
         self._selected_excerpt_for_note = selected_text.strip()
         self._selected_excerpt_chapter_path = self._resolve_active_chapter_path()
+        self._capture_excerpt_reference(editor)
         self.note_title_input.setText(excerpt_title)
         self._open_note_tab(excerpt_capture_mode=True)
+
+    def _capture_excerpt_reference(self, editor: QTextEdit):
+        page_number = self.left_page if editor is self.left_page_text else self.left_page + 1
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            self._selected_excerpt_page = page_number
+            self._selected_excerpt_line_start = 0
+            self._selected_excerpt_line_end = 0
+            return
+
+        text = editor.toPlainText()
+        start = min(cursor.selectionStart(), cursor.selectionEnd())
+        end = max(cursor.selectionStart(), cursor.selectionEnd())
+        self._selected_excerpt_page = page_number
+        self._selected_excerpt_line_start = text.count("\n", 0, start) + 1
+        self._selected_excerpt_line_end = text.count("\n", 0, end) + 1
+
+    def _format_selected_excerpt_line_range(self) -> str:
+        start = int(self._selected_excerpt_line_start or 0)
+        end = int(self._selected_excerpt_line_end or 0)
+        if start <= 0 and end <= 0:
+            return "-"
+        if start > 0 and end > 0 and end != start:
+            return f"{start}-{end}"
+        return str(start or end)
 
     def _normalize_excerpt_title(self, selected_text: str, max_len: int = 80) -> str:
         text = re.sub(r"\s+", " ", selected_text.replace("\u2029", " ")).strip()

@@ -22,6 +22,7 @@ from PyQt6.QtGui import QAction, QColor, QDrag
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QDialog,
     QFormLayout,
     QFrame,
@@ -87,6 +88,10 @@ TYPE_ICONS = {
     "casual": "📌",
 }
 
+TYPE_COLORS = {
+    "aula": "#FACC15",
+}
+
 
 def _normalize_event(raw_event: dict) -> dict:
     event = dict(raw_event)
@@ -103,6 +108,21 @@ def _normalize_event(raw_event: dict) -> dict:
         end_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
     except Exception:
         end_dt = None
+
+    metadata = event.get("metadata", {}) or {}
+    recurrence = metadata.get("recurrence", {}) or event.get("recurrence", {}) or {}
+    recurrence_type = str(recurrence.get("type") or "").strip().lower()
+
+    if (
+        start_dt
+        and end_dt
+        and recurrence_type in {"daily", "weekly", "weekdays"}
+        and end_dt.date() != start_dt.date()
+        and end_dt.time() > start_dt.time()
+    ):
+        # Corrige ocorrências recorrentes que foram persistidas usando a data limite da série
+        # no campo `end`, mas deveriam manter apenas a duração intradiária.
+        end_dt = datetime.combine(start_dt.date(), end_dt.time())
 
     if start_dt:
         event["_start_dt"] = start_dt
@@ -323,7 +343,10 @@ class DayCellWidget(QFrame):
 
     def set_events(self, events: List[dict]):
         self.events_list.clear()
-        display_events = [e for e in events if not e.get("_fixed_virtual", False)]
+        display_events = [
+            e for e in events
+            if not e.get("_fixed_virtual", False) and not e.get("auto_generated", False)
+        ]
         if not display_events:
             return
 
@@ -331,7 +354,12 @@ class DayCellWidget(QFrame):
             icon = TYPE_ICONS.get(event.get("type", "casual"), "📌")
             item = QListWidgetItem(icon)
             item.setData(Qt.ItemDataRole.UserRole, event)
-            color = QColor(PRIORITY_COLORS.get(int(event.get("priority", 2)), "#60A5FA"))
+            color = QColor(
+                TYPE_COLORS.get(
+                    str(event.get("type", "casual")).strip().lower(),
+                    PRIORITY_COLORS.get(int(event.get("priority", 2)), "#60A5FA"),
+                )
+            )
             color.setAlpha(70)
             item.setBackground(color)
             self.events_list.addItem(item)
@@ -414,7 +442,13 @@ class HourlyAgendaTable(QTableWidget):
 
             unique_labels = list(dict.fromkeys(labels))
             cell = QTableWidgetItem("\n".join(unique_labels))
-            color = QColor(PRIORITY_COLORS.get(int(hour_events[0].get("priority", 2)), "#60A5FA"))
+            primary_event = hour_events[0]
+            color = QColor(
+                TYPE_COLORS.get(
+                    str(primary_event.get("type", "casual")).strip().lower(),
+                    PRIORITY_COLORS.get(int(primary_event.get("priority", 2)), "#60A5FA"),
+                )
+            )
             color.setAlpha(110)
             cell.setBackground(color)
             cell.setForeground(QColor("#FFFFFF"))
@@ -1221,6 +1255,39 @@ class AddEventDialog(QDialog):
         time_wrap.setLayout(time_row)
         form.addRow("Quando:", time_wrap)
 
+        self.recurrence_combo = QComboBox()
+        self.recurrence_combo.addItem("Evento único", "none")
+        self.recurrence_combo.addItem("Diário", "daily")
+        self.recurrence_combo.addItem("Semanal", "weekly")
+        form.addRow("Recorrência:", self.recurrence_combo)
+
+        recurrence_days_wrap = QWidget()
+        recurrence_days_layout = QHBoxLayout(recurrence_days_wrap)
+        recurrence_days_layout.setContentsMargins(0, 0, 0, 0)
+        recurrence_days_layout.setSpacing(6)
+        self.weekday_checks: Dict[str, QCheckBox] = {}
+        weekday_labels = [
+            ("mon", "Seg"),
+            ("tue", "Ter"),
+            ("wed", "Qua"),
+            ("thu", "Qui"),
+            ("fri", "Sex"),
+            ("sat", "Sáb"),
+            ("sun", "Dom"),
+        ]
+        for key, label in weekday_labels:
+            checkbox = QCheckBox(label)
+            self.weekday_checks[key] = checkbox
+            recurrence_days_layout.addWidget(checkbox)
+        recurrence_days_layout.addStretch(1)
+        form.addRow("Dias da semana:", recurrence_days_wrap)
+
+        self.recurrence_end_date = QDateTimeEdit()
+        self.recurrence_end_date.setDate(self.default_date)
+        self.recurrence_end_date.setDisplayFormat("dd/MM/yyyy")
+        self.recurrence_end_date.setCalendarPopup(True)
+        form.addRow("Repetir até:", self.recurrence_end_date)
+
         self.type_combo = QComboBox()
         self.type_combo.addItems([
             "leitura",
@@ -1276,6 +1343,8 @@ class AddEventDialog(QDialog):
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
         layout.addLayout(buttons)
+        self.recurrence_combo.currentIndexChanged.connect(self._update_recurrence_visibility)
+        self._update_recurrence_visibility()
 
     def save_event(self):
         title = self.title_input.text().strip()
@@ -1286,6 +1355,15 @@ class AddEventDialog(QDialog):
         date_str = self.date_input.date().toString("yyyy-MM-dd")
         start = f"{date_str} {self.start_time_input.time().toString('HH:mm')}"
         end = f"{date_str} {self.end_time_input.time().toString('HH:mm')}"
+        try:
+            start_dt = datetime.strptime(start, "%Y-%m-%d %H:%M")
+            end_dt = datetime.strptime(end, "%Y-%m-%d %H:%M")
+        except ValueError:
+            QMessageBox.warning(self, "Aviso", "Data/hora inválidas.")
+            return
+        if end_dt <= start_dt:
+            QMessageBox.warning(self, "Aviso", "O horário de término deve ser posterior ao início.")
+            return
 
         priority_map = {
             "Baixa": 1,
@@ -1304,29 +1382,140 @@ class AddEventDialog(QDialog):
             "description": self.description_input.toPlainText().strip(),
             "discipline": self._selected_discipline() or None,
         }
+        recurrence = self._build_recurrence_definition(start_dt, end_dt)
+        if recurrence is None:
+            return
 
         discipline_name = self._selected_discipline()
         if discipline_name and self._vault_root:
             ensure_discipline_note(self._vault_root, discipline_name)
 
-        event_id = ""
+        occurrences = self._expand_occurrences(payload, start_dt, end_dt, recurrence)
+        if not occurrences:
+            QMessageBox.warning(self, "Recorrência", "Nenhuma ocorrência válida foi gerada.")
+            return
+
+        created_ids: List[str] = []
         if self.controller and hasattr(self.controller, "add_event"):
-            event_id = self.controller.add_event(payload)
-            if not event_id:
-                QMessageBox.warning(self, "Erro", "Não foi possível salvar o compromisso.")
-                return
+            for occurrence in occurrences:
+                event_id = self.controller.add_event(occurrence)
+                if not event_id:
+                    QMessageBox.warning(self, "Erro", "Não foi possível salvar um dos compromissos.")
+                    return
+                created_ids.append(str(event_id))
 
         if discipline_name and self._vault_root:
-            append_event_link(
-                self._vault_root,
-                discipline_name,
-                title=title,
-                start=start,
-                end=end,
-                event_id=str(event_id or ""),
-            )
+            for index, occurrence in enumerate(occurrences):
+                append_event_link(
+                    self._vault_root,
+                    discipline_name,
+                    title=title,
+                    start=str(occurrence.get("start") or ""),
+                    end=str(occurrence.get("end") or ""),
+                    event_id=created_ids[index] if index < len(created_ids) else "",
+                )
 
         self.accept()
+
+    def _update_recurrence_visibility(self):
+        recurrence_type = self.recurrence_combo.currentData()
+        is_weekly = recurrence_type == "weekly"
+        has_recurrence = recurrence_type in {"daily", "weekly"}
+
+        for checkbox in self.weekday_checks.values():
+            checkbox.setVisible(is_weekly)
+        self.recurrence_end_date.setVisible(has_recurrence)
+
+    def _build_recurrence_definition(self, start_dt: datetime, end_dt: datetime) -> Optional[Dict[str, Any]]:
+        recurrence_type = str(self.recurrence_combo.currentData() or "none")
+        if recurrence_type == "none":
+            return {"type": "none"}
+
+        until_date = self.recurrence_end_date.date().toString("yyyy-MM-dd")
+        try:
+            until_dt = datetime.strptime(until_date, "%Y-%m-%d").date()
+        except ValueError:
+            QMessageBox.warning(self, "Recorrência", "Data limite inválida.")
+            return None
+
+        if until_dt < start_dt.date():
+            QMessageBox.warning(self, "Recorrência", "A data limite deve ser igual ou posterior ao início.")
+            return None
+
+        if recurrence_type == "daily":
+            return {"type": "daily", "end_date": until_date, "interval": 1}
+
+        selected_days = [
+            key for key, checkbox in self.weekday_checks.items() if checkbox.isChecked()
+        ]
+        if not selected_days:
+            weekday_map = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            selected_days = [weekday_map[start_dt.weekday()]]
+        return {
+            "type": "weekly",
+            "end_date": until_date,
+            "interval": 1,
+            "days": selected_days,
+        }
+
+    def _expand_occurrences(
+        self,
+        payload: Dict[str, Any],
+        start_dt: datetime,
+        end_dt: datetime,
+        recurrence: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        recurrence_type = str(recurrence.get("type") or "none")
+        duration = end_dt - start_dt
+        if duration.total_seconds() <= 0:
+            return []
+
+        if recurrence_type == "none":
+            single = dict(payload)
+            single["start"] = start_dt.isoformat()
+            single["end"] = end_dt.isoformat()
+            single["recurrence"] = recurrence
+            return [single]
+
+        try:
+            until_date = datetime.strptime(str(recurrence.get("end_date") or ""), "%Y-%m-%d").date()
+        except ValueError:
+            return []
+
+        weekday_map = {
+            "mon": 0, "tue": 1, "wed": 2, "thu": 3,
+            "fri": 4, "sat": 5, "sun": 6,
+        }
+        selected_weekdays = [weekday_map[key] for key in recurrence.get("days", []) if key in weekday_map]
+        if recurrence_type == "weekly" and not selected_weekdays:
+            selected_weekdays = [start_dt.weekday()]
+
+        occurrences: List[Dict[str, Any]] = []
+        cursor = start_dt
+        while cursor.date() <= until_date:
+            include = False
+            if recurrence_type == "daily":
+                include = True
+            elif recurrence_type == "weekly":
+                include = cursor.weekday() in selected_weekdays
+
+            if include:
+                occ_start = cursor.replace(
+                    hour=start_dt.hour,
+                    minute=start_dt.minute,
+                    second=0,
+                    microsecond=0,
+                )
+                occ_end = occ_start + duration
+                occurrence = dict(payload)
+                occurrence["start"] = occ_start.isoformat()
+                occurrence["end"] = occ_end.isoformat()
+                occurrence["recurrence"] = recurrence
+                occurrences.append(occurrence)
+
+            cursor += timedelta(days=1)
+
+        return occurrences
 
     def _resolve_vault_root(self):
         candidates = []

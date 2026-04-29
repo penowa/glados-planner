@@ -25,6 +25,22 @@ sys.path.insert(0, str(SRC_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(UI_DIR))
 
+try:
+    import PyQt6  # noqa: F401
+except ModuleNotFoundError as exc:
+    if exc.name == "PyQt6":
+        print("\n❌ PyQt6 não está instalado no interpretador Python atual.")
+        print(f"🐍 Python em uso: {sys.executable}")
+        print("\nUse o ambiente virtual do projeto antes de iniciar a UI:")
+        print("   source venv/bin/activate")
+        print("   python -m ui.main")
+        print("\nOu execute diretamente com o Python do venv:")
+        print("   venv/bin/python -m ui.main")
+        print("\nSe o venv ainda não tiver as dependências:")
+        print("   venv/bin/python -m pip install -r requirements.txt")
+        raise SystemExit(1) from exc
+    raise
+
 # ============ IMPORTS DO BACKEND ============
 
 from core.communication.event_bus import GlobalEventBus
