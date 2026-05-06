@@ -10,6 +10,7 @@ from rich.progress import Progress
 from typing import Optional
 import json
 from pathlib import Path
+from datetime import datetime
 
 from src.core.llm.local_llm import PhilosophyLLM
 from src.core.database.obsidian_sync import VaultManager
@@ -19,6 +20,12 @@ from src.core.modules.translation_module import TranslationAssistant
 from src.core.modules.pomodoro_timer import PomodoroTimer
 from src.core.modules.writing_assistant import WritingAssistant
 from src.core.modules.review_system import ReviewSystem
+from src.core.modules.LaTex import (
+    LatexExporter,
+    LatexExportRequest,
+    LatexMetadata,
+    LatexExportValidationError,
+)
 
 app = typer.Typer(name="data", help="Comandos de dados e módulos avançados")
 console = Console()
@@ -38,7 +45,8 @@ def _get_module(module_name: str):
         "translation": lambda: TranslationAssistant(vault_path),
         "pomodoro": lambda: PomodoroTimer(vault_path),
         "writing": lambda: WritingAssistant(vault_path),
-        "review": lambda: ReviewSystem(vault_path)
+        "review": lambda: ReviewSystem(vault_path),
+        "latex": lambda: LatexExporter(vault_path),
     }
     
     return modules.get(module_name)()
@@ -528,6 +536,164 @@ def sistema_revisao(
             console.print("\n[bold]Dificuldade dos Quizzes:[/bold]")
             for dificuldade, count in stats['quiz_difficulty'].items():
                 console.print(f"  {dificuldade}: {count}")
+
+
+@app.command(name="latex")
+def exportar_latex(
+    nota: Optional[str] = typer.Option(None, "--nota", "-n", help="Caminho relativo da nota principal em 03-PRODUÇÃO"),
+    referencias: Optional[str] = typer.Option(None, "--referencias", "-r", help="Caminho relativo da nota BibTeX com prefixo ref."),
+):
+    """Exporta uma nota de 03-PRODUÇÃO para LaTeX ABNT."""
+    exporter = _get_module("latex")
+    main_notes = exporter.get_main_notes()
+    production_notes = exporter.list_production_notes()
+
+    def select_production_note_for(label: str) -> Optional[str]:
+        table = Table(title=f"Notas disponíveis para {label}", show_header=True, header_style="bold yellow")
+        table.add_column("#", justify="right")
+        table.add_column("Arquivo", style="yellow")
+        for index, candidate in enumerate(production_notes, 1):
+            table.add_row(str(index), str(candidate.path))
+        console.print(table)
+
+        note_index = typer.prompt(f"Selecione o número da nota para {label}", type=int)
+        if note_index < 1 or note_index > len(production_notes):
+            console.print(f"[yellow]{label} ignorado por seleção inválida.[/yellow]")
+            return None
+        return str(production_notes[note_index - 1].path)
+
+    if not main_notes:
+        console.print("[red]Nenhuma nota principal encontrada em 03-PRODUÇÃO.[/red]")
+        return
+
+    main_note = None
+    if nota:
+        main_note = next((candidate for candidate in main_notes if str(candidate.path) == nota), None)
+        if main_note is None:
+            console.print(f"[red]Nota principal não encontrada: {nota}[/red]")
+            return
+    else:
+        table = Table(title="Notas em 03-PRODUÇÃO", show_header=True, header_style="bold cyan")
+        table.add_column("#", justify="right")
+        table.add_column("Arquivo", style="cyan")
+        for index, candidate in enumerate(main_notes, 1):
+            table.add_row(str(index), str(candidate.path))
+        console.print(table)
+        selected_index = typer.prompt("Selecione o número da nota principal", type=int)
+        if selected_index < 1 or selected_index > len(main_notes):
+            console.print("[red]Seleção inválida.[/red]")
+            return
+        main_note = main_notes[selected_index - 1]
+
+    matching_refs = exporter.get_matching_reference_notes(main_note)
+    ref_note = None
+    if referencias:
+        ref_note = next((candidate for candidate in exporter.list_production_notes() if str(candidate.path) == referencias), None)
+        if ref_note is None:
+            console.print(f"[red]Nota de referências não encontrada: {referencias}[/red]")
+            return
+    else:
+        console.print(
+            f"[cyan]Selecione a nota BibTeX para {main_note.path.name}. "
+            "O esperado é um arquivo com prefixo ref.[/cyan]"
+        )
+        ref_candidates = matching_refs or [
+            candidate for candidate in exporter.list_production_notes() if candidate.path.name.lower().startswith("ref.")
+        ]
+        if not ref_candidates:
+            console.print("[red]Nenhuma nota de referências encontrada em 03-PRODUÇÃO.[/red]")
+            return
+
+        table = Table(title="Notas de Referências", show_header=True, header_style="bold green")
+        table.add_column("#", justify="right")
+        table.add_column("Arquivo", style="green")
+        for index, candidate in enumerate(ref_candidates, 1):
+            table.add_row(str(index), str(candidate.path))
+        console.print(table)
+        ref_index = typer.prompt("Selecione o número da nota de referências", type=int)
+        if ref_index < 1 or ref_index > len(ref_candidates):
+            console.print("[red]Seleção inválida.[/red]")
+            return
+        ref_note = ref_candidates[ref_index - 1]
+
+    dissertation_title = exporter.extract_title(exporter.get_note(str(main_note.path)))
+    console.print(Panel.fit(
+        f"[bold]Exportação LaTeX ABNT[/bold]\n"
+        f"Título identificado: {dissertation_title}\n"
+        f"Nota principal: {main_note.path}\n"
+        f"Referências: {ref_note.path}",
+        border_style="blue"
+    ))
+
+    metadata = LatexMetadata(
+        author=typer.prompt("Autor"),
+        advisor=typer.prompt("Orientador"),
+        institution=typer.prompt("Instituição"),
+        location=typer.prompt("Local"),
+        year=typer.prompt("Ano", default=str(datetime.now().year)),
+        work_type=typer.prompt("Tipo de trabalho", default="Dissertação"),
+        degree=typer.prompt("Grau obtido", default="Mestre"),
+        program=typer.prompt("Programa", default=""),
+        concentration_area=typer.prompt("Área de concentração", default=""),
+        department=typer.prompt("Departamento", default=""),
+        date=typer.prompt("Data completa", default=""),
+    )
+
+    optional_sections = {}
+    optional_labels = [
+        ("ficha_catalografica", "Ficha catalográfica"),
+        ("banca", "Banca examinadora"),
+        ("resumo", "Resumo"),
+        ("abstract", "Abstract"),
+        ("errata", "Errata"),
+        ("agradecimentos", "Agradecimentos"),
+        ("dedicatoria", "Dedicatória"),
+        ("epigrafe", "Epígrafe"),
+        ("lista_ilustracoes", "Lista de ilustrações"),
+        ("lista_tabelas", "Lista de tabelas"),
+        ("lista_abreviaturas", "Lista de abreviaturas e siglas"),
+        ("glossario", "Glossário"),
+        ("apendice", "Apêndice"),
+        ("anexo", "Anexo"),
+        ("indice", "Índice"),
+    ]
+
+    for key, label in optional_labels:
+        if not typer.confirm(f"Deseja adicionar {label}?", default=False):
+            continue
+        selected_note = select_production_note_for(label)
+        if selected_note:
+            optional_sections[key] = selected_note
+
+    request = LatexExportRequest(
+        main_note_path=str(main_note.path),
+        references_note_path=str(ref_note.path),
+        metadata=metadata,
+        optional_sections=optional_sections,
+    )
+
+    try:
+        result = exporter.export_from_request(request)
+    except LatexExportValidationError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+
+    border_style = "green" if result.compiled_pdf else "yellow"
+    console.print(Panel.fit(
+        f"[bold]Exportação concluída[/bold]\n"
+        f"Título: {result.title}\n"
+        f".tex: {result.tex_path}\n"
+        f".bib: {result.bib_path}\n"
+        f".pdf: {result.pdf_path}\n"
+        f"PDF compilado: {'sim' if result.compiled_pdf else 'não'}",
+        border_style=border_style
+    ))
+
+    for warning in result.warnings:
+        console.print(f"[yellow]Aviso:[/yellow] {warning}")
+
+    if result.compiler_log and not result.compiled_pdf:
+        console.print("[red]Log de compilação disponível; veja o terminal para detalhes se necessário.[/red]")
 
 @app.command(name="sincronizar")
 def sincronizar_vault(

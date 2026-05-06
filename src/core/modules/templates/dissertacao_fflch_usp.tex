@@ -1,0 +1,33 @@
+\documentclass[
+    12pt,
+    a4paper,
+    twoside
+]{abntex2}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[alf]{abntex2cite}
+\usepackage{hyperref}
+\setcounter{secnumdepth}{0}
+
+\titulo{__TITULO__}
+\autor{__AUTOR__}
+\orientador{__ORIENTADOR__}
+__COORIENTADOR_BLOCK__
+\instituicao{__INSTITUICAO__}
+\tipotrabalho{__TIPOTRABALHO__}
+\local{__LOCAL__}
+\data{__ANO__}
+\preambulo{__PREAMBULO__}
+
+\begin{document}
+
+\imprimircapa
+\cleardoublepage
+
+__CONTEUDO_LATEX__
+
+\bibliography{__ARQUIVO_BIB__}
+
+\end{document}

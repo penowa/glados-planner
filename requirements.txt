@@ -13,6 +13,10 @@ PyYAML>=6.0.1
 python-frontmatter>=1.0.0
 markdown>=3.5.2
 
+# LaTeX Export
+# Requer dependências de sistema para compilação completa do PDF:
+# `latexmk` ou `pdflatex` + (`biber` ou `bibtex`) e a classe `abntex2`.
+
 # LLM & NLP
 llama-cpp-python>=0.2.26
 litellm>=1.72.0
