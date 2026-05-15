@@ -6,6 +6,7 @@ import re
 import io
 import json
 import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -207,6 +208,40 @@ class PDFProcessorOCR:
             total_pages = len(doc)
             requires_ocr = bool(getattr(metadata, "requires_ocr", False))
             self._prepare_processing_runtime(metadata, output_dir, total_pages)
+
+            if requires_ocr and self._olmocr_is_available():
+                doc.close()
+                olmocr_text = self._run_olmocr_document(filepath=filepath, output_dir=output_dir)
+                if olmocr_text.strip():
+                    chapter_path = output_dir / "capitulo-001.md"
+                    chapter_path.write_text(olmocr_text, encoding="utf-8")
+                    return {
+                        'chapters': [{
+                            'title': 'Transcrição OCR',
+                            'chapter_title': 'Transcrição OCR',
+                            'filename': 'capitulo-001',
+                            'number': 1,
+                            'chapter_num': 1,
+                            'content': olmocr_text,
+                            'pages': f"1-{max(total_pages, 1)}",
+                            'start_page': 1,
+                            'end_page': max(total_pages, 1),
+                            'missing_text_pages': 0,
+                            'filepath': str(chapter_path),
+                        }],
+                        'warnings': [],
+                        'success': True,
+                        'pages_processed': total_pages,
+                        'total_pages': total_pages
+                    }
+                return {
+                    'chapters': [],
+                    'warnings': ["olmOCR foi executado, mas não retornou conteúdo textual."],
+                    'success': False,
+                    'pages_processed': 0,
+                    'total_pages': total_pages
+                }
+
             if self.runtime_state.get("scan_heavy_mode"):
                 warnings.append(
                     "PDF escaneado pesado detectado. OCR será feito de forma sequencial com cache e retomada."
@@ -885,7 +920,7 @@ class PDFProcessorOCR:
 
     def _ocr_is_available(self) -> bool:
         """Valida dependências Python e o binário do Tesseract."""
-        return (
+        return self._olmocr_is_available() or (
             fitz is not None
             and Image is not None
             and pytesseract is not None
@@ -904,7 +939,59 @@ class PDFProcessorOCR:
         if shutil.which("tesseract") is None:
             missing.append("binário tesseract")
 
+        if not self._olmocr_is_available():
+            return "OCR indisponível: faltando CLI olmocr."
+        if not missing:
+            return "OCR indisponível: backend não identificado."
         return "OCR indisponível: faltando " + ", ".join(missing) + "."
+
+    def _olmocr_is_available(self) -> bool:
+        """Valida disponibilidade do olmOCR via CLI."""
+        return shutil.which("olmocr") is not None
+
+    def _run_olmocr_document(self, filepath: str, output_dir: Path) -> str:
+        """Executa olmOCR para o documento inteiro e retorna markdown extraído."""
+        workspace_dir = output_dir / ".olmocr_workspace"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+
+        command = [
+            "olmocr",
+            str(workspace_dir),
+            "--markdown",
+            "--pdfs",
+            str(filepath),
+            "--workers",
+            "1",
+            "--pages_per_group",
+            "1",
+        ]
+        try:
+            proc = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:
+            logger.warning("Falha ao invocar olmOCR: %s", exc)
+            return ""
+
+        if proc.returncode != 0:
+            logger.warning("olmOCR retornou código %s: %s", proc.returncode, (proc.stderr or proc.stdout or "").strip())
+            return ""
+
+        markdown_dir = workspace_dir / "markdown"
+        if not markdown_dir.exists():
+            return ""
+
+        markdown_files = sorted(markdown_dir.glob("*.md"), key=lambda item: item.stat().st_mtime, reverse=True)
+        if not markdown_files:
+            return ""
+
+        try:
+            return markdown_files[0].read_text(encoding="utf-8").strip()
+        except Exception:
+            return ""
     
     def _preprocess_image(self, image: Image.Image) -> Image.Image:
         """Pré-processa imagem para melhor OCR."""

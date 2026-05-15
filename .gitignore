@@ -57,7 +57,6 @@ data/cache/*
 !data/database/.keep
 !data/exports/.keep
 !data/cache/.keep
-.data/
 
 # Models (large files)
 data/models/*

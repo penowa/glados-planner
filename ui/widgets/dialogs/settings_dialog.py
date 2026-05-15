@@ -26,7 +26,12 @@ from ui.utils.session_keybindings import SESSION_SHORTCUT_DEFINITIONS, default_s
 
 
 ZATHURA_KEYMAP_DEFINITIONS = [
-    {"id": "capture_citation", "label": "Criar bookmark de citação", "default_key": "zb", "command": 'feedkeys ":bmark "'},
+    {
+        "id": "capture_citation",
+        "label": "Capturar recorte para citação",
+        "default_key": "<C-g>",
+        "command": "exec ~/.local/share/zathura/glados-zathura-capture.sh $PAGE $FILE",
+    },
     {"id": "reload", "label": "Recarregar documento", "default_key": "r", "command": "reload"},
     {"id": "toggle_fullscreen", "label": "Alternar tela cheia", "default_key": "f", "command": "toggle_fullscreen"},
     {"id": "scroll_down", "label": "Scroll para baixo", "default_key": "J", "command": "scroll down"},
@@ -285,6 +290,9 @@ class ZathuraKeybindingsDialog(QDialog):
     def _load_values(self):
         model = self._model_getter()
         mapped_keys, self._unmapped_keymap_lines = self._parse_known_keymaps(getattr(model, "keymaps", []) or [])
+        capture_binding = str(getattr(model, "capture_keybinding", "") or "").strip()
+        if capture_binding:
+            mapped_keys["capture_citation"] = capture_binding
         for item in ZATHURA_KEYMAP_DEFINITIONS:
             self._zathura_key_inputs[item["id"]].setText(mapped_keys.get(item["id"], item["default_key"]))
 
@@ -330,6 +338,8 @@ class ZathuraKeybindingsDialog(QDialog):
         new_keymaps: list[str] = []
         for item in ZATHURA_KEYMAP_DEFINITIONS:
             key_text = self._zathura_key_inputs[item["id"]].text().strip()
+            if item["id"] == "capture_citation":
+                model.capture_keybinding = key_text or item["default_key"]
             if key_text:
                 new_keymaps.append(f"map {key_text} {item['command']}")
         new_keymaps.extend(self._unmapped_keymap_lines)

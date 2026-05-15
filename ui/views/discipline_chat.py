@@ -1074,6 +1074,7 @@ class DisciplineChatView(QWidget):
         )
         menu = QMenu(self)
         toggle_action = None
+        remove_action = None
         if pinned_key in self.FIXED_CHAT_ORDER:
             fixed_action = menu.addAction("Fixado (não pode ser desfixado)")
             fixed_action.setEnabled(False)
@@ -1082,10 +1083,81 @@ class DisciplineChatView(QWidget):
         else:
             toggle_action = menu.addAction("Fixar chat")
 
+        if not role and pinned_key not in self.FIXED_CHAT_ORDER:
+            menu.addSeparator()
+            remove_action = menu.addAction("Remover disciplina")
+
         selected = menu.exec(self.sidebar_list.viewport().mapToGlobal(pos))
-        if selected is None or selected != toggle_action:
+        if selected is None:
             return
-        self._set_chat_pinned(chat_name, pinned=not bool(pinned_key))
+        if selected == toggle_action:
+            self._set_chat_pinned(chat_name, pinned=not bool(pinned_key))
+            return
+        if selected == remove_action:
+            self._remove_discipline_chat(chat_name)
+
+    def _remove_discipline_chat(self, chat_name: str) -> None:
+        discipline = str(chat_name or "").strip()
+        if not discipline:
+            return
+
+        fixed_pin = self._fixed_pin_key_for_chat(discipline)
+        if fixed_pin:
+            QMessageBox.warning(self, "Remover disciplina", "Esse chat fixo não pode ser removido.")
+            return
+
+        ask = QMessageBox.question(
+            self,
+            "Remover disciplina",
+            (
+                f"Remover a disciplina '{discipline}'?\n\n"
+                "Isso vai excluir a nota em 05-DISCIPLINAS e remover o chat da barra lateral."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ask != QMessageBox.StandardButton.Yes:
+            return
+
+        removed_note = False
+        vault_root = self._resolve_vault_root()
+        if vault_root is not None:
+            note_path = self._resolve_discipline_note(vault_root, discipline)
+            if note_path is not None and note_path.exists():
+                try:
+                    note_path.unlink()
+                    removed_note = True
+                except Exception as exc:
+                    logger.error("Falha ao remover nota da disciplina '%s': %s", discipline, exc)
+                    QMessageBox.warning(
+                        self,
+                        "Remover disciplina",
+                        f"Não foi possível remover a nota da disciplina: {exc}",
+                    )
+                    return
+
+            image_path = self._find_chat_profile_image(discipline)
+            if image_path is not None and image_path.exists():
+                try:
+                    image_path.unlink()
+                except Exception as exc:
+                    logger.warning("Falha ao remover imagem de perfil da disciplina '%s': %s", discipline, exc)
+
+        normalized = self._normalize_chat_name(discipline)
+        self._user_pinned_chats.discard(normalized)
+        self._chat_last_interaction.pop(normalized, None)
+        self._conversation_messages.pop(discipline, None)
+
+        if self._active_request_conversation and self._normalize_chat_name(self._active_request_conversation) == normalized:
+            self._active_request_conversation = ""
+            self._stop_processing_indicator()
+            self._stop_typing_animation()
+            self._set_chat_locked(False)
+
+        self._load_conversations()
+
+        if removed_note:
+            QMessageBox.information(self, "Remover disciplina", f"Disciplina '{discipline}' removida com sucesso.")
 
     def _mark_chat_interaction(self, chat_name: str, *, reorder: bool = True) -> None:
         normalized = self._normalize_chat_name(chat_name)
@@ -3339,12 +3411,21 @@ class DisciplineChatView(QWidget):
     def _open_add_agenda_dialog(self) -> None:
         self._hide_quick_add_box()
         try:
-            from ui.views.agenda import AddEventDialog
+            from ui.views.agenda import AddEventDialog, EventTypeSelectionDialog
         except Exception as exc:
-            logger.error("Falha ao importar AddEventDialog: %s", exc)
+            logger.error("Falha ao importar diálogos de agenda: %s", exc)
             return
 
-        dialog = AddEventDialog(self.controllers.get("agenda"), QDate.currentDate(), self)
+        type_dialog = EventTypeSelectionDialog(self)
+        if type_dialog.exec() != QDialog.DialogCode.Accepted or not type_dialog.selected_event_type:
+            return
+
+        dialog = AddEventDialog(
+            self.controllers.get("agenda"),
+            QDate.currentDate(),
+            self,
+            selected_event_type=type_dialog.selected_event_type,
+        )
         if hasattr(dialog, "discipline_input"):
             if hasattr(dialog.discipline_input, "setEditText"):
                 dialog.discipline_input.setEditText(self._current_conversation)

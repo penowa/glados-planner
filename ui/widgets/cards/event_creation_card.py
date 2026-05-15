@@ -27,7 +27,7 @@ class EventCreationCard(PhilosophyCard):
     EVENT_TYPES = [
         ("casual", "🎯 Casual", "Evento geral"),
         ("leitura", "📚 Leitura", "Sessão de leitura"),
-        ("producao", "✍️ Produção", "Escrita ou produção acadêmica"),
+        ("dissertacao", "✍️ Dissertação", "Planejamento e escrita da dissertação"),
         ("revisao", "🔄 Revisão", "Revisão de conteúdo"),
         ("aula", "🎓 Aula", "Aula ou palestra"),
         ("orientacao", "👥 Orientação", "Orientação ou reunião"),
@@ -99,6 +99,7 @@ class EventCreationCard(PhilosophyCard):
         self.main_layout.setContentsMargins(16, 16, 16, 16)
         
         # Formulário
+        self._create_type_selection_section()
         self._create_basic_info_section()
         self._create_datetime_section()
         self._create_recurrence_section()
@@ -108,6 +109,10 @@ class EventCreationCard(PhilosophyCard):
         self.book_selection_widget = self._create_book_selection_section()
         self.main_layout.addWidget(self.book_selection_widget)
         self.book_selection_widget.hide()
+
+        self.dissertation_widget = self._create_dissertation_section()
+        self.main_layout.addWidget(self.dissertation_widget)
+        self.dissertation_widget.hide()
         
         # Botões de ação
         self._create_action_buttons()
@@ -124,10 +129,34 @@ class EventCreationCard(PhilosophyCard):
         
         # Rodapé
         self._setup_footer()
+
+    def _create_type_selection_section(self):
+        """Cria seleção visual do tipo de compromisso."""
+        selector_group = QGroupBox("Que tipo de compromisso você quer adicionar?")
+        selector_layout = QGridLayout()
+        selector_layout.setSpacing(8)
+
+        self.type_button_group = QButtonGroup(self)
+        self.type_button_group.setExclusive(True)
+        self.type_buttons: Dict[str, QPushButton] = {}
+
+        for index, (value, text, tooltip) in enumerate(self.EVENT_TYPES):
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setToolTip(tooltip)
+            button.setMinimumHeight(44)
+            button.setProperty("event_type", value)
+            button.clicked.connect(lambda checked=False, event_type=value: self._select_event_type(event_type))
+            selector_layout.addWidget(button, index // 2, index % 2)
+            self.type_button_group.addButton(button)
+            self.type_buttons[value] = button
+
+        selector_group.setLayout(selector_layout)
+        self.main_layout.addWidget(selector_group)
         
     def _create_basic_info_section(self):
         """Cria seção de informações básicas"""
-        basic_group = QGroupBox("Informações Básicas")
+        self.basic_group = QGroupBox("Informações Básicas")
         basic_layout = QGridLayout()
         basic_layout.setSpacing(8)
         
@@ -152,6 +181,7 @@ class EventCreationCard(PhilosophyCard):
             idx = self.type_combo.count() - 1
             self.type_combo.setItemData(idx, tooltip, Qt.ItemDataRole.ToolTipRole)
         basic_layout.addWidget(self.type_combo, 2, 1)
+        self.type_combo.hide()
         
         # Prioridade
         basic_layout.addWidget(QLabel("Prioridade:"), 2, 2)
@@ -168,12 +198,12 @@ class EventCreationCard(PhilosophyCard):
         self.discipline_input.setPlaceholderText("Ex: Filosofia, Ética...")
         basic_layout.addWidget(self.discipline_input, 3, 1, 1, 3)
         
-        basic_group.setLayout(basic_layout)
-        self.main_layout.addWidget(basic_group)
+        self.basic_group.setLayout(basic_layout)
+        self.main_layout.addWidget(self.basic_group)
         
     def _create_datetime_section(self):
         """Cria seção de data e hora"""
-        datetime_group = QGroupBox("Data e Horário")
+        self.datetime_group = QGroupBox("Data e Horário")
         datetime_layout = QGridLayout()
         datetime_layout.setSpacing(8)
         
@@ -214,12 +244,12 @@ class EventCreationCard(PhilosophyCard):
         self.all_day_check = QCheckBox("Dia inteiro")
         datetime_layout.addWidget(self.all_day_check, 2, 2, 1, 2)
         
-        datetime_group.setLayout(datetime_layout)
-        self.main_layout.addWidget(datetime_group)
+        self.datetime_group.setLayout(datetime_layout)
+        self.main_layout.addWidget(self.datetime_group)
         
     def _create_recurrence_section(self):
         """Cria seção de recorrência"""
-        recurrence_group = QGroupBox("Recorrência")
+        self.recurrence_group = QGroupBox("Recorrência")
         recurrence_layout = QVBoxLayout()
         
         # Tipo de recorrência
@@ -309,12 +339,12 @@ class EventCreationCard(PhilosophyCard):
         recurrence_layout.addLayout(recurrence_selector_layout)
         recurrence_layout.addWidget(self.recurrence_stack)
         
-        recurrence_group.setLayout(recurrence_layout)
-        self.main_layout.addWidget(recurrence_group)
+        self.recurrence_group.setLayout(recurrence_layout)
+        self.main_layout.addWidget(self.recurrence_group)
         
     def _create_advanced_section(self):
         """Cria seção de configurações avançadas"""
-        advanced_group = QGroupBox("Configurações Avançadas")
+        self.advanced_group = QGroupBox("Configurações Avançadas")
         advanced_layout = QGridLayout()
         advanced_layout.setSpacing(8)
         
@@ -350,8 +380,8 @@ class EventCreationCard(PhilosophyCard):
         self.progress_notes.setPlaceholderText("Observações iniciais...")
         advanced_layout.addWidget(self.progress_notes, 2, 1, 1, 3)
         
-        advanced_group.setLayout(advanced_layout)
-        self.main_layout.addWidget(advanced_group)
+        self.advanced_group.setLayout(advanced_layout)
+        self.main_layout.addWidget(self.advanced_group)
         
     def _create_book_selection_section(self):
         """Cria seção de seleção de livros (para eventos de leitura)"""
@@ -386,6 +416,46 @@ class EventCreationCard(PhilosophyCard):
         
         book_widget.setLayout(book_layout)
         return book_widget
+
+    def _create_dissertation_section(self):
+        """Cria seção específica para dissertação."""
+        dissertation_group = QGroupBox("Configuração da Dissertação")
+        dissertation_layout = QGridLayout()
+        dissertation_layout.setSpacing(8)
+
+        dissertation_layout.addWidget(QLabel("Data limite:"), 0, 0)
+        self.dissertation_deadline_input = QDateTimeEdit()
+        self.dissertation_deadline_input.setCalendarPopup(True)
+        self.dissertation_deadline_input.setDateTime(QDateTime.currentDateTime().addDays(14))
+        dissertation_layout.addWidget(self.dissertation_deadline_input, 0, 1)
+
+        dissertation_layout.addWidget(QLabel("Horas estimadas:"), 0, 2)
+        self.dissertation_hours_input = QSpinBox()
+        self.dissertation_hours_input.setRange(1, 300)
+        self.dissertation_hours_input.setValue(12)
+        dissertation_layout.addWidget(self.dissertation_hours_input, 0, 3)
+
+        dissertation_layout.addWidget(QLabel("Janela preferida:"), 1, 0)
+        self.dissertation_preferred_time = QComboBox()
+        self.dissertation_preferred_time.addItem("Sem preferência", "")
+        self.dissertation_preferred_time.addItem("Manhã", "manha")
+        self.dissertation_preferred_time.addItem("Tarde", "tarde")
+        self.dissertation_preferred_time.addItem("Noite", "noite")
+        dissertation_layout.addWidget(self.dissertation_preferred_time, 1, 1)
+
+        dissertation_layout.addWidget(QLabel("Bloco padrão (min):"), 1, 2)
+        self.dissertation_session_minutes = QSpinBox()
+        self.dissertation_session_minutes.setRange(30, 180)
+        self.dissertation_session_minutes.setSingleStep(15)
+        self.dissertation_session_minutes.setValue(90)
+        dissertation_layout.addWidget(self.dissertation_session_minutes, 1, 3)
+
+        hint = QLabel("O sistema vai criar um prazo de entrega e distribuir sessões automáticas de escrita até essa data.")
+        hint.setWordWrap(True)
+        dissertation_layout.addWidget(hint, 2, 0, 1, 4)
+
+        dissertation_group.setLayout(dissertation_layout)
+        return dissertation_group
         
     def _create_action_buttons(self):
         """Cria botões de ação"""
@@ -466,6 +536,17 @@ class EventCreationCard(PhilosophyCard):
         if hasattr(self, 'book_combo'):
             self.book_combo.currentIndexChanged.connect(self._on_book_selected)
             self.new_book_btn.clicked.connect(self._on_new_book_clicked)
+
+    def _select_event_type(self, event_type: str):
+        """Sincroniza seleção visual com o combo interno."""
+        index = self.type_combo.findData(event_type)
+        if index >= 0 and self.type_combo.currentIndex() != index:
+            self.type_combo.setCurrentIndex(index)
+
+        for value, button in self.type_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(value == event_type)
+            button.blockSignals(False)
         
     def _load_defaults(self):
         """Carrega valores padrão"""
@@ -484,6 +565,7 @@ class EventCreationCard(PhilosophyCard):
         
         # Configura recorrência padrão
         self.recurrence_stack.setCurrentIndex(0)
+        self._select_event_type("casual")
         
         # Atualiza duração
         self._update_duration()
@@ -513,13 +595,20 @@ class EventCreationCard(PhilosophyCard):
     def _on_event_type_changed(self, index):
         """Lida com mudança no tipo de evento"""
         event_type = self.type_combo.currentData()
-        
-        # Mostra/oculta seção de livros para eventos de leitura
-        if event_type == "leitura":
-            self.book_selection_widget.show()
+        self._select_event_type(event_type)
+
+        is_reading = event_type == "leitura"
+        is_dissertation = event_type == "dissertacao"
+
+        self.book_selection_widget.setVisible(is_reading)
+        self.dissertation_widget.setVisible(is_dissertation)
+        self.datetime_group.setVisible(not is_dissertation)
+        self.recurrence_group.setVisible(not is_dissertation)
+
+        if is_reading:
             self._load_available_books()
-        else:
-            self.book_selection_widget.hide()
+        elif is_dissertation and not self.title_input.text().strip():
+            self.title_input.setText("Nova dissertação")
             
     def _on_book_selected(self, index):
         """Lida com seleção de livro"""
@@ -647,6 +736,10 @@ class EventCreationCard(PhilosophyCard):
             if self.agenda_controller:
                 self._schedule_reading_events(event_data)
                 return
+
+        if event_data['type'] == 'dissertacao':
+            self._schedule_dissertation_events(event_data)
+            return
                 
         # Para outros tipos de evento, cria respeitando recorrência.
         self._create_events_from_recurrence(event_data)
@@ -658,19 +751,26 @@ class EventCreationCard(PhilosophyCard):
     def _validate_form(self) -> bool:
         """Valida os dados do formulário"""
         errors = []
+        event_type = self.type_combo.currentData()
         
         # Título obrigatório
         if not self.title_input.text().strip():
             errors.append("Título é obrigatório")
             
         # Validação de datas
-        start_dt, end_dt = self._get_start_end_datetimes()
-        
-        if start_dt >= end_dt:
-            errors.append("Data/hora de início deve ser anterior ao fim")
+        if event_type != "dissertacao":
+            start_dt, end_dt = self._get_start_end_datetimes()
+            if start_dt >= end_dt:
+                errors.append("Data/hora de início deve ser anterior ao fim")
+        else:
+            deadline_dt = self.dissertation_deadline_input.dateTime()
+            if deadline_dt <= QDateTime.currentDateTime():
+                errors.append("A data limite da dissertação precisa estar no futuro")
+            if self.dissertation_hours_input.value() <= 0:
+                errors.append("Informe uma estimativa de horas para a escrita")
             
         # Validação para eventos de leitura
-        if self.type_combo.currentData() == "leitura":
+        if event_type == "leitura":
             if not self.current_book_id:
                 errors.append("Selecione um livro para eventos de leitura")
                 
@@ -684,12 +784,14 @@ class EventCreationCard(PhilosophyCard):
         
     def _prepare_event_data(self) -> dict:
         """Prepara dados do evento para envio"""
+        event_type = self.type_combo.currentData()
+
         # Informações básicas
         event_data = {
             'id': str(uuid.uuid4()),
             'title': self.title_input.text().strip(),
             'description': self.desc_input.toPlainText().strip(),
-            'type': self.type_combo.currentData(),
+            'type': event_type,
             'priority': self.priority_combo.currentData(),
             'discipline': self.discipline_input.text().strip(),
             'difficulty': self.difficulty_slider.value(),
@@ -700,15 +802,22 @@ class EventCreationCard(PhilosophyCard):
             'completed': False
         }
         
-        # Data e hora
-        start_dt, end_dt = self._get_start_end_datetimes()
-        
-        event_data['start'] = start_dt.toString(Qt.DateFormat.ISODate)
-        event_data['end'] = end_dt.toString(Qt.DateFormat.ISODate)
-        
-        # Recorrência
-        recurrence_type = self.recurrence_combo.currentData()
-        event_data['recurrence'] = self._prepare_recurrence_data(recurrence_type)
+        if event_type == "dissertacao":
+            deadline_dt = self.dissertation_deadline_input.dateTime()
+            event_data['start'] = deadline_dt.toString(Qt.DateFormat.ISODate)
+            event_data['end'] = deadline_dt.addSecs(3600).toString(Qt.DateFormat.ISODate)
+            recurrence_type = "none"
+            event_data['recurrence'] = {'type': 'none'}
+            event_data['deadline'] = deadline_dt.toString(Qt.DateFormat.ISODate)
+            event_data['estimated_hours'] = self.dissertation_hours_input.value()
+            event_data['preferred_time'] = self.dissertation_preferred_time.currentData()
+            event_data['session_minutes'] = self.dissertation_session_minutes.value()
+        else:
+            start_dt, end_dt = self._get_start_end_datetimes()
+            event_data['start'] = start_dt.toString(Qt.DateFormat.ISODate)
+            event_data['end'] = end_dt.toString(Qt.DateFormat.ISODate)
+            recurrence_type = self.recurrence_combo.currentData()
+            event_data['recurrence'] = self._prepare_recurrence_data(recurrence_type)
         
         # Tags
         tags_text = self.tags_input.text().strip()
@@ -982,6 +1091,55 @@ class EventCreationCard(PhilosophyCard):
         except Exception as e:
             print(f"Erro ao agendar leitura: {e}")
             self._create_single_event(event_data)
+
+    def _schedule_dissertation_events(self, event_data: dict):
+        """Cria o prazo da dissertação e distribui blocos de escrita."""
+        deadline_event = dict(event_data)
+        deadline_event["metadata"] = {
+            **(deadline_event.get("metadata", {}) or {}),
+            "deadline": event_data.get("deadline"),
+            "estimated_hours": event_data.get("estimated_hours"),
+            "event_role": "deadline",
+        }
+
+        deadline_event_id = self._add_event_via_controller(deadline_event)
+        if not deadline_event_id:
+            self.status_label.setText("❌ Não foi possível criar o prazo da dissertação")
+            self.status_label.setStyleSheet("color: #EF4444;")
+            return
+
+        allocator = getattr(self.agenda_controller, "allocate_writing_time", None)
+        manager = getattr(self.agenda_controller, "agenda_manager", None)
+        if allocator is None and manager is not None:
+            allocator = getattr(manager, "allocate_writing_time", None)
+
+        if allocator is None:
+            self.status_label.setText("✅ Prazo criado, mas sem alocador automático disponível")
+            self.status_label.setStyleSheet("color: #F59E0B;")
+            self.event_created.emit(deadline_event)
+            self.event_scheduled.emit(deadline_event_id)
+            return
+
+        result = allocator(
+            title=event_data.get("title", ""),
+            deadline=event_data.get("deadline", ""),
+            estimated_hours=event_data.get("estimated_hours", 1),
+            discipline=event_data.get("discipline", ""),
+            preferred_time=event_data.get("preferred_time", ""),
+            session_minutes=event_data.get("session_minutes", 90),
+            min_session_minutes=45,
+        )
+
+        if result.get("error"):
+            self.status_label.setText(f"❌ {result['error']}")
+            self.status_label.setStyleSheet("color: #EF4444;")
+            return
+
+        sessions = int(result.get("sessions_created", 0) or 0)
+        self.status_label.setText(f"✅ Dissertação criada com {sessions} blocos de escrita")
+        self.status_label.setStyleSheet("color: #10B981;")
+        self.event_created.emit(deadline_event)
+        self.event_scheduled.emit(deadline_event_id)
             
     def _on_reading_scheduled(self, result: dict, original_data: dict):
         """Lida com conclusão do agendamento de leitura"""

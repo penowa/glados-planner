@@ -130,6 +130,13 @@ class ZathuraConfig(BaseModel):
     recolor: bool = False
     session_open_mode: Literal["normal", "fullscreen", "presentation"] = "fullscreen"
     session_use_fork: bool = True
+    capture_enabled: bool = True
+    capture_keybinding: str = "<C-g>"
+    capture_script_file: str = "~/.local/share/zathura/glados-zathura-capture.sh"
+    capture_events_file: str = "~/.local/share/zathura/glados-captures.jsonl"
+    capture_images_dir: str = "~/.local/share/zathura/glados-captures"
+    capture_ocr_language: str = "por+eng"
+    capture_notify: bool = True
     extra_options: Dict[str, Any] = Field(default_factory=dict)
     include_files: List[str] = Field(default_factory=list)
     keymaps: List[str] = Field(default_factory=list)

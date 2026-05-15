@@ -124,6 +124,95 @@ class SmartAllocator:
         return selected
 
     @staticmethod
+    def allocate_writing_sessions(
+        task: Dict[str, Any],
+        available_slots: List[Dict[str, Any]],
+        user_preferences: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        Aloca sessões de escrita até completar a carga estimada.
+        """
+        total_minutes = max(0, int(task.get("total_minutes", 0) or 0))
+        if total_minutes <= 0:
+            return []
+
+        min_session = max(25, int(task.get("min_session_minutes", 45) or 45))
+        max_session = max(min_session, int(task.get("max_session_minutes", 90) or 90))
+        preferred_time = str(task.get("preferred_time") or "").strip().lower()
+        deadline_dt = SmartAllocator._parse_dt(str(task.get("deadline") or ""))
+
+        ranked_slots: List[Dict[str, Any]] = []
+        for slot in available_slots or []:
+            start_dt = SmartAllocator._parse_dt(str(slot.get("start") or ""))
+            end_dt = SmartAllocator._parse_dt(str(slot.get("end") or ""))
+            if not start_dt or not end_dt or end_dt <= start_dt:
+                continue
+
+            duration = int((end_dt - start_dt).total_seconds() // 60)
+            if duration < min_session:
+                continue
+            if deadline_dt and start_dt > deadline_dt:
+                continue
+
+            score = float(slot.get("quality_score", 0.5) or 0.5)
+            hour = start_dt.hour
+            if ("manhã" in preferred_time or "manha" in preferred_time) and 8 <= hour < 12:
+                score += 0.10
+            elif "tarde" in preferred_time and 14 <= hour < 18:
+                score += 0.10
+            elif "noite" in preferred_time and 19 <= hour < 22:
+                score += 0.10
+
+            if deadline_dt:
+                days_until_deadline = max(0, (deadline_dt.date() - start_dt.date()).days)
+                score += max(0.0, 0.12 - min(0.12, days_until_deadline * 0.01))
+
+            ranked_slots.append(
+                {
+                    "start_dt": start_dt,
+                    "duration_minutes": duration,
+                    "quality_score": score,
+                }
+            )
+
+        ranked_slots.sort(
+            key=lambda slot: (
+                -float(slot.get("quality_score", 0.5) or 0.5),
+                str(slot.get("start_dt") or ""),
+            )
+        )
+
+        allocations: List[Dict[str, Any]] = []
+        remaining_minutes = total_minutes
+
+        for slot in ranked_slots:
+            if remaining_minutes <= 0:
+                break
+
+            alloc_minutes = min(
+                int(slot.get("duration_minutes", 0) or 0),
+                max_session,
+                remaining_minutes,
+            )
+            if alloc_minutes < min_session:
+                continue
+
+            start_dt = slot["start_dt"]
+            end_dt = start_dt + timedelta(minutes=alloc_minutes)
+            allocations.append(
+                {
+                    "start": start_dt.strftime("%Y-%m-%d %H:%M"),
+                    "end": end_dt.strftime("%Y-%m-%d %H:%M"),
+                    "duration_minutes": alloc_minutes,
+                    "quality_score": round(float(slot.get("quality_score", 0.5) or 0.5), 4),
+                }
+            )
+            remaining_minutes -= alloc_minutes
+
+        allocations.sort(key=lambda slot: slot.get("start", ""))
+        return allocations
+
+    @staticmethod
     def estimate_difficulty(text_chunk: str, user_history: Dict[str, Any]) -> float:
         """
         Estima dificuldade (0.0 - 1.0) por complexidade lexical + fator histórico.

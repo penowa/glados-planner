@@ -25,6 +25,7 @@ class AgendaEventType(Enum):
     """Tipos de compromissos no sistema"""
     AULA = "aula"
     LEITURA = "leitura"
+    DISSERTACAO = "dissertacao"
     PRODUCAO = "producao"
     REVISAO = "revisao"
     ORIENTACAO = "orientacao"
@@ -752,10 +753,12 @@ class AgendaManager:
         difficulty = int(metadata.pop("difficulty", 3) or 3)
         progress_notes = metadata.pop("progress_notes", []) or []
 
+        normalized_event_type = self._normalize_event_type(event_type)
+
         # Cria evento
         event = AgendaEvent(
             id=str(uuid.uuid4()),
-            type=AgendaEventType(event_type),
+            type=AgendaEventType(normalized_event_type),
             title=title,
             start=start_dt,
             end=end_dt,
@@ -775,6 +778,7 @@ class AgendaManager:
             AgendaEventType.REUNIAO: EventPriority.FIXO,
             AgendaEventType.SEMINARIO: EventPriority.FIXO,
             AgendaEventType.PROVA: EventPriority.ALTA,
+            AgendaEventType.DISSERTACAO: EventPriority.ALTA,
             AgendaEventType.PRODUCAO: EventPriority.ALTA,
             AgendaEventType.LEITURA: EventPriority.MEDIA,
             AgendaEventType.REVISAO: EventPriority.MEDIA,
@@ -794,6 +798,101 @@ class AgendaManager:
         self._save_events()
         
         return event.id
+
+    def allocate_writing_time(
+        self,
+        title: str,
+        deadline: str,
+        estimated_hours: float,
+        discipline: str = "",
+        preferred_time: str = "",
+        session_minutes: int = 90,
+        min_session_minutes: int = 45,
+    ) -> Dict[str, Any]:
+        """
+        Aloca blocos automáticos de escrita para uma dissertação.
+        """
+        try:
+            deadline_dt = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))
+        except Exception:
+            return {"error": "Data limite inválida"}
+
+        total_minutes = max(min_session_minutes, int(round(float(estimated_hours or 0) * 60)))
+        if total_minutes <= 0:
+            return {"error": "Carga estimada inválida"}
+
+        start_day = datetime.now().date()
+        end_day = deadline_dt.date()
+        if end_day < start_day:
+            return {"error": "A data limite precisa estar no futuro"}
+
+        available_slots: List[Dict[str, Any]] = []
+        cursor_day = start_day
+        while cursor_day <= end_day:
+            available_slots.extend(
+                self.find_free_slots(
+                    cursor_day.isoformat(),
+                    duration_minutes=min_session_minutes,
+                    start_hour=8,
+                    end_hour=22,
+                    consider_preferences=True,
+                )
+            )
+            cursor_day += timedelta(days=1)
+
+        allocations = SmartAllocator.allocate_writing_sessions(
+            task={
+                "title": title,
+                "deadline": deadline_dt.isoformat(),
+                "total_minutes": total_minutes,
+                "min_session_minutes": min_session_minutes,
+                "max_session_minutes": session_minutes,
+                "preferred_time": preferred_time,
+            },
+            available_slots=available_slots,
+            user_preferences=self.user_preferences,
+        )
+
+        if not allocations:
+            return {"error": "Nenhum slot disponível para escrita até a data limite"}
+
+        created_sessions: List[Dict[str, Any]] = []
+        allocated_total = 0
+        for index, slot in enumerate(allocations, start=1):
+            duration_minutes = int(slot.get("duration_minutes", 0) or 0)
+            event_id = self.add_event(
+                title=f"Dissertação: Escrita - {title}",
+                start=str(slot.get("start") or ""),
+                end=str(slot.get("end") or ""),
+                event_type=AgendaEventType.DISSERTACAO.value,
+                discipline=discipline or "Dissertação",
+                difficulty=4,
+                auto_generated=True,
+                preferred_time=preferred_time,
+                deadline=deadline_dt.isoformat(),
+                session_index=index,
+                session_kind="writing",
+                source_title=title,
+            )
+            allocated_total += duration_minutes
+            created_sessions.append(
+                {
+                    "event_id": event_id,
+                    "start": slot.get("start"),
+                    "end": slot.get("end"),
+                    "duration_minutes": duration_minutes,
+                    "quality_score": slot.get("quality_score", 0.5),
+                }
+            )
+
+        return {
+            "title": title,
+            "deadline": deadline_dt.isoformat(),
+            "estimated_minutes": total_minutes,
+            "allocated_minutes": allocated_total,
+            "sessions_created": len(created_sessions),
+            "allocations": created_sessions,
+        }
     
     def get_day_events(self, date_str: str = None) -> List[AgendaEvent]:
         """
@@ -981,6 +1080,13 @@ class AgendaManager:
         if weekday == 5:  # sábado
             return 0.6
         return 0.45  # domingo
+
+    def _normalize_event_type(self, event_type: str) -> str:
+        """Converte aliases legados para o tipo canônico."""
+        normalized = str(event_type or "casual").strip().lower()
+        if normalized == AgendaEventType.PRODUCAO.value:
+            return AgendaEventType.DISSERTACAO.value
+        return normalized
     
     def allocate_reading_time(self, book_id: str, pages_per_day: float,
                             reading_speed: float = 10.0,
@@ -1378,7 +1484,7 @@ class AgendaManager:
             stats["completion_rate"] = (stats["completed_events"] / stats["total_events"]) * 100
         
         # Score de produtividade
-        productive_categories = ["leitura", "producao", "revisao", "aula"]
+        productive_categories = ["leitura", "dissertacao", "producao", "revisao", "aula"]
         productive_time = sum(
             stats["time_by_category"].get(cat, 0) 
             for cat in productive_categories

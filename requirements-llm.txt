@@ -1,5 +1,4 @@
 # Dependências principais para o módulo LLM
-llama-cpp-python>=0.2.0
 litellm>=1.72.0
 openai>=1.40.0
 backoff>=2.2.1

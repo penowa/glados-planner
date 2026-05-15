@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html as html_lib
 import hashlib
+import json
 import logging
 import re
 import sqlite3
@@ -523,6 +524,8 @@ class SessionView(QWidget):
         self._zathura_process: Optional[subprocess.Popen] = None
         self._zathura_monitored_pdf_path: Optional[Path] = None
         self._processed_zathura_bookmark_signatures: set[str] = set()
+        self._processed_zathura_capture_signatures: set[str] = set()
+        self._zathura_capture_queue_offset: int = 0
         self._configurable_shortcuts: dict[str, QShortcut] = {}
         self.mindmap_review_module = MindmapReviewModule()
         self.review_system = self._resolve_review_system()
@@ -2093,12 +2096,16 @@ class SessionView(QWidget):
         self._zathura_process = process
         self._zathura_monitored_pdf_path = Path(pdf_path).expanduser().resolve()
         self._processed_zathura_bookmark_signatures = self._load_processed_zathura_bookmark_signatures()
+        self._processed_zathura_capture_signatures = self._load_processed_zathura_capture_signatures()
+        self._zathura_capture_queue_offset = 0
+        self._sync_zathura_capture_events()
         self._sync_zathura_bookmarks()
         if not self._zathura_process_timer.isActive():
             self._zathura_process_timer.start()
 
     def _poll_zathura_process(self):
         if self._zathura_monitored_pdf_path is not None:
+            self._sync_zathura_capture_events()
             self._sync_zathura_bookmarks()
         process = self._zathura_process
         if process is None:
@@ -2111,6 +2118,7 @@ class SessionView(QWidget):
         if not finished:
             return
         self._zathura_process = None
+        self._sync_zathura_capture_events()
         self._sync_zathura_bookmarks()
         self._zathura_process_timer.stop()
         self._sync_progress_from_closed_zathura()
@@ -2188,6 +2196,196 @@ class SessionView(QWidget):
             if not self._append_zathura_bookmark_to_citation_note(bookmark, pdf_path, signature):
                 continue
             self._processed_zathura_bookmark_signatures.add(signature)
+
+    def _sync_zathura_capture_events(self):
+        if self._temporary_read_only_session:
+            return
+        pdf_path = self._zathura_monitored_pdf_path
+        if pdf_path is None or not self.current_book_id:
+            return
+
+        for event in self._load_zathura_capture_events(pdf_path):
+            signature = self._zathura_capture_signature(pdf_path, event)
+            if signature in self._processed_zathura_capture_signatures:
+                continue
+            if not self._append_zathura_capture_to_citation_note(event, pdf_path, signature):
+                continue
+            self._processed_zathura_capture_signatures.add(signature)
+
+    def _load_zathura_capture_events(self, pdf_path: Path) -> list[Dict[str, Any]]:
+        queue_path = ZathuraConfigManager().capture_events_file
+        if not queue_path.exists():
+            self._zathura_capture_queue_offset = 0
+            return []
+
+        start_offset = max(0, int(self._zathura_capture_queue_offset or 0))
+        normalized_target = str(Path(pdf_path).expanduser().resolve())
+        events: list[Dict[str, Any]] = []
+
+        try:
+            with queue_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                handle.seek(0, 2)
+                file_size = handle.tell()
+                if start_offset > file_size:
+                    start_offset = 0
+                handle.seek(start_offset)
+                payload = handle.read()
+                self._zathura_capture_queue_offset = handle.tell()
+        except Exception as exc:
+            logger.debug("Falha ao ler fila de capturas do Zathura: %s", exc)
+            return []
+
+        for raw_line in payload.splitlines():
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(record, dict):
+                continue
+
+            raw_pdf = str(record.get("pdf_path") or "").strip()
+            if not raw_pdf:
+                continue
+            try:
+                candidate_pdf = str(Path(raw_pdf).expanduser().resolve())
+            except Exception:
+                candidate_pdf = str(Path(raw_pdf).expanduser())
+            if candidate_pdf != normalized_target:
+                continue
+
+            try:
+                page = max(1, int(record.get("page") or 1))
+            except Exception:
+                page = 1
+
+            events.append(
+                {
+                    "id": str(record.get("id") or "").strip(),
+                    "created_at": str(record.get("created_at") or "").strip(),
+                    "pdf_path": candidate_pdf,
+                    "page": page,
+                    "excerpt": str(record.get("excerpt") or "").strip(),
+                    "source": str(record.get("source") or "").strip(),
+                    "image_path": str(record.get("image_path") or "").strip(),
+                    "region": str(record.get("region") or "").strip(),
+                    "error": str(record.get("error") or "").strip(),
+                }
+            )
+
+        return events
+
+    def _zathura_capture_signature(self, pdf_path: Path, event: Dict[str, Any]) -> str:
+        raw_id = str(event.get("id") or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{40}", raw_id):
+            return raw_id
+
+        raw = "|".join(
+            [
+                str(Path(pdf_path).expanduser().resolve()),
+                str(event.get("created_at") or ""),
+                str(max(1, int(event.get("page") or 1))),
+                str(event.get("excerpt") or ""),
+                str(event.get("image_path") or ""),
+            ]
+        )
+        return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _load_processed_zathura_capture_signatures(self) -> set[str]:
+        note_path = self._citations_note_path()
+        if note_path is None or not note_path.exists():
+            return set()
+        try:
+            content = note_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return set()
+        return set(re.findall(r"<!--\s*glados-zathura-capture:\s*([0-9a-f]{40})\s*-->", content))
+
+    def _append_zathura_capture_to_citation_note(
+        self,
+        event: Dict[str, Any],
+        pdf_path: Path,
+        signature: str,
+    ) -> bool:
+        vault_root = self._get_vault_root()
+        progress = self._get_progress(str(self.current_book_id or "")) if self.current_book_id else {}
+        book_note = self._preferred_book_link_path(progress)
+        discipline_note = self._resolve_discipline_note_path(book_note)
+        discipline_name = discipline_note.stem if discipline_note else ""
+        if vault_root and book_note and book_note.exists():
+            try:
+                ensure_citations_note_for_book(
+                    vault_root,
+                    book_note_path=book_note,
+                    discipline=discipline_name,
+                    discipline_note_path=discipline_note,
+                    source_pdf_path=pdf_path,
+                )
+            except Exception as exc:
+                logger.debug("Falha ao garantir nota de citações antes de importar recorte: %s", exc)
+
+        note_path = self._citations_note_path()
+        if note_path is None:
+            return False
+
+        page = max(1, int(event.get("page") or 1))
+        chapter_path = self._chapter_path_for_page(page)
+        chapter_number = self._chapter_number_for_path(chapter_path)
+        marker = f"<!-- glados-zathura-capture: {signature} -->"
+
+        existing = ""
+        if note_path.exists():
+            try:
+                existing = note_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                existing = ""
+        if marker in existing:
+            return True
+
+        if not existing.strip():
+            existing = self._build_citations_note_header(pdf_path)
+
+        chapter_header = self._citations_chapter_header(chapter_number)
+        if chapter_header not in existing:
+            section_lines = ["", chapter_header]
+            if chapter_path and chapter_path.exists():
+                chapter_link = self._wikilink_for_path(chapter_path, alias=chapter_path.stem)
+                if chapter_link:
+                    section_lines.append(f"- Capítulo: {chapter_link}")
+            existing = existing.rstrip() + "\n" + "\n".join(section_lines) + "\n"
+
+        excerpt = re.sub(r"\s+", " ", str(event.get("excerpt") or "").replace("\u2029", " ").strip())
+        page_text = self._build_page_content(page)
+        if not excerpt:
+            excerpt = self._bookmark_excerpt_from_clipboard(page_text) or "Trecho sem texto detectavel no recorte."
+        line_start, line_end = self._line_range_for_excerpt(page_text, excerpt)
+        entry = self._build_capture_citation_entry(
+            excerpt=excerpt,
+            page=page,
+            line_start=line_start,
+            line_end=line_end,
+            source=str(event.get("source") or "").strip(),
+            error=str(event.get("error") or "").strip(),
+            image_path=str(event.get("image_path") or "").strip(),
+            marker=marker,
+        )
+        updated = self._append_markdown_block_to_section(existing, chapter_header, entry)
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+        highlight_applied = False
+        if excerpt and excerpt != "Trecho sem texto detectavel no recorte.":
+            self._link_excerpt_to_note(note_path, excerpt)
+            highlight_applied = self._highlight_excerpt_in_pdf(pdf_path, page, excerpt, signature)
+        self._append_note_link_to_current_chapter(note_path, chapter_path=chapter_path)
+        if str(event.get("source") or "").strip() in {"olmocr_unavailable", "olmocr_failed"}:
+            self.pdf_launch_status_label.setText(f"Recorte registrado com falha de OCR (página {page})")
+        elif highlight_applied:
+            self.pdf_launch_status_label.setText(f"Recorte importado e grifado no PDF (página {page})")
+        else:
+            self.pdf_launch_status_label.setText(f"Recorte importado em {note_path.name} (sem grifo automático)")
+        return True
 
     def _load_zathura_bookmarks(self, pdf_path: Path) -> list[Dict[str, Any]]:
         manager = ZathuraConfigManager()
@@ -2284,20 +2482,103 @@ class SessionView(QWidget):
                     section_lines.append(f"- Capítulo: {chapter_link}")
             existing = existing.rstrip() + "\n" + "\n".join(section_lines) + "\n"
 
+        page_text = self._build_page_content(page)
+        excerpt = self._bookmark_excerpt_from_clipboard(page_text) or "Insira a citação aqui"
+        line_start, line_end = self._line_range_for_excerpt(page_text, excerpt)
         entry = self._build_citation_entry(
-            excerpt="Insira a citação aqui",
+            excerpt=excerpt,
             page=page,
-            line_start=0,
-            line_end=0,
+            line_start=line_start,
+            line_end=line_end,
             bookmark_id=str(bookmark.get("id") or "").strip(),
             marker=marker,
         )
         updated = self._append_markdown_block_to_section(existing, chapter_header, entry)
         note_path.parent.mkdir(parents=True, exist_ok=True)
         note_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+        if excerpt and excerpt != "Insira a citação aqui":
+            self._link_excerpt_to_note(note_path, excerpt)
+            self._highlight_excerpt_in_pdf(pdf_path, page, excerpt, signature)
         self._append_note_link_to_current_chapter(note_path, chapter_path=chapter_path)
         self.pdf_launch_status_label.setText(f"Citação salva em {note_path.name} (página {page})")
         return True
+
+    def _highlight_excerpt_in_pdf(self, pdf_path: Path, page: int, excerpt: str, signature: str) -> bool:
+        clean_excerpt = re.sub(r"\s+", " ", str(excerpt or "").strip())
+        if not clean_excerpt or len(clean_excerpt) < 12:
+            return False
+
+        try:
+            import fitz  # PyMuPDF
+        except Exception:
+            return False
+
+        target_pdf = Path(pdf_path).expanduser()
+        if not target_pdf.exists():
+            return False
+
+        page_index = max(0, int(page or 1) - 1)
+        candidates: list[str] = []
+        for size in (len(clean_excerpt), 220, 160, 120, 90):
+            snippet = clean_excerpt[:size].strip()
+            if snippet and snippet not in candidates:
+                candidates.append(snippet)
+
+        try:
+            doc = fitz.open(str(target_pdf))
+        except Exception:
+            return False
+
+        changed = False
+        try:
+            if page_index >= len(doc):
+                return False
+            pdf_page = doc.load_page(page_index)
+            areas = []
+            for candidate in candidates:
+                try:
+                    rects = pdf_page.search_for(candidate)
+                except Exception:
+                    rects = []
+                if rects:
+                    areas = rects
+                    break
+
+            if not areas:
+                return False
+
+            try:
+                annot = pdf_page.add_highlight_annot(areas)
+            except Exception:
+                annot = None
+            if annot is None:
+                return False
+
+            try:
+                annot.set_info(
+                    {
+                        "title": "GLaDOS",
+                        "subject": "glados-citation-highlight",
+                        "content": f"signature={signature}",
+                    }
+                )
+                annot.update()
+            except Exception:
+                pass
+
+            changed = True
+            if getattr(doc, "can_save_incrementally", lambda: False)():
+                doc.saveIncr()
+            else:
+                doc.save(str(target_pdf))
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
 
     def _build_citations_note_header(self, pdf_path: Path) -> str:
         progress = self._get_progress(str(self.current_book_id or "")) if self.current_book_id else {}
@@ -2324,12 +2605,17 @@ class SessionView(QWidget):
             return None
         progress = self._get_progress(str(self.current_book_id or "")) if self.current_book_id else {}
         book_note = self._preferred_book_link_path(progress)
+        book_dir = self._find_book_directory(progress) if progress else None
         if book_note and book_note.exists():
             context = resolve_citation_note_context(vault_root, book_note_path=book_note)
             if context is not None:
-                return build_citations_note_path(vault_root, context.title)
+                return build_citations_note_path(
+                    vault_root,
+                    context.title,
+                    book_dir_path=context.book_dir_path,
+                )
         title = self.current_book_title or "Livro"
-        return build_citations_note_path(vault_root, title)
+        return build_citations_note_path(vault_root, title, book_dir_path=book_dir)
 
     def _preferred_book_link_path(self, progress: Dict[str, Any]) -> Optional[Path]:
         book_dir = self._find_book_directory(progress) if progress else None
@@ -2450,6 +2736,57 @@ class SessionView(QWidget):
                 "",
             ]
         ).rstrip()
+
+    def _build_capture_citation_entry(
+        self,
+        *,
+        excerpt: str,
+        page: int,
+        line_start: int,
+        line_end: int,
+        source: str,
+        error: str,
+        image_path: str,
+        marker: str,
+    ) -> str:
+        quote_text = re.sub(r"\s+", " ", str(excerpt or "").replace("\u2029", " ").strip())
+        line_ref = self._format_line_reference(line_start, line_end)
+        abnt_ref = self._abnt_reference_for_quote(page, line_ref)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        source_key = str(source or "").strip().lower()
+        source_labels = {
+            "ocr_area": "Recorte OCR da area selecionada",
+            "clipboard": "Clipboard do sistema (fallback)",
+            "empty": "Recorte sem texto detectavel",
+            "olmocr_unavailable": "Falha: olmOCR não instalado",
+            "olmocr_failed": "Falha: olmOCR não retornou texto",
+        }
+        source_label = source_labels.get(source_key, source_key or "captura")
+
+        lines = [
+            "",
+            f"### Página {page} · recorte",
+            f"- Registrado em: {timestamp}",
+            f"- Origem: {source_label}",
+        ]
+        image = str(image_path or "").strip()
+        if image:
+            lines.append(f"- Recorte: `{image}`")
+        error_text = str(error or "").strip()
+        if error_text:
+            lines.append(f"- Detalhe OCR: {error_text}")
+        lines.extend(
+            [
+                "",
+                f"\"{quote_text}\"",
+                "",
+                abnt_ref,
+                "",
+                marker,
+                "",
+            ]
+        )
+        return "\n".join(lines).rstrip()
 
     def _append_markdown_block_to_section(self, content: str, section_header: str, block: str) -> str:
         header_pattern = re.compile(rf"(?m)^{re.escape(section_header)}\s*$")

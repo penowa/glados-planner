@@ -1,4 +1,4 @@
-"""Utilitários para notas de citações por livro em 02-ANOTAÇÕES."""
+"""Utilitários para notas de citações por livro em 01-LEITURAS/<autor>/<livro>/Citações."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,6 +22,7 @@ ANNOTATIONS_DIR = "02-ANOTAÇÕES"
 DISCIPLINE_DIR = "05-DISCIPLINAS"
 READINGS_DIR = "01-LEITURAS"
 MINDMAPS_DIR = "04-MAPAS MENTAIS"
+CITATIONS_SUBDIR = "Citações"
 
 
 @dataclass(frozen=True)
@@ -177,8 +178,16 @@ def _wikilink(vault_root: Path, path: Optional[Path], *, alias: str = "") -> str
     return f"[[{target}]]"
 
 
-def build_citations_note_path(vault_root: Path, title: str) -> Path:
+def build_citations_note_path(
+    vault_root: Path,
+    title: str,
+    *,
+    book_dir_path: Optional[Path] = None,
+) -> Path:
     safe = _sanitize_obsidian_title(f"Citações {title}")
+    if book_dir_path is not None:
+        book_dir = Path(book_dir_path).expanduser().resolve(strict=False)
+        return book_dir / CITATIONS_SUBDIR / f"{safe}.md"
     return Path(vault_root) / ANNOTATIONS_DIR / f"{safe}.md"
 
 
@@ -698,7 +707,11 @@ def ensure_citations_note_for_book(
             "canvas_path": "",
         }
 
-    note_path = build_citations_note_path(context.vault_root, context.title)
+    note_path = build_citations_note_path(
+        context.vault_root,
+        context.title,
+        book_dir_path=context.book_dir_path,
+    )
     existed_before = note_path.exists()
     note_path.parent.mkdir(parents=True, exist_ok=True)
     changed, content = _ensure_citations_note_header(note_path, build_citations_note_header(context))

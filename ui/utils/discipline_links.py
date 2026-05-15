@@ -287,9 +287,17 @@ def _resolve_annotation_note_candidate(vault_root: Path, raw_path: object) -> Op
     except Exception:
         return None
 
-    if not relative.parts or relative.parts[0] not in {"02-ANOTAÇÕES", "02-ANOTACOES"}:
-        return None
-    return candidate
+    if relative.parts:
+        root_dir = relative.parts[0]
+        if root_dir in {"02-ANOTAÇÕES", "02-ANOTACOES"}:
+            return candidate
+        if (
+            root_dir == "01-LEITURAS"
+            and len(relative.parts) >= 5
+            and str(relative.parts[3]).strip().lower() == "citações".lower()
+        ):
+            return candidate
+    return None
 
 
 def append_book_note_links(

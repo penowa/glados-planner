@@ -75,6 +75,20 @@ class ClassNotesDialog(QDialog):
 
         self.list_widget = QListWidget()
         self.list_widget.setAlternatingRowColors(True)
+        self.list_widget.setStyleSheet(
+            "QListWidget {"
+            "  border: 1px solid #3A3A3A;"
+            "  border-radius: 8px;"
+            "  background: #151515;"
+            "}"
+            "QListWidget::item {"
+            "  padding: 10px 12px;"
+            "  border-bottom: 1px solid #2A2A2A;"
+            "}"
+            "QListWidget::item:selected {"
+            "  background: #223347;"
+            "}"
+        )
         self._populate_list()
         layout.addWidget(self.list_widget, 1)
 
@@ -108,9 +122,10 @@ class ClassNotesDialog(QDialog):
 
     def _populate_list(self) -> None:
         for work in self.available_works:
-            item = QListWidgetItem(work.title)
+            author = work.work_dir_abs.parent.name.strip() or "Autor não informado"
+            item = QListWidgetItem(f"{work.title}\nAutor: {author}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
+            item.setCheckState(Qt.CheckState.Unchecked)
             item.setToolTip(str(work.primary_note_abs))
             item.setData(Qt.ItemDataRole.UserRole, work)
             self.list_widget.addItem(item)

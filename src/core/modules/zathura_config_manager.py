@@ -75,12 +75,35 @@ class ZathuraConfigManager:
             return self.resolve_path(raw)
         return Path()
 
+    @property
+    def capture_script_file(self) -> Path:
+        raw = str(getattr(self.config, "capture_script_file", "") or "").strip()
+        if raw:
+            return self.resolve_path(raw)
+        return self.data_dir / "glados-zathura-capture.sh"
+
+    @property
+    def capture_events_file(self) -> Path:
+        raw = str(getattr(self.config, "capture_events_file", "") or "").strip()
+        if raw:
+            return self.resolve_path(raw)
+        return self.data_dir / "glados-captures.jsonl"
+
+    @property
+    def capture_images_dir(self) -> Path:
+        raw = str(getattr(self.config, "capture_images_dir", "") or "").strip()
+        if raw:
+            return self.resolve_path(raw)
+        return self.data_dir / "glados-captures"
+
     def status(self) -> Dict[str, Any]:
         binary = str(self.config.binary or "zathura").strip() or "zathura"
         generator = str(self.config.pywal_generator or "genzathurarc").strip() or "genzathurarc"
         colors_file = self.resolve_path(self.config.pywal_colors_file)
         binary_resolved = shutil.which(binary)
         generator_resolved = shutil.which(generator)
+        capture_script = self.capture_script_file
+        capture_queue = self.capture_events_file
         return {
             "enabled": bool(self.config.enabled),
             "binary": binary,
@@ -97,6 +120,12 @@ class ZathuraConfigManager:
             "pywal_colors_file": str(colors_file),
             "pywal_colors_found": colors_file.exists(),
             "theme_mode": str(self.config.theme_mode or "plain"),
+            "capture_enabled": bool(getattr(self.config, "capture_enabled", True)),
+            "capture_keybinding": str(getattr(self.config, "capture_keybinding", "<C-g>") or "<C-g>"),
+            "capture_script_file": str(capture_script),
+            "capture_script_exists": capture_script.exists(),
+            "capture_events_file": str(capture_queue),
+            "capture_events_exists": capture_queue.exists(),
         }
 
     def load_existing_config(self) -> str:
@@ -150,6 +179,7 @@ class ZathuraConfigManager:
             "success": False,
             "config_file": str(self.config_file),
             "theme_file": str(self.generated_theme_file),
+            "capture_script_file": str(self.capture_script_file),
             "warnings": [],
             "errors": [],
         }
@@ -162,6 +192,12 @@ class ZathuraConfigManager:
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if bool(getattr(self.config, "capture_enabled", True)):
+            script_ok, script_message = self._ensure_capture_helper_script()
+            if script_ok:
+                result["warnings"].append(script_message)
+            else:
+                result["errors"].append(script_message)
 
         theme_mode = str(self.config.theme_mode or "plain").strip().lower()
         if theme_mode == "pywal_internal":
@@ -214,10 +250,11 @@ class ZathuraConfigManager:
             if rendered:
                 lines.append(rendered)
 
-        if self.config.keymaps:
+        effective_keymaps = self._effective_keymaps()
+        if effective_keymaps:
             lines.append("")
             lines.append("# Keymaps customizados")
-            for mapping in self.config.keymaps:
+            for mapping in effective_keymaps:
                 clean = str(mapping or "").strip()
                 if clean:
                     lines.append(clean)
@@ -229,6 +266,299 @@ class ZathuraConfigManager:
             lines.append(extra)
 
         return "\n".join(lines).rstrip() + "\n"
+
+    def _effective_keymaps(self) -> List[str]:
+        keymaps: List[str] = []
+        seen: set[str] = set()
+        for raw in self.config.keymaps or []:
+            line = str(raw or "").strip()
+            if not line or line in seen:
+                continue
+            keymaps.append(line)
+            seen.add(line)
+
+        if bool(getattr(self.config, "capture_enabled", True)):
+            capture_binding = str(getattr(self.config, "capture_keybinding", "<C-g>") or "<C-g>").strip() or "<C-g>"
+            keymaps = [line for line in keymaps if not self._keymap_uses_binding(line, capture_binding)]
+            capture_line = self._default_capture_keymap_line(capture_binding)
+            line = capture_line.strip()
+            if line:
+                keymaps.insert(0, line)
+
+        deduped: List[str] = []
+        dedup_seen: set[str] = set()
+        for line in keymaps:
+            if line in dedup_seen:
+                continue
+            dedup_seen.add(line)
+            deduped.append(line)
+        return deduped
+
+    def _default_capture_keymap_line(self, binding: str) -> str:
+        safe_binding = str(binding or "<C-g>").strip() or "<C-g>"
+        raw_script = str(getattr(self.config, "capture_script_file", "") or "").strip()
+        script_path = raw_script or "~/.local/share/zathura/glados-zathura-capture.sh"
+        script_path = script_path.replace(" ", "\\ ")
+        return f"map {safe_binding} exec {script_path} $PAGE $FILE"
+
+    def _keymap_uses_binding(self, line: str, binding: str) -> bool:
+        normalized_line = str(line or "").strip()
+        normalized_binding = str(binding or "").strip()
+        if not normalized_line or not normalized_binding:
+            return False
+        pattern = re.compile(r"^map(?:\s+\[[^\]]+\])?\s+(\S+)\s+")
+        match = pattern.match(normalized_line)
+        if not match:
+            return False
+        return match.group(1).strip().lower() == normalized_binding.lower()
+
+    def _ensure_capture_helper_script(self) -> tuple[bool, str]:
+        script_path = self.capture_script_file
+        queue_path = self.capture_events_file
+        images_dir = self.capture_images_dir
+        ocr_lang = str(getattr(self.config, "capture_ocr_language", "por+eng") or "por+eng").strip() or "por+eng"
+        notify_enabled = bool(getattr(self.config, "capture_notify", True))
+
+        try:
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            queue_path.parent.mkdir(parents=True, exist_ok=True)
+            images_dir.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(
+                self._render_capture_helper_script(
+                    queue_path=queue_path,
+                    images_dir=images_dir,
+                    ocr_lang=ocr_lang,
+                    notify_enabled=notify_enabled,
+                ),
+                encoding="utf-8",
+            )
+            script_path.chmod(0o755)
+            return True, f"Helper de captura preparado em {script_path}."
+        except Exception as exc:
+            return False, f"Falha ao preparar helper de captura do Zathura: {exc}"
+
+    def _render_capture_helper_script(
+        self,
+        *,
+        queue_path: Path,
+        images_dir: Path,
+        ocr_lang: str,
+        notify_enabled: bool,
+    ) -> str:
+        queue_q = shlex.quote(str(queue_path.expanduser()))
+        images_q = shlex.quote(str(images_dir.expanduser()))
+        ocr_lang_q = shlex.quote(str(ocr_lang or "por+eng"))
+        notify_flag = "1" if notify_enabled else "0"
+        return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+PAGE_RAW="${{1:-0}}"
+shift || true
+PDF_PATH="${{*:-}}"
+
+if [[ -z "$PDF_PATH" ]]; then
+  exit 0
+fi
+
+QUEUE_FILE={queue_q}
+IMAGES_DIR={images_q}
+OCR_LANG={ocr_lang_q}
+NOTIFY_ENABLED={notify_flag}
+BOOKMARK_DB="$(dirname "$QUEUE_FILE")/bookmarks.sqlite"
+
+mkdir -p "$(dirname "$QUEUE_FILE")" "$IMAGES_DIR"
+
+page_num="$PAGE_RAW"
+if ! [[ "$page_num" =~ ^[0-9]+$ ]]; then
+  page_num="0"
+fi
+if [[ "$page_num" -le 0 ]]; then
+  page_num="1"
+fi
+
+timestamp="$(date -Iseconds)"
+event_id="$(python3 - "$PDF_PATH|$page_num|$timestamp" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha1(sys.argv[1].encode("utf-8", errors="ignore")).hexdigest())
+PY
+)"
+
+image_path="$IMAGES_DIR/${{event_id}}.png"
+region=""
+
+notify() {{
+  if [[ "$NOTIFY_ENABLED" != "1" ]]; then
+    return 0
+  fi
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "$@" >/dev/null 2>&1 || true
+  fi
+}}
+
+notify "GLaDOS capture" "Selecione uma area do PDF para OCR."
+
+if [[ -n "${{WAYLAND_DISPLAY:-}}" ]] && command -v slurp >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
+  region="$(slurp 2>/dev/null || true)"
+  if [[ -n "$region" ]]; then
+    grim -g "$region" "$image_path" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ ! -s "$image_path" ]] && [[ -n "${{DISPLAY:-}}" ]] && command -v slop >/dev/null 2>&1 && command -v maim >/dev/null 2>&1; then
+  region="$(slop -f "%wx%h+%x+%y" 2>/dev/null || true)"
+  if [[ -n "$region" ]]; then
+    maim -g "$region" "$image_path" >/dev/null 2>&1 || true
+  fi
+fi
+
+excerpt=""
+excerpt_source=""
+olmocr_error=""
+
+run_olmocr_on_image() {{
+  local image_file="$1"
+  local workdir
+  workdir="$(mktemp -d "${{TMPDIR:-/tmp}}/glados-olmocr-XXXXXX")"
+  local output=""
+
+  if command -v olmocr >/dev/null 2>&1; then
+    if output="$(olmocr "$workdir" --markdown --images "$image_file" --workers 1 --pages_per_group 1 2>/tmp/glados-olmocr.err || true)"; then
+      :
+    fi
+  else
+    echo "__OLMOCR_MISSING__"
+    rm -rf "$workdir"
+    return 0
+  fi
+
+  local md_file=""
+  if [[ -d "$workdir/markdown" ]]; then
+    md_file="$(ls -1t "$workdir"/markdown/*.md 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -n "$md_file" && -f "$md_file" ]]; then
+    cat "$md_file"
+    rm -rf "$workdir"
+    return 0
+  fi
+
+  # fallback: gera PDF de 1 página e usa modo --pdfs do olmOCR
+  if command -v python3 >/dev/null 2>&1; then
+    local tmp_pdf="$workdir/capture.pdf"
+    if python3 - "$image_file" "$tmp_pdf" >/dev/null 2>&1 <<'PY'
+import sys
+from pathlib import Path
+try:
+    from PIL import Image
+except Exception:
+    raise SystemExit(1)
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+img = Image.open(src).convert("RGB")
+img.save(dst, "PDF", resolution=300.0)
+PY
+    then
+      olmocr "$workdir" --markdown --pdfs "$tmp_pdf" --workers 1 --pages_per_group 1 >/tmp/glados-olmocr.out 2>/tmp/glados-olmocr.err || true
+      md_file="$(ls -1t "$workdir"/markdown/*.md 2>/dev/null | head -n 1 || true)"
+      if [[ -n "$md_file" && -f "$md_file" ]]; then
+        cat "$md_file"
+        rm -rf "$workdir"
+        return 0
+      fi
+    fi
+  fi
+
+  if [[ -f /tmp/glados-olmocr.err ]]; then
+    head -n 3 /tmp/glados-olmocr.err | tr '\n' ' '
+  fi
+  rm -rf "$workdir"
+  return 0
+}}
+
+if [[ -s "$image_path" ]]; then
+  excerpt="$(run_olmocr_on_image "$image_path" || true)"
+  if [[ "$excerpt" == "__OLMOCR_MISSING__" ]]; then
+    excerpt=""
+    excerpt_source="olmocr_unavailable"
+    olmocr_error="CLI olmocr não encontrada"
+  elif [[ -n "${{excerpt//[[:space:]]/}}" ]]; then
+    excerpt_source="ocr_area"
+  else
+    excerpt=""
+    excerpt_source="olmocr_failed"
+    olmocr_error="olmOCR não retornou texto"
+  fi
+fi
+
+if [[ -z "$excerpt_source" ]]; then
+  excerpt_source="empty"
+fi
+
+python3 - "$QUEUE_FILE" "$event_id" "$timestamp" "$PDF_PATH" "$page_num" "$excerpt_source" "$excerpt" "$image_path" "$region" "$olmocr_error" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+queue_path = Path(sys.argv[1]).expanduser()
+event_id = sys.argv[2]
+created_at = sys.argv[3]
+pdf_path = sys.argv[4]
+page = int(sys.argv[5] or 0)
+source = sys.argv[6]
+excerpt = sys.argv[7]
+image_path = sys.argv[8]
+region = sys.argv[9]
+error = sys.argv[10]
+
+queue_path.parent.mkdir(parents=True, exist_ok=True)
+event = {{
+    "id": event_id,
+    "created_at": created_at,
+    "pdf_path": str(Path(pdf_path).expanduser()),
+    "page": max(1, page),
+    "excerpt": str(excerpt or "").strip(),
+    "source": source or "empty",
+    "image_path": str(Path(image_path).expanduser()) if image_path else "",
+    "region": str(region or "").strip(),
+    "error": str(error or "").strip(),
+}}
+with queue_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(event, ensure_ascii=False) + "\\n")
+PY
+
+# cria bookmark da captura na página para feedback no próprio zathura
+if [[ -f "$BOOKMARK_DB" ]] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$BOOKMARK_DB" "$PDF_PATH" "$page_num" "$event_id" >/dev/null 2>&1 <<'PY'
+import sqlite3
+import sys
+db_path, pdf_path, page_raw, event_id = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    page = max(1, int(page_raw))
+except Exception:
+    page = 1
+try:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO bookmarks(file, id, page) VALUES (?, ?, ?)",
+            (str(pdf_path), f"gcap-{event_id[:10]}", page),
+        )
+        conn.commit()
+except Exception:
+    pass
+PY
+fi
+
+if [[ "$excerpt_source" == "ocr_area" ]]; then
+  notify "GLaDOS capture" "Trecho OCR (olmOCR) enviado para a nota de citacoes."
+elif [[ "$excerpt_source" == "olmocr_unavailable" ]]; then
+  notify "GLaDOS capture" "olmOCR não encontrado. Instale o CLI para capturar citações."
+elif [[ "$excerpt_source" == "olmocr_failed" ]]; then
+  notify "GLaDOS capture" "olmOCR falhou no recorte. Tente selecionar uma área maior."
+else
+  notify "GLaDOS capture" "Recorte registrado, sem texto detectável."
+fi
+"""
 
     def _resolved_include_paths(self) -> List[Path]:
         includes: List[Path] = []

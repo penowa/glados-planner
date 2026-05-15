@@ -18,7 +18,6 @@ markdown>=3.5.2
 # `latexmk` ou `pdflatex` + (`biber` ou `bibtex`) e a classe `abntex2`.
 
 # LLM & NLP
-llama-cpp-python>=0.2.26
 litellm>=1.72.0
 openai>=1.40.0
 backoff>=2.2.1
@@ -35,6 +34,7 @@ ebooklib>=0.18
 beautifulsoup4>=4.12.2
 lxml>=4.9.3
 pillow>=10.1.0
+olmocr>=0.4.27
 pytesseract>=0.3.10
 pdfminer.six>=20221105
 pypdf2>=3.0.1

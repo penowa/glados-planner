@@ -68,7 +68,7 @@ from ui.utils.shortcut_manager import ShortcutManager
 # ============ IMPORTS DO PyQt6 ============
 
 from PyQt6.QtCore import (
-    QSettings, QTimer, Qt, pyqtSignal, 
+    QSettings, QTimer, Qt, pyqtSignal, QEventLoop,
     QPropertyAnimation, QEasingCurve, QPoint
 )
 from PyQt6.QtWidgets import (
@@ -165,6 +165,17 @@ class PhilosophyPlannerApp:
         except Exception as e:
             self.handle_fatal_error(e)
             return 1
+
+    def _pump_ui_events(self) -> None:
+        """Processa eventos pendentes para manter animações da splash fluídas."""
+        if self.app:
+            self.app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+
+    def _set_splash_message(self, message: str) -> None:
+        """Atualiza texto da splash e força repaint imediato sem bloquear animações."""
+        if self.splash:
+            self.splash.show_message(message)
+            self._pump_ui_events()
 
     @staticmethod
     def _normalize_ollama_api_base(api_base: str) -> str:
@@ -276,8 +287,7 @@ class PhilosophyPlannerApp:
             return
 
         try:
-            if self.splash:
-                self.splash.show_message("Inicializando serviço Ollama...")
+            self._set_splash_message("Inicializando serviço Ollama...")
 
             self._ollama_log_handle = self._open_ollama_log_handle()
 
@@ -307,6 +317,7 @@ class PhilosophyPlannerApp:
                 return
             if self.ollama_process and self.ollama_process.poll() is not None:
                 break
+            self._pump_ui_events()
             time.sleep(0.4)
 
         self.logger.warning("Ollama foi iniciado, mas não ficou pronto dentro do timeout inicial (%s).", api_base)
@@ -343,6 +354,7 @@ class PhilosophyPlannerApp:
         self.splash.set_identity("", assistant_name)
         self.splash.show_message(f"{assistant_name} esta configurando seu planner")
         self.splash.show()
+        self._pump_ui_events()
 
     def _resolve_custom_identity(self) -> tuple[str, str]:
         """Obtém nomes customizados (usuário/assistente) do YAML de configuração."""
@@ -367,7 +379,7 @@ class PhilosophyPlannerApp:
 
     def init_core_systems(self):
         """Inicializa todos os sistemas centrais"""
-        self.splash.show_message("Configurando logging...")
+        self._set_splash_message("Configurando logging...")
     
         # Configurar logging básico
         logging.basicConfig(
@@ -376,7 +388,7 @@ class PhilosophyPlannerApp:
         )
         self.logger = logging.getLogger('GLaDOS')
     
-        self.splash.show_message("Inicializando sistema de eventos...")
+        self._set_splash_message("Inicializando sistema de eventos...")
     
         # Importar e criar instância do EventBus
         from core.communication.event_bus import GlobalEventBus
@@ -391,16 +403,16 @@ class PhilosophyPlannerApp:
     
         self.logger.info("EventBus inicializado")
     
-        self.splash.show_message("Configurando sistema de erros...")
+        self._set_splash_message("Configurando sistema de erros...")
         self.error_manager = ErrorManager()
     
-        self.splash.show_message("Iniciando monitoramento...")
+        self._set_splash_message("Iniciando monitoramento...")
         self.performance_monitor = PerformanceMonitor()
         self.performance_monitor.metrics_updated.connect(
             self.on_performance_metrics_updated
         )  
     
-        self.splash.show_message("Configurando sistema de recuperação...")
+        self._set_splash_message("Configurando sistema de recuperação...")
         self.recovery_manager = StateRecoveryManager()
         self.recovery_manager.recovery_completed.connect(
             self.on_recovery_completed
@@ -409,13 +421,13 @@ class PhilosophyPlannerApp:
             self.on_recovery_failed
         )
     
-        self.splash.show_message("Sistemas centrais inicializados...")
+        self._set_splash_message("Sistemas centrais inicializados...")
         self.logger.info("Sistemas centrais inicializados com sucesso")
         self.event_bus.app_initialized.emit()
     
     def init_backend_modules(self):
         """Inicializa módulos do backend"""
-        self.splash.show_message("Validando configurações do vault...")
+        self._set_splash_message("Validando configurações do vault...")
         configured_vault_path = str(Path(core_settings.paths.vault).expanduser())
         bootstrapped_vault = bootstrap_vault(
             vault_path=configured_vault_path,
@@ -427,23 +439,30 @@ class PhilosophyPlannerApp:
         # Vault fica lazy: apenas valida path no boot; scan completo só sob demanda.
         self.backend_modules['vault_manager'] = LazyObsidianVaultManager(vault_path)
 
-        self.splash.show_message("Inicializando módulos de leitura e agenda...")
+        self._set_splash_message("Inicializando módulos de leitura e agenda...")
         self.backend_modules['book_processor'] = BookProcessor(
             vault_manager=self.backend_modules['vault_manager']
         )
         self.backend_modules['reading_manager'] = ReadingManager(vault_path=vault_path)
         self.backend_modules['agenda_manager'] = AgendaManager(vault_path=vault_path)
         self.backend_modules['zathura_manager'] = ZathuraConfigManager(core_settings.zathura)
+        if core_settings.zathura.enabled and core_settings.zathura.sync_to_zathurarc:
+            sync_result = self.backend_modules['zathura_manager'].apply()
+            if not sync_result.get("success", False):
+                errors = "; ".join(sync_result.get("errors", []))
+                self.logger.warning("Falha ao sincronizar zathurarc no boot: %s", errors or "erro desconhecido")
+            else:
+                self.logger.info("Configuração do Zathura sincronizada no boot.")
         
-        self.splash.show_message("Inicializando núcleo cognitivo da GLaDOS...")
+        self._set_splash_message("Inicializando núcleo cognitivo da GLaDOS...")
         self.backend_modules['llm_module'] = llm
 
-        self.splash.show_message("Sincronização do vault será sob demanda...")
+        self._set_splash_message("Sincronização do vault será sob demanda...")
         
         self.connect_modules_to_event_bus()
         
         self.logger.info("Módulos do backend inicializados")
-        self.splash.show_message("Módulos carregados com sucesso")
+        self._set_splash_message("Módulos carregados com sucesso")
     
     def connect_modules_to_event_bus(self):
         """Conecta módulos ao EventBus para comunicação"""
@@ -463,7 +482,7 @@ class PhilosophyPlannerApp:
     
     def create_main_window(self):
         """Cria janela principal com todos os sistemas integrados"""
-        self.splash.show_message("Criando interface principal...")
+        self._set_splash_message("Criando interface principal...")
         
         self.window = MainWindow(
             event_bus=self.event_bus,
@@ -481,8 +500,7 @@ class PhilosophyPlannerApp:
         
         # Usar fade_out_and_close em vez de finish
         if self.splash:
-            QApplication.processEvents()
-            time.sleep(2)
+            self._pump_ui_events()
             self.splash.fade_out_and_close()
         
         self.window.show()

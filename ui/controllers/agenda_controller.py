@@ -928,6 +928,35 @@ class AgendaController(QObject):
             logger.error(f"Erro ao adicionar evento: {e}")
             return ""
 
+    def allocate_writing_time(
+        self,
+        title: str,
+        deadline: str,
+        estimated_hours: float,
+        discipline: str = "",
+        preferred_time: str = "",
+        session_minutes: int = 90,
+        min_session_minutes: int = 45,
+    ) -> Dict:
+        """Encaminha agendamento automático de blocos de escrita."""
+        try:
+            result = self.agenda_manager.allocate_writing_time(
+                title=title,
+                deadline=deadline,
+                estimated_hours=estimated_hours,
+                discipline=discipline,
+                preferred_time=preferred_time,
+                session_minutes=session_minutes,
+                min_session_minutes=min_session_minutes,
+            )
+            self._invalidate_agenda_cache()
+            if "error" not in result:
+                self.load_agenda(datetime.now().date().isoformat())
+            return result
+        except Exception as e:
+            logger.error(f"Erro ao alocar blocos de escrita: {e}")
+            return {"error": str(e)}
+
     @pyqtSlot(str, dict, result=bool)
     def update_event(self, event_id: str, updates: Dict) -> bool:
         """Atualiza evento existente de forma compatível com a UI."""

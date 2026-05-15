@@ -1,177 +1,41 @@
+# Philosophy Planner - Configuration
+
 app:
-  name: Planner
-  version: 1.0.0
+  name: "Planner"
+  version: "1.0.0"
   debug: true
-  log_level: INFO
+  log_level: "INFO"
+
 paths:
-  vault: ~/Documentos/Obsidian/Planner/
-  data_dir: /home/penowa/Glados/data
-  models_dir: /home/penowa/Glados/data/models
-  exports_dir: /home/penowa/Glados/data/exports
-  cache_dir: /home/penowa/Glados/data/cache
+  vault: "~/Documents/Obsidian/Philosophy_Vault"  # Update this path
+  data_dir: "./data"
+  models_dir: "./data/models"
+  exports_dir: "./data/exports"
+
 database:
-  url: sqlite:////home/penowa/Glados/data/database/philosophy.db
+  url: "sqlite:///data/database/philosophy.db"
   echo: false
+
 llm:
-  backend: cloud
-  model_name: Qwen3-1.7B-Q8_0.gguf
-  model_path: /home/penowa/Glados/data/models/Qwen3-1.7B-Q8_0.gguf
-  models_dir: /home/penowa/Glados/data/models
-  n_ctx: 3000
-  n_gpu_layers: 0
-  use_gpu: true
-  use_cpu: false
-  device_mode: gpu_only
-  gpu_index: 0
-  vram_soft_limit_mb: 0
-  temperature: 0.35
-  top_p: 0.9
-  repeat_penalty: 1.12
-  max_tokens: 256
-  use_semantic_search: true
-  cpu:
-    threads: 2
-    batch_size: 80
-    use_mlock: true
-  cloud:
-    model: ollama/qwen3.5:cloud
-    api_key: ''
-    api_base: http://127.0.0.1:11434
-    api_version: ''
-    organization: ''
-    timeout_seconds: 180
-    max_retries: 1
-  glados:
-    user_name: Hélio
-    glados_name: Olivia
-    personality_profile: marvin
-    gender: feminino
-    personality_intensity: 0.7
-    enable_sarcasm: true
-    enable_brain_metaphor: true
-    area_behavior:
-      meta:
-        sarcasm_level: 0.5
-        formality: 0.8
-      leituras:
-        sarcasm_level: 0.5
-        formality: 0.8
-      conceitos:
-        sarcasm_level: 0.5
-        formality: 0.8
-      disciplinas:
-        sarcasm_level: 0.5
-        formality: 0.8
-      pessoal:
-        sarcasm_level: 0.5
-        formality: 0.8
-      geral:
-        sarcasm_level: 0.5
-        formality: 0.8
-    response:
-      include_intro_comment: true
-      include_signature: true
-      max_response_length: 1000
+  model_path: "./data/models/philosophy-llama-7b.Q4_K_M.gguf"
+  n_ctx: 2048
+  n_gpu_layers: 0  # Set based on your GPU
+  temperature: 0.7
+  top_p: 0.95
+
 obsidian:
-  templates_dir: ./config/templates
+  templates_dir: "./config/templates"
   auto_sync: true
-  sync_interval: 300
-  vault_structure:
-  - 00-META
-  - 01-LEITURAS
-  - 02-ANOTAÇÕES
-  - 03-REVISÃO
-  - 04-MAPAS MENTAIS
-  - 05-DISCIPLINAS
-  - 06-RECURSOS
-  brain_regions:
-    00-META: Sistema e metadados
-    01-LEITURAS: Leituras por autor e obra
-    02-ANOTAÇÕES: Notas do usuário
-    03-REVISÃO: Materiais de revisão LLM
-    04-MAPAS MENTAIS: Estruturas visuais e Canva
-    05-DISCIPLINAS: Organização por disciplinas de estudo
-    06-RECURSOS: Recursos e registros auxiliares
+  sync_interval: 300  # seconds
+
 pomodoro:
   work_duration: 25
   short_break: 5
   long_break: 15
   sessions_before_long_break: 4
+
 features:
   enable_llm: true
   enable_obsidian_sync: true
   enable_pomodoro: true
   enable_translation: false
-  enable_glados_personality: true
-  enable_vault_as_brain: true
-review_view:
-  question_prompt_enabled: true
-  question_interval_minutes: 10
-  arrow_pan_step: 130
-zathura:
-  enabled: true
-  preset: midnight_lilac
-  binary: zathura
-  config_dir: ~/.config/zathura
-  config_file: ~/.config/zathura/zathurarc
-  data_dir: ~/.local/share/zathura
-  cache_dir: ~/.cache/zathura
-  plugin_path: ''
-  sync_to_zathurarc: true
-  theme_mode: plain
-  pywal_generator: genzathurarc
-  pywal_colors_file: ~/.cache/wal/colors.sh
-  generated_theme_file: ~/.config/zathura/glados-theme.zathurarc
-  custom_theme_include_file: ''
-  selection_clipboard: primary
-  statusbar_basename: true
-  window_title_home_tilde: true
-  recolor: true
-  session_open_mode: fullscreen
-  session_use_fork: true
-  extra_options:
-    page-padding: 10
-    default-bg: '#1E2740'
-    default-fg: '#9FC0E5'
-    statusbar-bg: '#151D31'
-    statusbar-fg: '#A77AD7'
-    inputbar-bg: '#151D31'
-    inputbar-fg: '#9FC0E5'
-    completion-bg: '#1E2740'
-    completion-fg: '#9FC0E5'
-    completion-group-bg: '#1E2740'
-    completion-group-fg: '#4C8EC5'
-    completion-highlight-bg: '#A77AD7'
-    completion-highlight-fg: '#151D31'
-    notification-bg: '#1E2740'
-    notification-fg: '#9FC0E5'
-    notification-error-bg: '#A77AD7'
-    notification-error-fg: '#151D31'
-    notification-warning-bg: '#4C8EC5'
-    notification-warning-fg: '#151D31'
-    recolor-lightcolor: '#1E2740'
-    recolor-darkcolor: '#9FC0E5'
-    render-loading-bg: '#1E2740'
-    render-loading-fg: '#4C8EC5'
-    index-bg: '#1E2740'
-    index-fg: '#9FC0E5'
-    index-active-bg: '#4C8EC5'
-    index-active-fg: '#151D31'
-  include_files: []
-  keymaps:
-  - map r reload
-  - map f toggle_fullscreen
-  - map J scroll down
-  - map K scroll up
-  - map + zoom in
-  - map - zoom out
-  extra_config: ''
-cache:
-  enabled: true
-  max_size: 100
-  ttl: 3600
-  preload_vault: false
-development:
-  log_llm_prompts: false
-  log_vault_access: false
-  simulate_llm: false

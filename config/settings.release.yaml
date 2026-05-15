@@ -128,9 +128,17 @@ zathura:
   recolor: false
   session_open_mode: fullscreen
   session_use_fork: true
+  capture_enabled: true
+  capture_keybinding: "<C-g>"
+  capture_script_file: ~/.local/share/zathura/glados-zathura-capture.sh
+  capture_events_file: ~/.local/share/zathura/glados-captures.jsonl
+  capture_images_dir: ~/.local/share/zathura/glados-captures
+  capture_ocr_language: por+eng
+  capture_notify: true
   extra_options: {}
   include_files: []
-  keymaps: []
+  keymaps:
+  - "map <C-g> exec ~/.local/share/zathura/glados-zathura-capture.sh $PAGE $FILE"
   extra_config: ''
 cache:
   enabled: true

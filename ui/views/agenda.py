@@ -75,7 +75,7 @@ PRIORITY_COLORS = {
 TYPE_ICONS = {
     "leitura": NerdIcons.BOOK,
     "revisao": NerdIcons.REFRESH,
-    "producao": NerdIcons.NOTE,
+    "dissertacao": NerdIcons.NOTE,
     "aula": NerdIcons.GRADUATION,
     "prova": NerdIcons.FLASK,
     "seminario": NerdIcons.BULLHORN,
@@ -99,6 +99,8 @@ def _normalize_event(raw_event: dict) -> dict:
     start_raw = event.get("start", "")
     end_raw = event.get("end", "")
     event.setdefault("type", event.get("event_type", "casual"))
+    if str(event.get("type") or "").strip().lower() == "producao":
+        event["type"] = "dissertacao"
 
     try:
         start_dt = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
@@ -1051,7 +1053,16 @@ class AgendaView(QWidget):
         self.complete_event_btn.setEnabled(not is_virtual_fixed)
 
     def add_event(self):
-        dialog = AddEventDialog(self.controller, self.selected_date, self)
+        type_dialog = EventTypeSelectionDialog(self)
+        if type_dialog.exec() != QDialog.DialogCode.Accepted or not type_dialog.selected_event_type:
+            return
+
+        dialog = AddEventDialog(
+            self.controller,
+            self.selected_date,
+            self,
+            selected_event_type=type_dialog.selected_event_type,
+        )
         if dialog.exec():
             self.rebalance_agenda()
 
@@ -1194,13 +1205,62 @@ class RoutineSettingsDialog(QDialog):
         }
 
 
+class EventTypeSelectionDialog(QDialog):
+    """Primeiro estágio: escolher o tipo de compromisso."""
+
+    EVENT_TYPES = [
+        ("leitura", f"{NerdIcons.BOOK} Leitura"),
+        ("revisao", f"{NerdIcons.REFRESH} Revisão"),
+        ("dissertacao", f"{NerdIcons.NOTE} Dissertação"),
+        ("aula", f"{NerdIcons.GRADUATION} Aula"),
+        ("prova", f"{NerdIcons.FLASK} Prova"),
+        ("seminario", f"{NerdIcons.BULLHORN} Seminário"),
+        ("orientacao", f"{NerdIcons.COMPASS} Orientação"),
+        ("reuniao", f"{NerdIcons.USERS} Reunião"),
+        ("lazer", f"{NerdIcons.TARGET} Lazer"),
+        ("refeicao", f"{NerdIcons.CUTLERY} Refeição"),
+        ("sono", f"{NerdIcons.BED} Sono"),
+        ("casual", f"{NerdIcons.PIN} Casual"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_event_type = ""
+        self.setWindowTitle("Selecionar tipo")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Qual tipo de compromisso você quer adicionar?"))
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        for index, (event_type, label) in enumerate(self.EVENT_TYPES):
+            button = QPushButton(label)
+            button.setMinimumHeight(44)
+            button.clicked.connect(lambda checked=False, value=event_type: self._choose_type(value))
+            grid.addWidget(button, index // 2, index % 2)
+        layout.addLayout(grid)
+
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(cancel_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def _choose_type(self, event_type: str):
+        self.selected_event_type = event_type
+        self.accept()
+
+
 class AddEventDialog(QDialog):
     """Diálogo para adicionar evento manualmente."""
 
-    def __init__(self, controller, default_date, parent=None):
+    def __init__(self, controller, default_date, parent=None, selected_event_type: str = "casual"):
         super().__init__(parent)
         self.controller = controller
         self.default_date = default_date
+        self.selected_event_type = str(selected_event_type or "casual").strip().lower() or "casual"
         self._vault_root = self._resolve_vault_root()
 
         self.setWindowTitle("Adicionar compromisso")
@@ -1240,13 +1300,16 @@ class AddEventDialog(QDialog):
 
         time_wrap = QWidget()
         time_wrap.setLayout(time_row)
-        form.addRow("Quando:", time_wrap)
+        self.when_label = QLabel("Quando:")
+        self.when_row_widget = time_wrap
+        form.addRow(self.when_label, self.when_row_widget)
 
         self.recurrence_combo = QComboBox()
         self.recurrence_combo.addItem("Evento único", "none")
         self.recurrence_combo.addItem("Diário", "daily")
         self.recurrence_combo.addItem("Semanal", "weekly")
-        form.addRow("Recorrência:", self.recurrence_combo)
+        self.recurrence_label = QLabel("Recorrência:")
+        form.addRow(self.recurrence_label, self.recurrence_combo)
 
         recurrence_days_wrap = QWidget()
         recurrence_days_layout = QHBoxLayout(recurrence_days_wrap)
@@ -1267,19 +1330,22 @@ class AddEventDialog(QDialog):
             self.weekday_checks[key] = checkbox
             recurrence_days_layout.addWidget(checkbox)
         recurrence_days_layout.addStretch(1)
-        form.addRow("Dias da semana:", recurrence_days_wrap)
+        self.recurrence_days_label = QLabel("Dias da semana:")
+        self.recurrence_days_widget = recurrence_days_wrap
+        form.addRow(self.recurrence_days_label, self.recurrence_days_widget)
 
         self.recurrence_end_date = QDateTimeEdit()
         self.recurrence_end_date.setDate(self.default_date)
         self.recurrence_end_date.setDisplayFormat("dd/MM/yyyy")
         self.recurrence_end_date.setCalendarPopup(True)
-        form.addRow("Repetir até:", self.recurrence_end_date)
+        self.recurrence_end_label = QLabel("Repetir até:")
+        form.addRow(self.recurrence_end_label, self.recurrence_end_date)
 
         self.type_combo = QComboBox()
         self.type_combo.addItems([
             "leitura",
             "revisao",
-            "producao",
+            "dissertacao",
             "aula",
             "prova",
             "seminario",
@@ -1300,7 +1366,67 @@ class AddEventDialog(QDialog):
         type_row.addWidget(self.priority_combo)
         type_wrap = QWidget()
         type_wrap.setLayout(type_row)
-        form.addRow("Categoria:", type_wrap)
+        self.category_label = QLabel("Categoria:")
+        self.category_widget = type_wrap
+        form.addRow(self.category_label, self.category_widget)
+
+        self.dissertation_group = QGroupBox("Dissertação")
+        dissertation_layout = QFormLayout(self.dissertation_group)
+        self.deadline_input = QDateTimeEdit()
+        self.deadline_input.setDate(self.default_date)
+        self.deadline_input.setTime(QTime(18, 0))
+        self.deadline_input.setDisplayFormat("dd/MM/yyyy HH:mm")
+        self.deadline_input.setCalendarPopup(True)
+        dissertation_layout.addRow("Data limite:", self.deadline_input)
+
+        self.estimated_hours_input = QSpinBox()
+        self.estimated_hours_input.setRange(1, 300)
+        self.estimated_hours_input.setValue(12)
+        dissertation_layout.addRow("Horas estimadas:", self.estimated_hours_input)
+
+        self.preferred_time_combo = QComboBox()
+        self.preferred_time_combo.addItem("Sem preferência", "")
+        self.preferred_time_combo.addItem("Manhã", "manha")
+        self.preferred_time_combo.addItem("Tarde", "tarde")
+        self.preferred_time_combo.addItem("Noite", "noite")
+        dissertation_layout.addRow("Janela preferida:", self.preferred_time_combo)
+        form.addRow(self.dissertation_group)
+
+        self.class_group = QGroupBox("Aulas Semanais")
+        class_layout = QFormLayout(self.class_group)
+        class_days_wrap = QWidget()
+        class_days_layout = QHBoxLayout(class_days_wrap)
+        class_days_layout.setContentsMargins(0, 0, 0, 0)
+        class_days_layout.setSpacing(6)
+        self.class_weekday_checks: Dict[str, QCheckBox] = {}
+        for key, label in weekday_labels:
+            checkbox = QCheckBox(label)
+            self.class_weekday_checks[key] = checkbox
+            class_days_layout.addWidget(checkbox)
+        class_days_layout.addStretch(1)
+        class_layout.addRow("Dias da semana:", class_days_wrap)
+
+        class_time_wrap = QWidget()
+        class_time_layout = QHBoxLayout(class_time_wrap)
+        class_time_layout.setContentsMargins(0, 0, 0, 0)
+        self.class_start_time_input = QTimeEdit()
+        self.class_start_time_input.setDisplayFormat("HH:mm")
+        self.class_start_time_input.setTime(QTime(19, 0))
+        self.class_end_time_input = QTimeEdit()
+        self.class_end_time_input.setDisplayFormat("HH:mm")
+        self.class_end_time_input.setTime(QTime(20, 40))
+        class_time_layout.addWidget(QLabel("Início"))
+        class_time_layout.addWidget(self.class_start_time_input)
+        class_time_layout.addWidget(QLabel("Fim"))
+        class_time_layout.addWidget(self.class_end_time_input)
+        class_layout.addRow("Horário:", class_time_wrap)
+
+        self.class_last_day_input = QDateTimeEdit()
+        self.class_last_day_input.setDate(self.default_date.addMonths(4))
+        self.class_last_day_input.setDisplayFormat("dd/MM/yyyy")
+        self.class_last_day_input.setCalendarPopup(True)
+        class_layout.addRow("Último dia:", self.class_last_day_input)
+        form.addRow(self.class_group)
 
         self.description_input = QTextEdit()
         self.description_input.setMaximumHeight(90)
@@ -1331,12 +1457,172 @@ class AddEventDialog(QDialog):
         buttons.addWidget(cancel_btn)
         layout.addLayout(buttons)
         self.recurrence_combo.currentIndexChanged.connect(self._update_recurrence_visibility)
+        self.type_combo.currentIndexChanged.connect(self._update_event_type_visibility)
+        idx = self.type_combo.findText(self.selected_event_type)
+        if idx >= 0:
+            self.type_combo.setCurrentIndex(idx)
         self._update_recurrence_visibility()
+        self._update_event_type_visibility()
 
     def save_event(self):
         title = self.title_input.text().strip()
         if not title:
             QMessageBox.warning(self, "Aviso", "Informe um título para o compromisso.")
+            return
+
+        event_type = self.type_combo.currentText().strip()
+
+        if event_type == "aula":
+            start_time = self.class_start_time_input.time().toString("HH:mm")
+            end_time = self.class_end_time_input.time().toString("HH:mm")
+            start_dt = datetime.strptime(
+                f"{self.default_date.toString('yyyy-MM-dd')} {start_time}",
+                "%Y-%m-%d %H:%M",
+            )
+            end_dt = datetime.strptime(
+                f"{self.default_date.toString('yyyy-MM-dd')} {end_time}",
+                "%Y-%m-%d %H:%M",
+            )
+            if end_dt <= start_dt:
+                QMessageBox.warning(self, "Aviso", "O horário final da aula deve ser posterior ao início.")
+                return
+
+            last_class_date = self.class_last_day_input.date().toString("yyyy-MM-dd")
+            try:
+                last_class_dt = datetime.strptime(last_class_date, "%Y-%m-%d").date()
+            except ValueError:
+                QMessageBox.warning(self, "Aviso", "Último dia de aula inválido.")
+                return
+            if last_class_dt < start_dt.date():
+                QMessageBox.warning(self, "Aviso", "O último dia de aula deve ser igual ou posterior à data inicial.")
+                return
+
+            selected_days = [
+                key for key, checkbox in self.class_weekday_checks.items() if checkbox.isChecked()
+            ]
+            if not selected_days:
+                QMessageBox.warning(self, "Aviso", "Selecione ao menos um dia da semana para a aula.")
+                return
+
+            discipline_name = self._selected_discipline() or title
+            if not discipline_name:
+                QMessageBox.warning(self, "Aviso", "Informe um título para usar como disciplina.")
+                return
+            if self._vault_root:
+                created = ensure_discipline_note(self._vault_root, discipline_name)
+                if not created:
+                    QMessageBox.warning(self, "Disciplina", "Não foi possível criar ou localizar a disciplina.")
+                    return
+                self._reload_disciplines()
+                idx = self.discipline_input.findText(discipline_name)
+                if idx >= 0:
+                    self.discipline_input.setCurrentIndex(idx)
+                else:
+                    self.discipline_input.setEditText(discipline_name)
+
+            priority_map = {
+                "Baixa": 1,
+                "Média": 2,
+                "Alta": 3,
+                "Fixo": 4,
+                "Bloqueio": 5,
+            }
+            payload = {
+                "title": title,
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+                "event_type": "aula",
+                "priority": priority_map.get(self.priority_combo.currentText(), 4),
+                "description": self.description_input.toPlainText().strip(),
+                "discipline": discipline_name,
+            }
+            recurrence = {
+                "type": "weekly",
+                "end_date": last_class_date,
+                "interval": 1,
+                "days": selected_days,
+            }
+            occurrences = self._expand_occurrences(payload, start_dt, end_dt, recurrence)
+            if not occurrences:
+                QMessageBox.warning(self, "Aula", "Nenhuma aula semanal válida foi gerada.")
+                return
+
+            created_ids: List[str] = []
+            if self.controller and hasattr(self.controller, "add_event"):
+                for occurrence in occurrences:
+                    event_id = self.controller.add_event(occurrence)
+                    if not event_id:
+                        QMessageBox.warning(self, "Erro", "Não foi possível salvar uma das aulas.")
+                        return
+                    created_ids.append(str(event_id))
+
+            if discipline_name and self._vault_root:
+                for index, occurrence in enumerate(occurrences):
+                    append_event_link(
+                        self._vault_root,
+                        discipline_name,
+                        title=title,
+                        start=str(occurrence.get("start") or ""),
+                        end=str(occurrence.get("end") or ""),
+                        event_id=created_ids[index] if index < len(created_ids) else "",
+                    )
+
+            self.accept()
+            return
+
+        if event_type == "dissertacao":
+            deadline_dt = self.deadline_input.dateTime().toPyDateTime()
+            if deadline_dt <= datetime.now():
+                QMessageBox.warning(self, "Aviso", "A data limite da dissertação precisa estar no futuro.")
+                return
+
+            priority_map = {
+                "Baixa": 1,
+                "Média": 2,
+                "Alta": 3,
+                "Fixo": 4,
+                "Bloqueio": 5,
+            }
+            payload = {
+                "title": title,
+                "start": deadline_dt.isoformat(),
+                "end": (deadline_dt + timedelta(hours=1)).isoformat(),
+                "event_type": "dissertacao",
+                "priority": priority_map.get(self.priority_combo.currentText(), 2),
+                "description": self.description_input.toPlainText().strip(),
+                "discipline": self._selected_discipline() or None,
+                "deadline": deadline_dt.isoformat(),
+                "estimated_hours": self.estimated_hours_input.value(),
+                "preferred_time": self.preferred_time_combo.currentData(),
+                "session_minutes": 90,
+                "metadata": {
+                    "event_role": "deadline",
+                    "estimated_hours": self.estimated_hours_input.value(),
+                    "deadline": deadline_dt.isoformat(),
+                },
+            }
+
+            deadline_event_id = self.controller.add_event(payload) if self.controller and hasattr(self.controller, "add_event") else ""
+            if not deadline_event_id:
+                QMessageBox.warning(self, "Erro", "Não foi possível salvar a dissertação.")
+                return
+
+            allocator = getattr(self.controller, "allocate_writing_time", None)
+            if allocator:
+                result = allocator(
+                    title=title,
+                    deadline=deadline_dt.isoformat(),
+                    estimated_hours=self.estimated_hours_input.value(),
+                    discipline=self._selected_discipline() or "",
+                    preferred_time=self.preferred_time_combo.currentData() or "",
+                    session_minutes=90,
+                    min_session_minutes=45,
+                )
+                if result.get("error"):
+                    QMessageBox.warning(self, "Dissertação", result["error"])
+                    return
+
+            self.accept()
             return
 
         date_str = self.date_input.date().toString("yyyy-MM-dd")
@@ -1364,7 +1650,7 @@ class AddEventDialog(QDialog):
             "title": title,
             "start": start,
             "end": end,
-            "event_type": self.type_combo.currentText(),
+            "event_type": event_type,
             "priority": priority_map.get(self.priority_combo.currentText(), 2),
             "description": self.description_input.toPlainText().strip(),
             "discipline": self._selected_discipline() or None,
@@ -1412,6 +1698,31 @@ class AddEventDialog(QDialog):
         for checkbox in self.weekday_checks.values():
             checkbox.setVisible(is_weekly)
         self.recurrence_end_date.setVisible(has_recurrence)
+
+    def _update_event_type_visibility(self):
+        is_dissertation = self.type_combo.currentText().strip() == "dissertacao"
+        is_class = self.type_combo.currentText().strip() == "aula"
+        show_standard = not is_dissertation and not is_class
+
+        self.category_label.setVisible(False)
+        self.category_widget.setVisible(False)
+        self.when_label.setVisible(show_standard)
+        self.when_row_widget.setVisible(show_standard)
+        self.recurrence_label.setVisible(show_standard)
+        self.recurrence_combo.setVisible(show_standard)
+        self.recurrence_days_label.setVisible(show_standard)
+        self.recurrence_days_widget.setVisible(show_standard and self.recurrence_combo.currentData() == "weekly")
+        self.recurrence_end_label.setVisible(show_standard)
+        self.recurrence_end_date.setVisible(show_standard and self.recurrence_combo.currentData() in {"daily", "weekly"})
+        for checkbox in self.weekday_checks.values():
+            checkbox.setVisible(show_standard and self.recurrence_combo.currentData() == "weekly")
+        self.dissertation_group.setVisible(is_dissertation)
+        self.class_group.setVisible(is_class)
+
+        if is_class:
+            current = self._selected_discipline()
+            if not current and self.title_input.text().strip():
+                self.discipline_input.setEditText(self.title_input.text().strip())
 
     def _build_recurrence_definition(self, start_dt: datetime, end_dt: datetime) -> Optional[Dict[str, Any]]:
         recurrence_type = str(self.recurrence_combo.currentData() or "none")

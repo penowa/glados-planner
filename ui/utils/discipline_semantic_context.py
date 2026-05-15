@@ -171,13 +171,13 @@ def list_discipline_annotation_candidates(
     vault_root: Path,
     discipline: str,
 ) -> list[DisciplineAnnotationCandidate]:
-    """Lista anotações de 02-ANOTAÇÕES com status de vínculo automático com a disciplina."""
+    """Lista anotações de citação com status de vínculo automático com a disciplina."""
     discipline_name = str(discipline or "").strip()
     if not discipline_name:
         return []
 
-    notes_dir = _annotation_notes_dir(vault_root)
-    if notes_dir is None or not notes_dir.exists():
+    note_paths = _iter_annotation_note_paths(vault_root)
+    if not note_paths:
         return []
 
     discipline_note = _resolve_discipline_note(vault_root, discipline_name)
@@ -205,7 +205,7 @@ def list_discipline_annotation_candidates(
         )
 
     candidates: list[DisciplineAnnotationCandidate] = []
-    for note_path in sorted(notes_dir.rglob("*.md"), key=lambda path: str(path).lower()):
+    for note_path in note_paths:
         if not note_path.is_file():
             continue
 
@@ -336,8 +336,8 @@ def _collect_related_annotation_paths(
     discipline: str,
     work_targets: set[str],
 ) -> list[Path]:
-    notes_dir = _annotation_notes_dir(vault_root)
-    if notes_dir is None or not notes_dir.exists():
+    note_paths = _iter_annotation_note_paths(vault_root)
+    if not note_paths:
         return []
 
     discipline_norm = _normalize_token(discipline)
@@ -350,7 +350,7 @@ def _collect_related_annotation_paths(
             pass
     found: list[Path] = []
 
-    for note_path in sorted(notes_dir.rglob("*.md")):
+    for note_path in note_paths:
         raw_text = _read_text(note_path)
         if not raw_text:
             continue
@@ -466,6 +466,32 @@ def _annotation_notes_dir(vault_root: Path) -> Optional[Path]:
     if fallback_dir.exists():
         return fallback_dir
     return canonical_dir
+
+
+def _iter_annotation_note_paths(vault_root: Path) -> list[Path]:
+    collected: list[Path] = []
+    seen: set[str] = set()
+
+    legacy_dir = _annotation_notes_dir(vault_root)
+    if legacy_dir is not None and legacy_dir.exists():
+        for path in legacy_dir.rglob("*.md"):
+            key = str(path.resolve(strict=False))
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(path)
+
+    readings_dir = vault_root / "01-LEITURAS"
+    if readings_dir.exists():
+        for path in readings_dir.glob("*/*/Citações/*.md"):
+            key = str(path.resolve(strict=False))
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(path)
+
+    collected.sort(key=lambda path: str(path).lower())
+    return collected
 
 
 def _load_scoped_note(vault_root: Path, path: Path, category: str) -> Optional[ScopedVaultNote]:

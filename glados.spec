@@ -2,7 +2,6 @@
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
-    collect_dynamic_libs,
     collect_submodules,
 )
 
@@ -28,7 +27,6 @@ hiddenimports += collect_submodules("core")
 hiddenimports += collect_submodules("ui")
 
 binaries = []
-binaries += collect_dynamic_libs("llama_cpp")
 
 datas = [
     ("config/templates", "config/templates"),

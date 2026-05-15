@@ -314,9 +314,9 @@ class BookProcessor:
                     recommendations.append(
                         "PDF com pouco texto nativo detectado em várias páginas. OCR provavelmente será necessário."
                     )
-                    if shutil.which("tesseract") is None:
+                    if shutil.which("olmocr") is None:
                         recommendations.append(
-                            "OCR necessário, mas o binário `tesseract` não está instalado no sistema."
+                            "OCR necessário, mas o CLI `olmocr` não está instalado no sistema."
                         )
                 elif avg_text_length < 300:
                     recommendations.append(
