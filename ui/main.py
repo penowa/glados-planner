@@ -84,6 +84,22 @@ from PyQt6.QtGui import (
 
 class PhilosophyPlannerApp:
     """Classe principal da aplicação com todos os sistemas integrados"""
+
+    SPLASH_PROGRESS_BY_STAGE = {
+        "Configurando logging...": 8,
+        "Inicializando sistema de eventos...": 16,
+        "Configurando sistema de erros...": 24,
+        "Iniciando monitoramento...": 32,
+        "Configurando sistema de recuperação...": 40,
+        "Sistemas centrais inicializados...": 48,
+        "Inicializando serviço Ollama...": 58,
+        "Validando configurações do vault...": 66,
+        "Inicializando módulos de leitura e agenda...": 76,
+        "Inicializando núcleo cognitivo da GLaDOS...": 86,
+        "Sincronização do vault será sob demanda...": 90,
+        "Módulos carregados com sucesso": 95,
+        "Criando interface principal...": 100,
+    }
     
     _instance = None
     
@@ -175,6 +191,9 @@ class PhilosophyPlannerApp:
         """Atualiza texto da splash e força repaint imediato sem bloquear animações."""
         if self.splash:
             self.splash.show_message(message)
+            progress = self.SPLASH_PROGRESS_BY_STAGE.get(str(message or "").strip())
+            if progress is not None:
+                self.splash.set_progress(progress)
             self._pump_ui_events()
 
     @staticmethod

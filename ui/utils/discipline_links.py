@@ -8,6 +8,8 @@ from typing import Iterable, Optional
 
 
 DISCIPLINE_DIR = "05-DISCIPLINAS"
+ANNOTATIONS_DIR = "02-ANOTAÇÕES"
+PRODUCTION_DIR = "03-PRODUÇÃO"
 AGENDA_SECTION_HEADER = "## Agenda"
 BOOKS_SECTION_HEADER = "## Obras"
 ANNOTATIONS_SECTION_HEADER = "## Anotações"
@@ -42,6 +44,46 @@ def _discipline_dir(vault_root: Path) -> Path:
     target = Path(vault_root) / DISCIPLINE_DIR
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def _discipline_workspace_dir(vault_root: Path, root_dir: str, discipline: str) -> Path:
+    parent = Path(vault_root) / root_dir
+    parent.mkdir(parents=True, exist_ok=True)
+
+    safe_name = _safe_filename(discipline)
+    direct = parent / safe_name
+    if direct.exists():
+        direct.mkdir(parents=True, exist_ok=True)
+        return direct
+
+    expected = _normalize_token(discipline)
+    for candidate in parent.iterdir():
+        if not candidate.is_dir():
+            continue
+        if _normalize_token(candidate.name) == expected:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+
+    direct.mkdir(parents=True, exist_ok=True)
+    return direct
+
+
+def ensure_discipline_workspace_dirs(vault_root: Path, discipline: str) -> dict[str, Path]:
+    name = str(discipline or "").strip()
+    if not name:
+        return {}
+
+    return {
+        "annotations": _discipline_workspace_dir(vault_root, ANNOTATIONS_DIR, name),
+        "production": _discipline_workspace_dir(vault_root, PRODUCTION_DIR, name),
+    }
+
+
+def get_discipline_annotation_dir(vault_root: Path, discipline: str) -> Optional[Path]:
+    name = str(discipline or "").strip()
+    if not name:
+        return None
+    return ensure_discipline_workspace_dirs(vault_root, name).get("annotations")
 
 
 def _extract_display_name(note_path: Path) -> str:
@@ -83,6 +125,7 @@ def ensure_discipline_note(vault_root: Path, discipline: str) -> Optional[Path]:
     name = str(discipline or "").strip()
     if not name:
         return None
+    ensure_discipline_workspace_dirs(vault_root, name)
     existing = _find_discipline_note(vault_root, name)
     if existing:
         return existing

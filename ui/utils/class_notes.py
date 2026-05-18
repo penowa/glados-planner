@@ -8,7 +8,7 @@ import re
 import unicodedata
 from typing import Any, Optional
 
-from ui.utils.discipline_links import find_primary_book_note
+from ui.utils.discipline_links import find_primary_book_note, get_discipline_annotation_dir
 
 
 CLASS_NOTES_DIR = "02-ANOTAÇÕES"
@@ -218,9 +218,29 @@ def build_class_note_filename(discipline: str, event_dt: datetime) -> str:
     return _safe_filename(f"Aula de {discipline} do dia {_format_file_date(event_dt)}")
 
 
-def build_class_note_relative_path(discipline: str, event_data: dict[str, Any]) -> str:
+def _legacy_class_note_relative_path(discipline: str, event_data: dict[str, Any]) -> str:
     event_dt = _event_datetime(event_data)
     return f"{CLASS_NOTES_DIR}/{build_class_note_filename(discipline, event_dt)}.md"
+
+
+def build_class_note_relative_path(discipline: str, event_data: dict[str, Any]) -> str:
+    event_dt = _event_datetime(event_data)
+    filename = f"{build_class_note_filename(discipline, event_dt)}.md"
+    relative_dir = Path(CLASS_NOTES_DIR) / _safe_filename(discipline)
+    return str(relative_dir / filename).replace("\\", "/")
+
+
+def build_class_note_relative_path_for_vault(
+    vault_root: Path,
+    discipline: str,
+    event_data: dict[str, Any],
+) -> str:
+    event_dt = _event_datetime(event_data)
+    filename = f"{build_class_note_filename(discipline, event_dt)}.md"
+    discipline_dir = get_discipline_annotation_dir(vault_root, discipline)
+    if discipline_dir is None:
+        return f"{CLASS_NOTES_DIR}/{filename}"
+    return str(discipline_dir.relative_to(vault_root) / filename).replace("\\", "/")
 
 
 def _extract_existing_annotations(existing_content: str) -> str:
@@ -339,11 +359,16 @@ def upsert_class_note(
     selected_works: list[WorkMaterial],
 ) -> dict[str, Any]:
     """Cria ou atualiza a nota de aula no vault usando o fluxo padrão."""
-    relative_path = build_class_note_relative_path(discipline, event_data)
+    vault_root_raw = getattr(getattr(vault_controller, "vault_manager", None), "vault_path", "")
+    vault_root = Path(str(vault_root_raw or "").strip()).expanduser().resolve(strict=False)
+    relative_path = build_class_note_relative_path_for_vault(vault_root, discipline, event_data)
+    legacy_relative_path = _legacy_class_note_relative_path(discipline, event_data)
 
     existing_note = None
     if vault_controller and hasattr(vault_controller, "get_note"):
         existing_note = vault_controller.get_note(relative_path)
+        if existing_note is None and legacy_relative_path != relative_path:
+            existing_note = vault_controller.get_note(legacy_relative_path)
     existing_content = str((existing_note or {}).get("content") or "")
 
     frontmatter, content = build_class_note_content(
@@ -353,7 +378,19 @@ def upsert_class_note(
         existing_content=existing_content,
     )
 
-    if existing_note and vault_controller and hasattr(vault_controller, "update_note"):
+    existing_relative_path = str((existing_note or {}).get("path") or "").replace("\\", "/")
+    is_legacy_note = bool(existing_note) and existing_relative_path == legacy_relative_path and legacy_relative_path != relative_path
+
+    if is_legacy_note and vault_controller and hasattr(vault_controller, "create_note"):
+        vault_controller.create_note(
+            relative_path,
+            content=content,
+            frontmatter=frontmatter,
+            tags=list(frontmatter.get("tags", [])),
+        )
+        if hasattr(vault_controller, "delete_note"):
+            vault_controller.delete_note(legacy_relative_path)
+    elif existing_note and vault_controller and hasattr(vault_controller, "update_note"):
         vault_controller.update_note(
             relative_path,
             content=content,

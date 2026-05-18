@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from PyQt6.QtCore import (
     QEasingCurve,
     QDate,
+    QSize,
     QMimeData,
     QPropertyAnimation,
     Qt,
@@ -163,6 +164,17 @@ class MonthDayEventList(QListWidget):
         self._held_fg_role = int(Qt.ItemDataRole.UserRole) + 12
         self.setObjectName("month_day_event_list")
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setViewMode(QListWidget.ViewMode.IconMode)
+        self.setFlow(QListWidget.Flow.LeftToRight)
+        self.setWrapping(True)
+        self.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.setMovement(QListWidget.Movement.Static)
+        self.setUniformItemSizes(True)
+        self.setGridSize(QSize(18, 18))
+        self.setSpacing(1)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
@@ -321,10 +333,15 @@ class DayCellWidget(QFrame):
         layout.addWidget(self.day_label)
 
         self.events_list = MonthDayEventList()
-        self.events_list.setMaximumHeight(96)
+        self.events_list.setMaximumHeight(42)
         self.events_list.event_clicked.connect(self._relay_event_clicked)
         self.events_list.event_dropped.connect(self.event_dropped.emit)
         layout.addWidget(self.events_list)
+
+        self.more_label = QLabel("")
+        self.more_label.setStyleSheet("color: #94A3B8; font-size: 10px;")
+        self.more_label.setVisible(False)
+        layout.addWidget(self.more_label)
 
     def set_day(self, date: QDate, in_current_month: bool, is_today: bool = False, is_selected: bool = False):
         self.date = date
@@ -346,26 +363,38 @@ class DayCellWidget(QFrame):
 
     def set_events(self, events: List[dict]):
         self.events_list.clear()
+        self.more_label.clear()
+        self.more_label.setVisible(False)
         display_events = [
             e for e in events
-            if not e.get("_fixed_virtual", False) and not e.get("auto_generated", False)
+            if not e.get("_fixed_virtual", False)
         ]
         if not display_events:
             return
 
-        for event in display_events[:8]:
+        max_icons = 10
+        for event in display_events[:max_icons]:
             icon = TYPE_ICONS.get(event.get("type", "casual"), NerdIcons.PIN)
             item = QListWidgetItem(icon)
             item.setData(Qt.ItemDataRole.UserRole, event)
-            color = QColor(
-                TYPE_COLORS.get(
-                    str(event.get("type", "casual")).strip().lower(),
-                    PRIORITY_COLORS.get(int(event.get("priority", 2)), "#60A5FA"),
+            item.setToolTip(
+                f"{event.get('start_time', '--:--')}  {event.get('title', 'Sem título')}"
+            )
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setForeground(
+                QColor(
+                    TYPE_COLORS.get(
+                        str(event.get("type", "casual")).strip().lower(),
+                        PRIORITY_COLORS.get(int(event.get("priority", 2)), "#93C5FD"),
+                    )
                 )
             )
-            color.setAlpha(70)
-            item.setBackground(color)
             self.events_list.addItem(item)
+
+        overflow = len(display_events) - max_icons
+        if overflow > 0:
+            self.more_label.setText(f"+{overflow}")
+            self.more_label.setVisible(True)
 
     def mousePressEvent(self, event):
         self.day_selected.emit(self.date)
@@ -1064,7 +1093,10 @@ class AgendaView(QWidget):
             selected_event_type=type_dialog.selected_event_type,
         )
         if dialog.exec():
-            self.rebalance_agenda()
+            self.status_label.setText("Compromisso criado")
+            self.load_month_data()
+            self.load_day_detail(self.selected_date)
+            QTimer.singleShot(1500, lambda: self.status_label.setText("Pronto"))
 
     def delete_selected_event(self):
         if not self.selected_event:
@@ -1471,6 +1503,7 @@ class AddEventDialog(QDialog):
             return
 
         event_type = self.type_combo.currentText().strip()
+        is_leisure = event_type == "lazer"
 
         if event_type == "aula":
             start_time = self.class_start_time_input.time().toString("HH:mm")
@@ -1655,7 +1688,16 @@ class AddEventDialog(QDialog):
             "description": self.description_input.toPlainText().strip(),
             "discipline": self._selected_discipline() or None,
         }
-        recurrence = self._build_recurrence_definition(start_dt, end_dt)
+
+        if is_leisure:
+            event_id = self.controller.add_event(payload) if self.controller and hasattr(self.controller, "add_event") else ""
+            if not event_id:
+                QMessageBox.warning(self, "Erro", "Não foi possível salvar o evento de lazer.")
+                return
+            self.accept()
+            return
+
+        recurrence = {"type": "none"} if is_leisure else self._build_recurrence_definition(start_dt, end_dt)
         if recurrence is None:
             return
 
@@ -1702,22 +1744,31 @@ class AddEventDialog(QDialog):
     def _update_event_type_visibility(self):
         is_dissertation = self.type_combo.currentText().strip() == "dissertacao"
         is_class = self.type_combo.currentText().strip() == "aula"
+        is_leisure = self.type_combo.currentText().strip() == "lazer"
         show_standard = not is_dissertation and not is_class
 
         self.category_label.setVisible(False)
         self.category_widget.setVisible(False)
         self.when_label.setVisible(show_standard)
         self.when_row_widget.setVisible(show_standard)
-        self.recurrence_label.setVisible(show_standard)
-        self.recurrence_combo.setVisible(show_standard)
-        self.recurrence_days_label.setVisible(show_standard)
-        self.recurrence_days_widget.setVisible(show_standard and self.recurrence_combo.currentData() == "weekly")
-        self.recurrence_end_label.setVisible(show_standard)
-        self.recurrence_end_date.setVisible(show_standard and self.recurrence_combo.currentData() in {"daily", "weekly"})
+        show_recurrence = show_standard and not is_leisure
+        self.recurrence_label.setVisible(show_recurrence)
+        self.recurrence_combo.setVisible(show_recurrence)
+        self.recurrence_days_label.setVisible(show_recurrence)
+        self.recurrence_days_widget.setVisible(show_recurrence and self.recurrence_combo.currentData() == "weekly")
+        self.recurrence_end_label.setVisible(show_recurrence)
+        self.recurrence_end_date.setVisible(show_recurrence and self.recurrence_combo.currentData() in {"daily", "weekly"})
         for checkbox in self.weekday_checks.values():
-            checkbox.setVisible(show_standard and self.recurrence_combo.currentData() == "weekly")
+            checkbox.setVisible(show_recurrence and self.recurrence_combo.currentData() == "weekly")
         self.dissertation_group.setVisible(is_dissertation)
         self.class_group.setVisible(is_class)
+
+        if is_leisure:
+            self.recurrence_combo.setCurrentIndex(0)
+            for checkbox in self.weekday_checks.values():
+                checkbox.setChecked(False)
+            if self.priority_combo.currentText().strip() not in {"Baixa", "Média"}:
+                self.priority_combo.setCurrentText("Baixa")
 
         if is_class:
             current = self._selected_discipline()

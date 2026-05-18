@@ -951,7 +951,23 @@ class AgendaController(QObject):
             )
             self._invalidate_agenda_cache()
             if "error" not in result:
-                self.load_agenda(datetime.now().date().isoformat())
+                touched_dates = {
+                    datetime.now().date().isoformat(),
+                    str(deadline).split("T", 1)[0],
+                }
+                for allocation in result.get("allocations", []) or []:
+                    start_str = str(allocation.get("start") or "").strip()
+                    if start_str:
+                        touched_dates.add(start_str.split(" ", 1)[0].split("T", 1)[0])
+
+                    event_id = str(allocation.get("event_id") or "").strip()
+                    created = self.agenda_manager.events.get(event_id) if event_id else None
+                    if created:
+                        created_data = created.to_dict() if hasattr(created, "to_dict") else {"id": event_id}
+                        self.event_added.emit(created_data)
+
+                for date_str in sorted(touched_dates):
+                    self.load_agenda(date_str)
             return result
         except Exception as e:
             logger.error(f"Erro ao alocar blocos de escrita: {e}")

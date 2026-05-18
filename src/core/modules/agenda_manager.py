@@ -92,8 +92,7 @@ class AgendaEvent:
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "completed": self.completed,
-            "auto_generated": self.auto_gener- Topico
-	- subated,
+            "auto_generated": self.auto_generated,
             "metadata": self.metadata,
             "book_id": self.book_id,
             "discipline": self.discipline,

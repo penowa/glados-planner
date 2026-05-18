@@ -5,6 +5,9 @@ from PyInstaller.utils.hooks import (
     collect_submodules,
 )
 
+import os
+import sys
+
 
 def _filter_problematic_qt_binaries(collected_entries):
     """Remove plugins opcionais que trazem dependências nativas ausentes na release Linux."""
@@ -28,6 +31,14 @@ hiddenimports += collect_submodules("ui")
 
 binaries = []
 
+# Encontrar o caminho real do litellm no site-packages do virtualenv
+litellm_path = None
+for path in sys.path:
+    test_path = os.path.join(path, 'litellm')
+    if os.path.exists(test_path):
+        litellm_path = test_path
+        break
+
 datas = [
     ("config/templates", "config/templates"),
     ("config/settings.release.yaml", "config"),
@@ -38,7 +49,21 @@ datas = [
     ("scripts/setup_ollama.py", "scripts"),
 ]
 datas += collect_data_files("litellm", includes=["*.json"])
-datas += collect_data_files("litellm.litellm_core_utils.tokenizers")
+if litellm_path:
+    containers_dir = os.path.join(litellm_path, "containers")
+    if os.path.exists(containers_dir):
+        datas.append((containers_dir, "litellm/containers"))
+        print(f"✓ Added containers directory: {containers_dir}")
+    else:
+        print(f"⚠ Warning: containers directory not found at {containers_dir}")
+    
+    # Também garantir o diretório tokenizers
+    tokenizers_dir = os.path.join(litellm_path, "litellm_core_utils", "tokenizers")
+    if os.path.exists(tokenizers_dir):
+        datas.append((tokenizers_dir, "litellm/litellm_core_utils/tokenizers"))
+        print(f"✓ Added tokenizers directory: {tokenizers_dir}")
+else:
+    print("⚠ Warning: Could not locate litellm installation")
 
 
 a = Analysis(

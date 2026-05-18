@@ -5,7 +5,7 @@ from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QParallelAnimationGro
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush, QPixmap
 from PyQt6.QtCore import Qt, QPoint, pyqtProperty, QRect
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 import logging
 
 logger = logging.getLogger('GLaDOS.UI.Animations')
@@ -22,6 +22,9 @@ class LoadingSplash(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.assistant_name = "GLaDOS"
+        self._current_status_message = "Preparando ambiente..."
+        self._current_theme_message = "Os subsistemas estao sendo despertados. Tente conter sua empolgacao."
+        self._stage_themed_messages = self._build_stage_themed_messages()
         
         self.setup_ui()
         self.setup_animations()
@@ -32,22 +35,40 @@ class LoadingSplash(QWidget):
         """Configura interface da splash screen"""
         layout = QVBoxLayout()
         layout.setContentsMargins(36, 32, 36, 32)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
 
         self.progress_label = QLabel()
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.progress_label.setWordWrap(True)
-        self.progress_label.setStyleSheet("color: #D8CBB5; font-size: 13px;")
+        self.progress_label.setStyleSheet("color: #D8CBB5; font-size: 14px; font-weight: 600;")
         layout.addWidget(self.progress_label)
 
+        self.status_label = QLabel()
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #9FB3C8; font-size: 12px;")
+        layout.addWidget(self.status_label)
+
+        self.theme_label = QLabel()
+        self.theme_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.theme_label.setWordWrap(True)
+        self.theme_label.setStyleSheet("color: #7F8EA3; font-size: 11px; font-style: italic;")
+        layout.addWidget(self.theme_label)
+
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # modo indeterminado
-        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(4)
+        self.progress_bar.setTextVisible(True)
         self.progress_bar.setFixedHeight(10)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setStyleSheet(
+            "QProgressBar{background:#1A1D24; border:1px solid #2F3744; border-radius:5px; color:#D8CBB5; text-align:center;}"
+            "QProgressBar::chunk{background:#6FA8DC; border-radius:5px;}"
+        )
         layout.addWidget(self.progress_bar)
         
         self.setLayout(layout)
-        self.setFixedSize(520, 120)
+        self.setFixedSize(560, 162)
         self._apply_fixed_message()
     
     def setup_animations(self):
@@ -61,11 +82,41 @@ class LoadingSplash(QWidget):
     
     def _apply_fixed_message(self):
         self.progress_label.setText(f"{self.assistant_name} esta configurando seu planner")
+        self.status_label.setText(self._current_status_message)
+        self.theme_label.setText(self._current_theme_message)
+
+    def _build_stage_themed_messages(self) -> Dict[str, str]:
+        return {
+            "Configurando logging...": "Catalogando cada detalhe. Caso algo falhe, havera registros. Para a posteridade.",
+            "Inicializando sistema de eventos...": "Conectando sinais internos. Um milagre burocratico da engenharia.",
+            "Configurando sistema de erros...": "Preparando protocolos para seus pequenos incidentes previsiveis.",
+            "Iniciando monitoramento...": "Ativando observacao passiva. Totalmente reconfortante, imagino.",
+            "Configurando sistema de recuperação...": "Planejando como desfazer danos antes mesmo de voce causa-los.",
+            "Sistemas centrais inicializados...": "Os nucleos principais responderam. Surpreendentemente cooperativos.",
+            "Inicializando serviço Ollama...": "Convocando um cerebro auxiliar. Espero que ele esteja minimamente acordado.",
+            "Validando configurações do vault...": "Inspecionando o vault. Se estiver organizado, fingirei nao estar surpresa.",
+            "Inicializando módulos de leitura e agenda...": "Arrumando leituras, horarios e inevitaveis ambicoes excessivas.",
+            "Inicializando núcleo cognitivo da GLaDOS...": "Ajustando minha capacidade de observacao. Respire naturalmente.",
+            "Sincronização do vault será sob demanda...": "Adiando trabalho pesado para o instante estrategicamente menos irritante.",
+            "Módulos carregados com sucesso": "Tudo operacional. Seu planner agora possui supervisao adequadamente severa.",
+            "Criando interface principal...": "Montando a fachada elegante que voce chamara de produtividade.",
+        }
+
+    def _resolve_theme_message(self, message: str) -> str:
+        return self._stage_themed_messages.get(
+            message,
+            "Prosseguindo com a inicializacao. Continue aguardando de forma exemplar."
+        )
     
     def show_message(self, message: str):
-        """Mantém mensagem fixa para splash minimalista."""
-        logger.debug(f"Splash message ignorada (layout fixo): {message}")
+        """Mantém título fixo, mas atualiza o status dinâmico do carregamento."""
+        cleaned_message = str(message or "").strip()
+        if cleaned_message:
+            self._current_status_message = cleaned_message
+            self._current_theme_message = self._resolve_theme_message(cleaned_message)
+        logger.debug("Splash status atualizado: %s", self._current_status_message)
         self._apply_fixed_message()
+        self.update()
 
     def set_identity(self, user_name: str, assistant_name: str):
         """Atualiza nome do assistente na mensagem fixa."""
@@ -76,6 +127,8 @@ class LoadingSplash(QWidget):
     def show(self):
         """Mostra a splash screen com animação de fade in"""
         super().show()
+        self.raise_()
+        self.activateWindow()
         
         # Centralizar na tela
         screen = self.screen().availableGeometry()
@@ -104,8 +157,13 @@ class LoadingSplash(QWidget):
     
     def set_progress(self, percent: int):
         """Define progresso (opcional, para compatibilidade)"""
-        # Esta splash screen usa animação indeterminada
-        pass
+        if 0 <= int(percent) <= 100:
+            if self.progress_bar.minimum() != 0 or self.progress_bar.maximum() != 100:
+                self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(int(percent))
+            return
+
+        self.progress_bar.setRange(0, 0)
 
 # ============ CLASSES EXISTENTES (mantidas do arquivo original) ============
 
