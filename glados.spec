@@ -28,16 +28,10 @@ hiddenimports += collect_submodules("litellm")
 hiddenimports += collect_submodules("litellm.litellm_core_utils.tokenizers")
 hiddenimports += collect_submodules("core")
 hiddenimports += collect_submodules("ui")
+hiddenimports += collect_submodules("tiktoken")
+hiddenimports += collect_submodules("tiktoken_ext")
 
 binaries = []
-
-# Encontrar o caminho real do litellm no site-packages do virtualenv
-litellm_path = None
-for path in sys.path:
-    test_path = os.path.join(path, 'litellm')
-    if os.path.exists(test_path):
-        litellm_path = test_path
-        break
 
 datas = [
     ("config/templates", "config/templates"),
@@ -48,22 +42,10 @@ datas = [
     ("src/cli/interactive/screens/glados_templates", "src/cli/interactive/screens/glados_templates"),
     ("scripts/setup_ollama.py", "scripts"),
 ]
-datas += collect_data_files("litellm", includes=["*.json"])
-if litellm_path:
-    containers_dir = os.path.join(litellm_path, "containers")
-    if os.path.exists(containers_dir):
-        datas.append((containers_dir, "litellm/containers"))
-        print(f"✓ Added containers directory: {containers_dir}")
-    else:
-        print(f"⚠ Warning: containers directory not found at {containers_dir}")
-    
-    # Também garantir o diretório tokenizers
-    tokenizers_dir = os.path.join(litellm_path, "litellm_core_utils", "tokenizers")
-    if os.path.exists(tokenizers_dir):
-        datas.append((tokenizers_dir, "litellm/litellm_core_utils/tokenizers"))
-        print(f"✓ Added tokenizers directory: {tokenizers_dir}")
-else:
-    print("⚠ Warning: Could not locate litellm installation")
+
+# Usar apenas collect_data_files sem recursão manual
+datas += collect_data_files("litellm")
+datas += collect_data_files("tiktoken")
 
 
 a = Analysis(
