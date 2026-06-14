@@ -556,12 +556,13 @@ class SettingsDialog(QDialog):
         self.llm_max_tokens_spin = QSpinBox()
         self.llm_max_tokens_spin.setRange(64, 4096)
         self.llm_cloud_model_input = QLineEdit()
-        self.llm_cloud_model_input.setPlaceholderText("ollama/qwen2.5:1.5b ou openai/gpt-4o-mini")
+        self.llm_cloud_model_input.setPlaceholderText("groq/llama-3.1-8b-instant ou openai/gpt-4.1-mini")
         self.llm_cloud_api_base_input = QLineEdit()
         self.llm_cloud_api_base_input.setPlaceholderText("http://127.0.0.1:11434")
         self.llm_cloud_api_version_input = QLineEdit()
         self.llm_cloud_organization_input = QLineEdit()
         self.llm_cloud_api_key_input = QLineEdit()
+        self.llm_cloud_api_key_input.setPlaceholderText("Cole aqui a chave da API da Groq")
         self.llm_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.llm_cloud_timeout_spin = QSpinBox()
         self.llm_cloud_timeout_spin.setRange(5, 600)
@@ -594,7 +595,10 @@ class SettingsDialog(QDialog):
 
         cloud_model_layout = QHBoxLayout()
         cloud_model_layout.addWidget(self.llm_cloud_model_input)
-        self.llm_cloud_ollama_preset_button = QPushButton("Preset Ollama local")
+        self.llm_cloud_groq_preset_button = QPushButton("Preset Groq")
+        self.llm_cloud_groq_preset_button.clicked.connect(self._apply_groq_cloud_preset)
+        cloud_model_layout.addWidget(self.llm_cloud_groq_preset_button)
+        self.llm_cloud_ollama_preset_button = QPushButton("Preset Ollama Cloud")
         self.llm_cloud_ollama_preset_button.clicked.connect(self._apply_ollama_cloud_preset)
         cloud_model_layout.addWidget(self.llm_cloud_ollama_preset_button)
 
@@ -615,6 +619,7 @@ class SettingsDialog(QDialog):
         self._add_llm_row("Foco na resposta (top-p):", self.llm_top_p_spin)
         self._add_llm_row("Limite de tokens por resposta:", self.llm_max_tokens_spin)
         self._add_llm_row("Modelo cloud (LiteLLM):", cloud_model_layout, scope="cloud")
+        self._add_llm_row("Chave da API cloud:", self.llm_cloud_api_key_input, scope="cloud")
         self._add_llm_row("Timeout cloud:", self.llm_cloud_timeout_spin, scope="cloud")
         self._add_llm_row("Tentativas cloud:", self.llm_cloud_max_retries_spin, scope="cloud")
 
@@ -812,7 +817,7 @@ class SettingsDialog(QDialog):
         self.llm_top_p_spin.setValue(llm.top_p)
         self.llm_max_tokens_spin.setValue(llm.max_tokens)
         cloud_cfg = getattr(llm, "cloud", None)
-        self.llm_cloud_model_input.setText(str(getattr(cloud_cfg, "model", "ollama/qwen2.5:1.5b") or ""))
+        self.llm_cloud_model_input.setText(str(getattr(cloud_cfg, "model", "ollama/qwen3.5:cloud") or ""))
         self.llm_cloud_api_base_input.setText(str(getattr(cloud_cfg, "api_base", "") or ""))
         self.llm_cloud_api_version_input.setText(str(getattr(cloud_cfg, "api_version", "") or ""))
         self.llm_cloud_organization_input.setText(str(getattr(cloud_cfg, "organization", "") or ""))
@@ -1278,11 +1283,25 @@ class SettingsDialog(QDialog):
         cloud_idx = self.llm_backend_combo.findData("cloud")
         if cloud_idx >= 0:
             self.llm_backend_combo.setCurrentIndex(cloud_idx)
-        self.llm_cloud_model_input.setText("ollama/qwen2.5:1.5b")
+        self.llm_cloud_model_input.setText("ollama/qwen3.5:cloud")
         self.llm_cloud_api_base_input.setText("http://127.0.0.1:11434")
         self.llm_cloud_api_version_input.clear()
         self.llm_cloud_organization_input.clear()
         self.llm_cloud_api_key_input.clear()
+        if self.llm_cloud_timeout_spin.value() < 60:
+            self.llm_cloud_timeout_spin.setValue(120)
+        if self.llm_cloud_max_retries_spin.value() < 1:
+            self.llm_cloud_max_retries_spin.setValue(1)
+        self._sync_llm_mode_controls()
+
+    def _apply_groq_cloud_preset(self):
+        cloud_idx = self.llm_backend_combo.findData("cloud")
+        if cloud_idx >= 0:
+            self.llm_backend_combo.setCurrentIndex(cloud_idx)
+        self.llm_cloud_model_input.setText("groq/llama-3.1-8b-instant")
+        self.llm_cloud_api_base_input.clear()
+        self.llm_cloud_api_version_input.clear()
+        self.llm_cloud_organization_input.clear()
         if self.llm_cloud_timeout_spin.value() < 60:
             self.llm_cloud_timeout_spin.setValue(120)
         if self.llm_cloud_max_retries_spin.value() < 1:
@@ -1307,6 +1326,7 @@ class SettingsDialog(QDialog):
         self.llm_gpu_combo.setEnabled(local_enabled)
         self.llm_cpu_threads_spin.setEnabled(local_enabled and cpu_only)
         self.llm_cloud_model_input.setEnabled(not local_enabled)
+        self.llm_cloud_groq_preset_button.setEnabled(not local_enabled)
         self.llm_cloud_ollama_preset_button.setEnabled(not local_enabled)
         self.llm_cloud_api_base_input.setEnabled(not local_enabled)
         self.llm_cloud_api_version_input.setEnabled(not local_enabled)

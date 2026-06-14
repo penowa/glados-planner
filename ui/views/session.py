@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.request import Request, urlopen
 
-from PyQt6.QtCore import QEvent, QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextBlockFormat, QTextCharFormat, QTextCursor
+from PyQt6.QtCore import QEvent, QEasingCurve, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QShortcut, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QSizePolicy,
     QSpinBox,
     QScrollArea,
     QTabWidget,
@@ -55,6 +56,7 @@ from core.modules.pomodoro_timer import PomodoroTimer
 from core.modules.review_system import ReviewSystem
 from core.modules.zathura_config_manager import ZathuraConfigManager
 from ui.utils.config_manager import ConfigManager
+from ui.utils.system_notifier import SystemNotifier
 from ui.utils.citation_notes import (
     build_citations_note_header as build_shared_citations_note_header,
     build_citations_note_path,
@@ -121,6 +123,45 @@ class PomodoroConfigDialog(QDialog):
             "long_break_minutes": self.long_break_spin.value(),
             "sessions_before_long_break": self.sessions_spin.value(),
         }
+
+
+class SessionPomodoroRing(QWidget):
+    """Anel circular de progresso do Pomodoro."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._progress = 0.0
+        self.setMinimumSize(240, 240)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_progress(self, fraction: float):
+        self._progress = max(0.0, min(1.0, float(fraction)))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        side = min(self.width(), self.height())
+        margin = 18
+        diameter = max(80, side - (margin * 2))
+        x = (self.width() - diameter) / 2
+        y = (self.height() - diameter) / 2
+        rect = QRectF(x, y, diameter, diameter)
+
+        track_pen = QPen(QColor("#2E3645"), 14)
+        track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track_pen)
+        painter.drawArc(rect, 0, 360 * 16)
+
+        if self._progress > 0:
+            progress_pen = QPen(QColor("#6B9FE6"), 14)
+            progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(progress_pen)
+            span = int(360 * 16 * self._progress)
+            painter.drawArc(rect, 90 * 16, -span)
+
+        painter.end()
 
 
 class ReviewGenerationDialog(QDialog):
@@ -523,9 +564,16 @@ class SessionView(QWidget):
         self._zathura_last_launch_signature: Optional[tuple[str, int]] = None
         self._zathura_process: Optional[subprocess.Popen] = None
         self._zathura_monitored_pdf_path: Optional[Path] = None
+        self._zathura_monitor_grace_until: float = 0.0
         self._processed_zathura_bookmark_signatures: set[str] = set()
         self._processed_zathura_capture_signatures: set[str] = set()
         self._zathura_capture_queue_offset: int = 0
+        self._pomodoro_blocks_minutes: list[int] = []
+        self._pomodoro_block_index: int = 0
+        self._pomodoro_half_notified: bool = False
+        self._pomodoro_end_notified: bool = False
+        self._ending_session_after_zathura: bool = False
+        self.system_notifier = SystemNotifier(self, "GLaDOS's Planner")
         self._configurable_shortcuts: dict[str, QShortcut] = {}
         self.mindmap_review_module = MindmapReviewModule()
         self.review_system = self._resolve_review_system()
@@ -546,7 +594,9 @@ class SessionView(QWidget):
         try:
             if self.reading_controller and getattr(self.reading_controller, "reading_manager", None):
                 vault_path = str(self.reading_controller.reading_manager.vault_path)
-                return PomodoroTimer(vault_path)
+                timer = PomodoroTimer(vault_path)
+                timer.on_complete = self._on_pomodoro_block_complete
+                return timer
         except Exception as exc:
             logger.warning("Falha ao inicializar Pomodoro com reading_manager: %s", exc)
         return None
@@ -686,133 +736,119 @@ class SessionView(QWidget):
         self.reading_panel = QFrame()
         self.reading_panel.setObjectName("session_reading_panel")
         reading_layout = QVBoxLayout(self.reading_panel)
-        reading_layout.setContentsMargins(2, 1, 2, 1)
-        reading_layout.setSpacing(2)
+        reading_layout.setContentsMargins(16, 12, 16, 12)
+        reading_layout.setSpacing(12)
 
-        self.pdf_session_card = QFrame()
-        self.pdf_session_card.setObjectName("session_pdf_card")
-        self.pdf_session_card.setStyleSheet(
-            "QFrame#session_pdf_card {"
+        self.session_focus_panel = QFrame()
+        self.session_focus_panel.setObjectName("session_focus_panel")
+        self.session_focus_panel.setStyleSheet(
+            "QFrame#session_focus_panel {"
             "background-color: #141924;"
             "border: 1px solid #343B4A;"
-            "border-radius: 12px;"
+            "border-radius: 16px;"
             "}"
-            "QFrame#session_pdf_card QLabel { color: #E7EDF7; }"
+            "QFrame#session_focus_panel QLabel { color: #E7EDF7; }"
         )
-        pdf_card_layout = QVBoxLayout(self.pdf_session_card)
-        pdf_card_layout.setContentsMargins(14, 12, 14, 12)
-        pdf_card_layout.setSpacing(8)
+        focus_layout = QVBoxLayout(self.session_focus_panel)
+        focus_layout.setContentsMargins(24, 20, 24, 20)
+        focus_layout.setSpacing(10)
 
-        pdf_header = QHBoxLayout()
-        self.pdf_status_title = QLabel("Leitura via Zathura")
-        self.pdf_status_title.setStyleSheet("font-weight: 700; font-size: 14px;")
-        self.pdf_launch_status_label = QLabel("Aguardando livro")
-        self.pdf_launch_status_label.setStyleSheet("color: #9FB0C7;")
-        pdf_header.addWidget(self.pdf_status_title)
-        pdf_header.addStretch(1)
-        pdf_header.addWidget(self.pdf_launch_status_label)
-        pdf_card_layout.addLayout(pdf_header)
+        self.session_book_title_label = QLabel("Sessão de leitura")
+        self.session_book_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_book_title_label.setStyleSheet("font-size: 18px; font-weight: 700;")
+        focus_layout.addWidget(self.session_book_title_label)
 
-        self.pdf_context_label = QLabel(
-            "A sessão abre o PDF original no Zathura e mantém as notas Markdown como referência para resumo, mapa mental e anotação."
-        )
-        self.pdf_context_label.setWordWrap(True)
-        self.pdf_context_label.setStyleSheet("color: #C4D0E0;")
-        pdf_card_layout.addWidget(self.pdf_context_label)
+        self.session_page_status_label = QLabel("Página 1 de ?")
+        self.session_page_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_page_status_label.setStyleSheet("color: #9FB0C7; font-size: 12px;")
+        focus_layout.addWidget(self.session_page_status_label)
 
-        self.pdf_path_label = QLabel("PDF: não localizado")
-        self.pdf_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.pdf_path_label.setWordWrap(True)
-        self.pdf_path_label.setStyleSheet("color: #DCE6F5;")
-        pdf_card_layout.addWidget(self.pdf_path_label)
+        self.session_pdf_status_label = QLabel("PDF: aguardando")
+        self.session_pdf_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_pdf_status_label.setWordWrap(True)
+        self.session_pdf_status_label.setStyleSheet("color: #C4D0E0; font-size: 11px;")
+        focus_layout.addWidget(self.session_pdf_status_label)
 
-        self.reference_note_label = QLabel("Nota de referência: não localizada")
-        self.reference_note_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.reference_note_label.setWordWrap(True)
-        self.reference_note_label.setStyleSheet("color: #9FB0C7;")
-        pdf_card_layout.addWidget(self.reference_note_label)
+        ring_row = QHBoxLayout()
+        ring_row.addStretch(1)
+        self.pomodoro_ring = SessionPomodoroRing()
+        self.pomodoro_ring.setFixedSize(280, 280)
+        ring_row.addWidget(self.pomodoro_ring)
+        ring_row.addStretch(1)
+        focus_layout.addLayout(ring_row)
 
-        pdf_actions = QHBoxLayout()
+        self.session_timer_label = QLabel("25:00")
+        self.session_timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_timer_label.setStyleSheet("font-size: 42px; font-weight: 700; color: #F4F8FF;")
+        focus_layout.addWidget(self.session_timer_label)
+
+        self.session_phase_label = QLabel("Foco")
+        self.session_phase_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_phase_label.setStyleSheet("color: #9FB0C7; font-size: 12px;")
+        focus_layout.addWidget(self.session_phase_label)
+
+        session_controls = QHBoxLayout()
+        session_controls.setSpacing(8)
+        self.session_pomodoro_toggle_button = QPushButton("Iniciar")
+        self.session_pomodoro_toggle_button.setObjectName("library_chip_button")
+        self.session_pomodoro_reset_button = QPushButton("Reiniciar")
+        self.session_pomodoro_reset_button.setObjectName("library_chip_button")
+        self.session_pomodoro_config_button = QPushButton("Configurar")
+        self.session_pomodoro_config_button.setObjectName("library_chip_button")
         self.launch_pdf_button = QPushButton("Abrir PDF no Zathura")
+        self.launch_pdf_button.setObjectName("library_chip_button")
         self.relaunch_pdf_button = QPushButton("Reabrir na página atual")
+        self.relaunch_pdf_button.setObjectName("library_chip_button")
         self.launch_note_button = QPushButton("Abrir anotação")
-        pdf_actions.addWidget(self.launch_pdf_button)
-        pdf_actions.addWidget(self.relaunch_pdf_button)
-        pdf_actions.addWidget(self.launch_note_button)
-        pdf_actions.addStretch(1)
-        pdf_card_layout.addLayout(pdf_actions)
+        self.launch_note_button.setObjectName("library_chip_button")
+        self.session_end_button = QPushButton("Encerrar sessão")
+        self.session_end_button.setObjectName("library_chip_button")
+        for button in (
+            self.session_pomodoro_toggle_button,
+            self.session_pomodoro_reset_button,
+            self.session_pomodoro_config_button,
+            self.launch_pdf_button,
+            self.relaunch_pdf_button,
+            self.launch_note_button,
+            self.session_end_button,
+        ):
+            button.setMinimumHeight(34)
+        session_controls.addStretch(1)
+        session_controls.addWidget(self.session_pomodoro_toggle_button)
+        session_controls.addWidget(self.session_pomodoro_reset_button)
+        session_controls.addWidget(self.session_pomodoro_config_button)
+        session_controls.addWidget(self.launch_pdf_button)
+        session_controls.addWidget(self.relaunch_pdf_button)
+        session_controls.addWidget(self.launch_note_button)
+        session_controls.addWidget(self.session_end_button)
+        session_controls.addStretch(1)
+        focus_layout.addLayout(session_controls)
+        reading_layout.addWidget(self.session_focus_panel, 1)
 
-        reading_layout.addWidget(self.pdf_session_card)
-
-        pages_grid = QGridLayout()
-        pages_grid.setContentsMargins(0, 0, 0, 0)
-        pages_grid.setHorizontalSpacing(4)
-        pages_grid.setVerticalSpacing(1)
-
+        # Compatibilidade interna (notícias, busca, revisão) sem exibir transcrição na UI.
+        self.pdf_session_card = QFrame()
+        self.pdf_session_card.hide()
+        self.pdf_status_title = QLabel("Leitura via Zathura")
+        self.pdf_launch_status_label = QLabel("Aguardando livro")
+        self.pdf_context_label = QLabel("")
+        self.pdf_path_label = QLabel("PDF: não localizado")
+        self.reference_note_label = QLabel("Nota de referência: não localizada")
         self.left_page_title = QLabel("Referência 1")
         self.right_page_title = QLabel("Referência 2")
         self.left_page_text = QTextEdit()
         self.right_page_text = QTextEdit()
         for page in (self.left_page_text, self.right_page_text):
             page.setReadOnly(True)
-            page.setObjectName("session_page_text")
-            page.installEventFilter(self)
-            page.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-            page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            page.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            page.setStyleSheet(
-                "background-color: #FFFFFF; color: #111111; "
-                "font-family: Georgia, 'Times New Roman', serif;"
-            )
-            page.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            page.customContextMenuRequested.connect(
-                lambda pos, editor=page: self._show_page_context_menu(editor, pos)
-            )
-
-        pages_grid.addWidget(self.left_page_title, 0, 0)
-        pages_grid.addWidget(self.right_page_title, 0, 1)
-        pages_grid.addWidget(self.left_page_text, 1, 0)
-        pages_grid.addWidget(self.right_page_text, 1, 1)
-        reading_layout.addLayout(pages_grid)
-
-        overlay_button_style = (
-            "QPushButton {"
-            "background-color: rgba(35, 39, 51, 0.9); color: #FFFFFF; "
-            "border: 1px solid #4A5263; border-radius: 18px; font-size: 17px;"
-            "}"
-            "QPushButton:hover { background-color: rgba(53, 60, 77, 0.95); }"
-        )
-
-        self.fullscreen_button = QPushButton(NerdIcons.FULLSCREEN)
-        self.fullscreen_button.setToolTip("Modo fullscreen (ESC para sair)")
-        self.fullscreen_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fullscreen_button.setFixedSize(36, 36)
-        self.fullscreen_button.setFont(nerd_font(16))
-        self.fullscreen_button.setStyleSheet(overlay_button_style)
-        self.fullscreen_button.setParent(self.left_page_text.viewport())
-        self.fullscreen_button.raise_()
-
-        self.search_toggle_button = QPushButton(NerdIcons.SEARCH)
-        self.search_toggle_button.setToolTip("Pesquisar na obra")
-        self.search_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.search_toggle_button.setFixedSize(36, 36)
-        self.search_toggle_button.setFont(nerd_font(16))
-        self.search_toggle_button.setStyleSheet(overlay_button_style)
-        self.search_toggle_button.setParent(self.right_page_text.viewport())
-        self.search_toggle_button.raise_()
-
-        self.nav_widget = QWidget()
-        nav = QHBoxLayout(self.nav_widget)
-        nav.setContentsMargins(0, 0, 0, 0)
-        nav.setSpacing(4)
+            page.hide()
+        self.page_pair_label = QLabel("1-2")
         self.prev_pages_button = QPushButton("◀ Referência anterior")
         self.next_pages_button = QPushButton("Próxima referência ▶")
-        self.page_pair_label = QLabel("1-2")
-        self.page_pair_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        nav.addWidget(self.prev_pages_button)
-        nav.addWidget(self.page_pair_label, 1)
-        nav.addWidget(self.next_pages_button)
-        reading_layout.addWidget(self.nav_widget)
+        self.nav_widget = QWidget()
+        self.nav_widget.hide()
+        self.fullscreen_button = QPushButton(NerdIcons.FULLSCREEN)
+        self.fullscreen_button.hide()
+        self.search_toggle_button = QPushButton(NerdIcons.SEARCH)
+        self.search_toggle_button.hide()
 
         self.search_bar = QFrame(self.reading_panel)
         self.search_bar.setObjectName("session_search_bar")
@@ -1018,8 +1054,6 @@ class SessionView(QWidget):
 
     def _setup_connections(self):
         self.note_button.clicked.connect(self._open_note_tab)
-        self.fullscreen_button.clicked.connect(self._toggle_fullscreen_mode)
-        self.search_toggle_button.clicked.connect(self._open_search_bar)
         self.pomodoro_timer_label.clicked.connect(self._toggle_pomodoro_from_timer)
         self.controls_menu_button.clicked.connect(self._open_controls_menu)
         self.action_back_dashboard.triggered.connect(self._on_back_clicked)
@@ -1028,11 +1062,13 @@ class SessionView(QWidget):
         self.action_pomodoro_pause.triggered.connect(self._pause_pomodoro)
         self.action_pomodoro_config.triggered.connect(self._open_pomodoro_config_dialog)
 
+        self.session_pomodoro_toggle_button.clicked.connect(self._toggle_pomodoro_from_timer)
+        self.session_pomodoro_reset_button.clicked.connect(self._reset_pomodoro)
+        self.session_pomodoro_config_button.clicked.connect(self._open_pomodoro_config_dialog)
         self.launch_pdf_button.clicked.connect(self._open_current_pdf_session)
         self.relaunch_pdf_button.clicked.connect(lambda: self._open_current_pdf_session(force=True))
         self.launch_note_button.clicked.connect(self._open_primary_note_reference)
-        self.prev_pages_button.clicked.connect(self._go_prev_pages)
-        self.next_pages_button.clicked.connect(self._go_next_pages)
+        self.session_end_button.clicked.connect(self._end_session_and_return_dashboard)
         self.chat_summary_button.clicked.connect(self._request_summary_with_annotations)
         self.chat_mindmap_button.clicked.connect(self._handle_mindmap_button_clicked)
         self.chat_mark_review_button.clicked.connect(self._start_review_generation)
@@ -1113,24 +1149,43 @@ class SessionView(QWidget):
             return
 
         manager = self.reading_controller.reading_manager
-        title = self._manual_book_dir.name
-        author = self._manual_book_dir.parent.name if self._manual_book_dir.parent else "Desconhecido"
+        metadata = self._load_book_metadata_from_dir(self._manual_book_dir)
+        title = str(metadata.get("title") or self._manual_book_dir.name).strip()
+        author = str(metadata.get("author") or "").strip()
+        if not author:
+            author = self._manual_book_dir.parent.name if self._manual_book_dir.parent else "Desconhecido"
+        book_id_hint = str(metadata.get("book_id") or "").strip()
+        source_file = self._resolve_registry_pdf_path(book_id_hint)
 
-        matched_book_id = None
-        for bid, info in manager.readings.items():
-            if info.title.strip().lower() == title.strip().lower():
-                matched_book_id = bid
-                break
+        matched_book_id = book_id_hint or None
+        if matched_book_id and matched_book_id not in manager.readings:
+            matched_book_id = None
 
         if not matched_book_id:
-            total_pages = self._estimate_total_pages_in_dir(self._manual_book_dir)
+            for bid, info in manager.readings.items():
+                if (
+                    info.title.strip().lower() == title.strip().lower()
+                    and info.author.strip().lower() == author.strip().lower()
+                ):
+                    matched_book_id = bid
+                    break
+
+        if not matched_book_id:
+            total_pages = max(int(metadata.get("total_pages", 0) or 0), 0)
+            if total_pages <= 0:
+                total_pages = self._estimate_total_pages_in_dir(self._manual_book_dir)
             matched_book_id = manager.add_book(
                 title=title,
                 author=author,
-                total_pages=max(total_pages, 1)
+                total_pages=max(total_pages, 1),
+                book_id=book_id_hint or None,
+                source_file=source_file,
             )
 
         self._manual_book_id = str(matched_book_id)
+        if source_file:
+            manager.update_book_source_path(self._manual_book_id, source_file)
+
         if hasattr(self.reading_controller, "start_reading_session"):
             try:
                 self.reading_controller.start_reading_session(self._manual_book_id, 10)
@@ -1138,6 +1193,162 @@ class SessionView(QWidget):
                 pass
 
         self.refresh_reading_context()
+
+    def _notify_session(self, notif_type: str, title: str, message: str):
+        try:
+            self.system_notifier.notify(notif_type, title, message)
+        except Exception as exc:
+            logger.debug("Falha ao enviar notificacao da sessao: %s", exc)
+
+    def _event_duration_minutes(self, event_data: Optional[Dict[str, Any]]) -> int:
+        if not isinstance(event_data, dict):
+            return 0
+
+        metadata = event_data.get("metadata") if isinstance(event_data.get("metadata"), dict) else {}
+        for key in ("duration_minutes", "planned_duration_minutes"):
+            raw = metadata.get(key, event_data.get(key))
+            if raw:
+                try:
+                    return max(1, int(raw))
+                except Exception:
+                    pass
+
+        start_raw = str(event_data.get("start") or "").strip()
+        end_raw = str(event_data.get("end") or "").strip()
+        if start_raw and end_raw:
+            try:
+                start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+                return max(1, int((end_dt - start_dt).total_seconds() // 60))
+            except Exception:
+                pass
+        return 0
+
+    @staticmethod
+    def _split_session_minutes_into_blocks(total_minutes: int, block_minutes: int) -> list[int]:
+        total = max(1, int(total_minutes or 1))
+        block = max(1, int(block_minutes or 25))
+        blocks: list[int] = []
+        remaining = total
+        while remaining > 0:
+            if remaining <= block:
+                blocks.append(remaining)
+                break
+            blocks.append(block)
+            remaining -= block
+        return blocks or [total]
+
+    def _default_pomodoro_block_minutes(self) -> int:
+        if self.pomodoro:
+            return max(1, int(self.pomodoro.work_duration // 60))
+        return 25
+
+    def _resolve_agenda_session_minutes(self) -> int:
+        current_session: Dict[str, Any] = {}
+        if self.reading_controller and hasattr(self.reading_controller, "get_current_session"):
+            try:
+                current_session = self.reading_controller.get_current_session() or {}
+            except Exception:
+                current_session = {}
+
+        duration = int(current_session.get("duration_minutes") or 0)
+        if duration > 0:
+            return duration
+
+        agenda_event = current_session.get("agenda_event")
+        if isinstance(agenda_event, dict):
+            duration = self._event_duration_minutes(agenda_event)
+            if duration > 0:
+                return duration
+
+        event_id = str(current_session.get("agenda_event_id") or "").strip()
+        if event_id and self.agenda_controller and getattr(self.agenda_controller, "agenda_manager", None):
+            event = self.agenda_controller.agenda_manager.events.get(event_id)
+            if event is not None:
+                return max(1, int(event.duration_minutes()))
+
+        return self._default_pomodoro_block_minutes()
+
+    def _reset_pomodoro_plan(self):
+        total_minutes = self._resolve_agenda_session_minutes()
+        self._pomodoro_blocks_minutes = self._split_session_minutes_into_blocks(
+            total_minutes,
+            self._default_pomodoro_block_minutes(),
+        )
+        self._pomodoro_block_index = 0
+        self._pomodoro_half_notified = False
+        self._pomodoro_end_notified = False
+
+    def _current_pomodoro_block_minutes(self) -> int:
+        if not self._pomodoro_blocks_minutes:
+            return self._default_pomodoro_block_minutes()
+        index = min(max(self._pomodoro_block_index, 0), len(self._pomodoro_blocks_minutes) - 1)
+        return max(1, int(self._pomodoro_blocks_minutes[index]))
+
+    def _start_current_pomodoro_block(self, *, notify_start: bool = True):
+        if not self.pomodoro:
+            return
+        if not self._pomodoro_blocks_minutes:
+            self._reset_pomodoro_plan()
+
+        block_minutes = self._current_pomodoro_block_minutes()
+        self.pomodoro.work_duration = block_minutes * 60
+        self._pomodoro_half_notified = False
+        self._pomodoro_end_notified = False
+
+        if self.pomodoro.is_running:
+            self.pomodoro.stop(save_stats=False)
+
+        started = self.pomodoro.start(session_type="work", discipline="leitura")
+        if not started:
+            return
+
+        total_blocks = len(self._pomodoro_blocks_minutes)
+        block_number = self._pomodoro_block_index + 1
+        if hasattr(self, "session_phase_label"):
+            self.session_phase_label.setText(f"Bloco {block_number}/{total_blocks} — Foco ({block_minutes} min)")
+
+        if notify_start:
+            self._notify_session(
+                "info",
+                "Pomodoro iniciado",
+                f"Bloco {block_number} de {total_blocks}: {block_minutes} minutos de foco.",
+            )
+        self._tick_ui()
+
+    def _on_pomodoro_block_complete(self, _session_type: str):
+        if self._session_closed or self._temporary_read_only_session:
+            return
+
+        block_number = self._pomodoro_block_index + 1
+        total_blocks = len(self._pomodoro_blocks_minutes) or 1
+        if not self._pomodoro_end_notified:
+            self._pomodoro_end_notified = True
+            self._notify_session(
+                "success",
+                "Tempo esgotado",
+                f"Bloco {block_number} de {total_blocks} concluído.",
+            )
+
+        self._pomodoro_block_index += 1
+        if self._pomodoro_block_index >= len(self._pomodoro_blocks_minutes):
+            self._notify_session("success", "Sessão concluída", "Todos os blocos de leitura foram finalizados.")
+            QTimer.singleShot(1200, self._end_session_and_return_dashboard)
+            return
+
+        QTimer.singleShot(800, lambda: self._start_current_pomodoro_block(notify_start=True))
+
+    def _end_session_and_return_dashboard(self):
+        if self._session_closed:
+            return
+        if self._temporary_read_only_session:
+            self._on_back_clicked()
+            return
+        if self.pomodoro and self.pomodoro.is_running:
+            self.pomodoro.stop(save_stats=True)
+        self._set_fullscreen_mode(False)
+        self._finalize_session()
+        self.navigate_to.emit("dashboard")
 
     def start_news_reading(self, article: Dict[str, Any]):
         """Inicia uma sessao temporaria de leitura de noticia (sem persistencia)."""
@@ -1464,6 +1675,7 @@ class SessionView(QWidget):
             self.current_chapter_path = None
 
         self.left_page = self._left_page_from_current(self.current_page)
+        self._reset_pomodoro_plan()
         self._refresh_pages()
         self._apply_session_mode_ui()
 
@@ -1559,6 +1771,11 @@ class SessionView(QWidget):
         else:
             self.source_label.setText("Fonte: nota não encontrada")
 
+        if hasattr(self, "session_book_title_label"):
+            self.session_book_title_label.setText(self.current_book_title)
+        if hasattr(self, "session_page_status_label"):
+            self.session_page_status_label.setText(f"Página {self.current_page} de {total_text}")
+
         self.prev_pages_button.setEnabled(left > 0)
         if self.total_pages > 0:
             self.next_pages_button.setEnabled(right < self.total_pages)
@@ -1566,8 +1783,6 @@ class SessionView(QWidget):
             self.next_pages_button.setEnabled(True)
         self._refresh_pdf_session_card()
         self._apply_search_highlights()
-        self._position_fullscreen_button()
-        self._position_search_button()
 
     def _refresh_pdf_session_card(self):
         if self._temporary_read_only_session:
@@ -1577,6 +1792,8 @@ class SessionView(QWidget):
             self.launch_pdf_button.setEnabled(False)
             self.relaunch_pdf_button.setEnabled(False)
             self.launch_note_button.setEnabled(False)
+            if hasattr(self, "session_pdf_status_label"):
+                self.session_pdf_status_label.setText("Leitura temporária (sem PDF)")
             return
 
         page = max(1, int(self.current_page or 1))
@@ -1588,11 +1805,15 @@ class SessionView(QWidget):
             self.pdf_path_label.setText(f"PDF: {pdf_path}")
             self.launch_pdf_button.setEnabled(True)
             self.relaunch_pdf_button.setEnabled(True)
+            if hasattr(self, "session_pdf_status_label"):
+                self.session_pdf_status_label.setText(f"PDF localizado — página {page}")
         else:
             self.pdf_launch_status_label.setText("PDF original não localizado")
             self.pdf_path_label.setText("PDF: não localizado")
-            self.launch_pdf_button.setEnabled(False)
+            self.launch_pdf_button.setEnabled(True)
             self.relaunch_pdf_button.setEnabled(False)
+            if hasattr(self, "session_pdf_status_label"):
+                self.session_pdf_status_label.setText("PDF não localizado — clique em abrir para indicar o caminho")
 
         if note_path and note_path.exists():
             self.reference_note_label.setText(f"Nota de referência: {note_path}")
@@ -1716,24 +1937,10 @@ class SessionView(QWidget):
         super().keyPressEvent(event)
 
     def _position_fullscreen_button(self):
-        viewport = self.left_page_text.viewport()
-        if not viewport:
-            return
-        margin = 10
-        x = margin
-        y = max(margin, viewport.height() - self.fullscreen_button.height() - margin)
-        self.fullscreen_button.move(x, y)
-        self.fullscreen_button.raise_()
+        return
 
     def _position_search_button(self):
-        viewport = self.right_page_text.viewport()
-        if not viewport:
-            return
-        margin = 10
-        x = max(margin, viewport.width() - self.search_toggle_button.width() - margin)
-        y = max(margin, viewport.height() - self.search_toggle_button.height() - margin)
-        self.search_toggle_button.move(x, y)
-        self.search_toggle_button.raise_()
+        return
 
     def _sync_fullscreen_overlays_geometry(self):
         if not hasattr(self, "reading_panel"):
@@ -1964,6 +2171,64 @@ class SessionView(QWidget):
 
         return None
 
+    def _vault_root_from_manager(self) -> Optional[Path]:
+        manager = getattr(self.reading_controller, "reading_manager", None) if self.reading_controller else None
+        if not manager:
+            return None
+        return Path(manager.vault_path).expanduser()
+
+    def _resolve_registry_pdf_path(self, book_id: str) -> str:
+        book_id = str(book_id or "").strip()
+        vault_root = self._vault_root_from_manager()
+        if not book_id or not vault_root:
+            return ""
+        registry_file = vault_root / "06-RECURSOS" / "registros_livros" / f"{book_id}.json"
+        if not registry_file.exists():
+            return ""
+        try:
+            registry_data = json.loads(registry_file.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        candidate = str(registry_data.get("file_path") or "").strip()
+        if candidate and Path(candidate).expanduser().exists():
+            return str(Path(candidate).expanduser())
+        return ""
+
+    def _load_book_metadata_from_dir(self, book_dir: Path) -> Dict[str, Any]:
+        title = book_dir.name
+        author = book_dir.parent.name if book_dir.parent else "Desconhecido"
+        metadata: Dict[str, Any] = {
+            "title": title,
+            "author": author,
+            "total_pages": 0,
+            "book_id": None,
+        }
+        for pattern in ("*.md",):
+            matches = sorted(book_dir.glob(pattern), key=lambda p: p.name.lower())
+            if not matches:
+                continue
+            note_path = matches[0]
+            try:
+                content = note_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if not content.startswith("---"):
+                continue
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                continue
+            try:
+                import yaml
+                frontmatter = yaml.safe_load(parts[1]) or {}
+            except Exception:
+                frontmatter = {}
+            metadata["title"] = frontmatter.get("title", title)
+            metadata["author"] = frontmatter.get("author", author)
+            metadata["total_pages"] = int(frontmatter.get("total_pages", 0) or 0)
+            metadata["book_id"] = frontmatter.get("book_id")
+            break
+        return metadata
+
     def _resolve_book_pdf_path(self, progress: Dict[str, Any]) -> Optional[Path]:
         if self._temporary_read_only_session:
             return None
@@ -2003,7 +2268,7 @@ class SessionView(QWidget):
         if self._temporary_read_only_session or self._zathura_launch_requested_on_activation:
             return
         self._zathura_launch_requested_on_activation = True
-        self._open_current_pdf_session(force=True, show_feedback=False)
+        self._open_current_pdf_session(force=True, show_feedback=True)
 
     def _open_current_pdf_session(self, force: bool = False, show_feedback: bool = True) -> bool:
         if self._temporary_read_only_session:
@@ -2019,23 +2284,23 @@ class SessionView(QWidget):
 
         if not pdf_path or not pdf_path.exists():
             self.pdf_launch_status_label.setText("PDF original não localizado")
-            if show_feedback:
-                reply = QMessageBox.question(
-                    self,
-                    "Sessão de leitura",
-                    (
-                        "Não foi possível localizar o PDF original desta obra para abrir no Zathura.\n\n"
-                        "Deseja indicar manualmente onde o PDF está para atualizar o registro?"
-                    ),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes,
-                )
-                if reply == QMessageBox.StandardButton.Yes:
-                    selected_pdf = self._prompt_user_for_pdf_source()
-                    if selected_pdf is not None:
-                        self.current_pdf_path = selected_pdf
-                        self._refresh_pdf_session_card()
-                        return self._open_current_pdf_session(force=True, show_feedback=True)
+            self._refresh_pdf_session_card()
+            reply = QMessageBox.question(
+                self,
+                "Sessão de leitura",
+                (
+                    "Não foi possível localizar o PDF original desta obra para abrir no Zathura.\n\n"
+                    "Deseja indicar manualmente onde o PDF está para atualizar o registro?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                selected_pdf = self._prompt_user_for_pdf_source()
+                if selected_pdf is not None:
+                    self.current_pdf_path = selected_pdf
+                    self._refresh_pdf_session_card()
+                    return self._open_current_pdf_session(force=True, show_feedback=show_feedback)
             return False
 
         page = self._current_pdf_resume_page()
@@ -2045,11 +2310,14 @@ class SessionView(QWidget):
             return True
 
         try:
-            command = ZathuraConfigManager().build_open_command(pdf_path, page=page)
+            manager = ZathuraConfigManager()
+            command = manager.build_open_command(pdf_path, page=page, fork=False)
             process = subprocess.Popen(command, start_new_session=True)
             self._zathura_last_launch_signature = signature
             self._track_zathura_process(process, pdf_path)
             self.pdf_launch_status_label.setText(f"Zathura aberto na página {page}")
+            self._refresh_pdf_session_card()
+            self._start_pomodoro_on_pdf_open()
             return True
         except Exception as exc:
             logger.warning("Falha ao abrir Zathura: %s", exc)
@@ -2092,9 +2360,32 @@ class SessionView(QWidget):
         self.pdf_launch_status_label.setText("Registro do PDF atualizado")
         return selected
 
+    def _is_zathura_running_for_pdf(self, pdf_path: Optional[Path]) -> bool:
+        if pdf_path is None:
+            return False
+        target_name = Path(pdf_path).name
+        target_resolved = str(Path(pdf_path).expanduser().resolve())
+        try:
+            result = subprocess.run(
+                ["pgrep", "-a", "zathura"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except Exception:
+            return False
+        if result.returncode != 0:
+            return False
+        for line in result.stdout.splitlines():
+            if target_resolved in line or target_name in line:
+                return True
+        return False
+
     def _track_zathura_process(self, process: subprocess.Popen, pdf_path: Path):
         self._zathura_process = process
         self._zathura_monitored_pdf_path = Path(pdf_path).expanduser().resolve()
+        self._zathura_monitor_grace_until = time.monotonic() + 2.5
         self._processed_zathura_bookmark_signatures = self._load_processed_zathura_bookmark_signatures()
         self._processed_zathura_capture_signatures = self._load_processed_zathura_capture_signatures()
         self._zathura_capture_queue_offset = 0
@@ -2107,21 +2398,37 @@ class SessionView(QWidget):
         if self._zathura_monitored_pdf_path is not None:
             self._sync_zathura_capture_events()
             self._sync_zathura_bookmarks()
+
+        pdf_path = self._zathura_monitored_pdf_path
         process = self._zathura_process
-        if process is None:
+
+        if process is None and pdf_path is None:
             self._zathura_process_timer.stop()
             return
-        try:
-            finished = process.poll() is not None
-        except Exception:
-            finished = True
-        if not finished:
+
+        still_running = False
+        if process is not None:
+            try:
+                still_running = process.poll() is None
+            except Exception:
+                still_running = False
+
+        if not still_running and pdf_path is not None:
+            still_running = self._is_zathura_running_for_pdf(pdf_path)
+
+        if still_running:
             return
+
         self._zathura_process = None
         self._sync_zathura_capture_events()
         self._sync_zathura_bookmarks()
         self._zathura_process_timer.stop()
         self._sync_progress_from_closed_zathura()
+        if not self._temporary_read_only_session and not self._session_closed:
+            self._ending_session_after_zathura = True
+            if self.pomodoro and self.pomodoro.is_running:
+                self.pomodoro.stop(save_stats=True)
+            QTimer.singleShot(400, self._end_session_and_return_dashboard)
 
     def _sync_progress_from_closed_zathura(self):
         if self._temporary_read_only_session:
@@ -5676,20 +5983,42 @@ class SessionView(QWidget):
         normalized = normalized.replace("ú", "u")
         return normalized
 
+    def _start_pomodoro_on_pdf_open(self):
+        if not self.pomodoro:
+            return
+        if self.pomodoro.is_running and not self.pomodoro.is_paused:
+            self._tick_ui()
+            return
+        if not self._pomodoro_blocks_minutes:
+            self._reset_pomodoro_plan()
+        self._start_current_pomodoro_block(notify_start=True)
+
     def _start_pomodoro(self):
         if not self.pomodoro:
-            self.chat_status_label.setText("Pomodoro indisponível")
+            if hasattr(self, "chat_status_label"):
+                self.chat_status_label.setText("Pomodoro indisponível")
             return
+        if not self._pomodoro_blocks_minutes:
+            self._reset_pomodoro_plan()
         if self.pomodoro.is_running and self.pomodoro.is_paused:
             self.pomodoro.resume()
         elif not self.pomodoro.is_running:
-            self.pomodoro.start(session_type="work", discipline="leitura")
+            self._start_current_pomodoro_block(notify_start=True)
         self._tick_ui()
 
     def _pause_pomodoro(self):
         if not self.pomodoro:
             return
-        self.pomodoro.pause()
+        if self.pomodoro.is_running and not self.pomodoro.is_paused:
+            self.pomodoro.pause()
+        self._tick_ui()
+
+    def _reset_pomodoro(self):
+        if not self.pomodoro:
+            return
+        if self.pomodoro.is_running:
+            self.pomodoro.stop(save_stats=False)
+        self._reset_pomodoro_plan()
         self._tick_ui()
 
     def _open_pomodoro_config_dialog(self):
@@ -5704,6 +6033,7 @@ class SessionView(QWidget):
                 long_break_minutes=values["long_break_minutes"],
                 sessions_before_long_break=values["sessions_before_long_break"],
             )
+            self._reset_pomodoro_plan()
             self._tick_ui()
 
     def _tick_ui(self):
@@ -5713,25 +6043,80 @@ class SessionView(QWidget):
             self.pomodoro_timer_label.setText("--:--")
             self.pomodoro_overlay_timer_label.setText("--:--")
             self.pomodoro_overlay_toggle_button.setText("▶")
+            if hasattr(self, "session_timer_label"):
+                self.session_timer_label.setText("--:--")
+            if hasattr(self, "pomodoro_ring"):
+                self.pomodoro_ring.set_progress(0.0)
+            if hasattr(self, "session_pomodoro_toggle_button"):
+                self.session_pomodoro_toggle_button.setText("Iniciar")
             return
 
+        session_type = self.pomodoro.current_session_type or "work"
+        if hasattr(self, "session_phase_label") and self._pomodoro_blocks_minutes:
+            block_number = min(self._pomodoro_block_index + 1, len(self._pomodoro_blocks_minutes))
+            block_minutes = self._current_pomodoro_block_minutes()
+            self.session_phase_label.setText(
+                f"Bloco {block_number}/{len(self._pomodoro_blocks_minutes)} — Foco ({block_minutes} min)"
+            )
+        elif hasattr(self, "session_phase_label"):
+            phase_labels = {
+                "work": "Foco",
+                "short_break": "Pausa curta",
+                "long_break": "Pausa longa",
+            }
+            self.session_phase_label.setText(phase_labels.get(session_type, "Foco"))
+
         if not self.pomodoro.is_running or not self.pomodoro.start_time:
-            total_seconds = self.pomodoro._get_duration_for_type("work")
+            total_seconds = self.pomodoro._get_duration_for_type(session_type)
             timer_text = self._format_mmss(total_seconds)
             self.pomodoro_timer_label.setText(timer_text)
             self.pomodoro_overlay_timer_label.setText(timer_text)
             self.pomodoro_overlay_toggle_button.setText("▶")
+            if hasattr(self, "session_timer_label"):
+                self.session_timer_label.setText(timer_text)
+            if hasattr(self, "pomodoro_ring"):
+                self.pomodoro_ring.set_progress(0.0)
+            if hasattr(self, "session_pomodoro_toggle_button"):
+                self.session_pomodoro_toggle_button.setText("Iniciar")
             return
 
         now = time.time()
-        elapsed = now - self.pomodoro.start_time - self.pomodoro.elapsed_paused
-        total_seconds = self.pomodoro._get_duration_for_type(self.pomodoro.current_session_type)
+        if self.pomodoro.is_paused and self.pomodoro.paused_time:
+            elapsed = self.pomodoro.paused_time - self.pomodoro.start_time - self.pomodoro.elapsed_paused
+        else:
+            elapsed = now - self.pomodoro.start_time - self.pomodoro.elapsed_paused
+        total_seconds = max(1, self.pomodoro._get_duration_for_type(session_type))
         remaining = max(int(total_seconds - elapsed), 0)
+        progress = max(0.0, min(1.0, elapsed / total_seconds))
+
+        if (
+            self.pomodoro.is_running
+            and not self.pomodoro.is_paused
+            and remaining > 0
+            and remaining <= (total_seconds // 2)
+            and not self._pomodoro_half_notified
+        ):
+            self._pomodoro_half_notified = True
+            block_number = self._pomodoro_block_index + 1
+            total_blocks = len(self._pomodoro_blocks_minutes) or 1
+            self._notify_session(
+                "info",
+                "Metade do tempo",
+                f"Bloco {block_number}/{total_blocks}: restam {self._format_mmss(remaining)}.",
+            )
 
         timer_text = self._format_mmss(remaining)
         self.pomodoro_timer_label.setText(timer_text)
         self.pomodoro_overlay_timer_label.setText(timer_text)
         self.pomodoro_overlay_toggle_button.setText("▶" if self.pomodoro.is_paused else "⏸")
+        if hasattr(self, "session_timer_label"):
+            self.session_timer_label.setText(timer_text)
+        if hasattr(self, "pomodoro_ring"):
+            self.pomodoro_ring.set_progress(0.0 if self.pomodoro.is_paused else progress)
+        if hasattr(self, "session_pomodoro_toggle_button"):
+            self.session_pomodoro_toggle_button.setText(
+                "Retomar" if self.pomodoro.is_paused else "Pausar"
+            )
 
     def _format_mmss(self, seconds: int) -> str:
         minutes, sec = divmod(max(seconds, 0), 60)

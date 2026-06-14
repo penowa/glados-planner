@@ -19,6 +19,7 @@ from .review_system import ReviewSystem
 from .smart_allocator import SmartAllocator
 from .pomodoro_timer import PomodoroTimer
 from .writing_assistant import WritingAssistant
+from .commitment_groups import CommitmentGroupKey, matches_group_key
 
 
 class AgendaEventType(Enum):
@@ -1086,6 +1087,33 @@ class AgendaManager:
         if normalized == AgendaEventType.PRODUCAO.value:
             return AgendaEventType.DISSERTACAO.value
         return normalized
+
+    def _is_rebalance_movable_event(self, event: AgendaEvent) -> bool:
+        """
+        Define se um evento pode ser remanejado na reorganização da agenda.
+
+        Regras:
+        - Leituras podem ser redistribuídas
+        - Blocos automáticos de escrita da dissertação podem ser redistribuídos
+        - O prazo/entrega da dissertação permanece fixo
+        - Demais compromissos permanecem fixos
+        """
+        if event.is_blocking():
+            return False
+
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        event_role = str(metadata.get("event_role") or "").strip().lower()
+        session_kind = str(metadata.get("session_kind") or "").strip().lower()
+
+        if event.type == AgendaEventType.LEITURA:
+            return True
+
+        if event.type == AgendaEventType.DISSERTACAO:
+            if event_role == "deadline":
+                return False
+            return session_kind == "writing"
+
+        return False
     
     def allocate_reading_time(self, book_id: str, pages_per_day: float,
                             reading_speed: float = 10.0,
@@ -1996,12 +2024,20 @@ class AgendaManager:
         
         return suggestions
 
-    def rebalance_schedule(self, horizon_days: int = 30) -> Dict[str, Any]:
+    def rebalance_schedule(
+        self,
+        horizon_days: int = 30,
+        *,
+        only_event_ids: Optional[set] = None,
+        deadline_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Recalcula e redistribui compromissos futuros flexíveis.
+        Recalcula e redistribui apenas leituras e blocos de escrita futuros.
 
         Regras:
-        - Aulas, provas e seminários permanecem fixos
+        - Apenas leituras e blocos de escrita da dissertação podem ser movidos
+        - O prazo/entrega da dissertação permanece fixo
+        - Aulas, provas, seminários e demais compromissos permanecem fixos
         - Eventos concluídos ou já iniciados não são movidos
         - A redistribuição usa slots livres priorizados por qualidade
         """
@@ -2020,6 +2056,9 @@ class AgendaManager:
         protected_events: List[AgendaEvent] = []
 
         for event in self.events.values():
+            if only_event_ids is not None and event.id not in only_event_ids:
+                protected_events.append(event)
+                continue
             if event.completed:
                 protected_events.append(event)
                 continue
@@ -2030,6 +2069,9 @@ class AgendaManager:
                 protected_events.append(event)
                 continue
             if event.type in fixed_types or event.priority.value >= EventPriority.FIXO.value:
+                protected_events.append(event)
+                continue
+            if not self._is_rebalance_movable_event(event):
                 protected_events.append(event)
                 continue
             movable_events.append(event)
@@ -2125,7 +2167,9 @@ class AgendaManager:
 
         serialized_events: List[Dict[str, Any]] = []
         for event in movable_events:
-            deadline = str(event.metadata.get("deadline") or "").strip() if isinstance(event.metadata, dict) else ""
+            deadline = str(deadline_override or "").strip()
+            if not deadline:
+                deadline = str(event.metadata.get("deadline") or "").strip() if isinstance(event.metadata, dict) else ""
             serialized_events.append(
                 {
                     "event_id": event.id,
@@ -2189,5 +2233,310 @@ class AgendaManager:
             "moved_count": moved_count,
             "protected_count": len(protected_events),
             "unscheduled_count": len(unscheduled),
+            "updated_dates": sorted(updated_dates),
+        }
+
+    def list_commitment_events(
+        self,
+        group_key: CommitmentGroupKey,
+        *,
+        include_completed: bool = False,
+    ) -> List[AgendaEvent]:
+        matched: List[AgendaEvent] = []
+        for event in self.events.values():
+            if not include_completed and event.completed:
+                continue
+            if matches_group_key(event, group_key):
+                matched.append(event)
+        matched.sort(key=lambda item: item.start)
+        return matched
+
+    def remove_commitment(self, group_key: CommitmentGroupKey) -> Dict[str, Any]:
+        events = self.list_commitment_events(group_key, include_completed=False)
+        if not events:
+            return {"success": False, "error": "Compromisso não encontrado", "updated_dates": []}
+
+        updated_dates = {event.start.date().isoformat() for event in events}
+        removed_ids: List[str] = []
+        for event in events:
+            if event.id in self.events:
+                removed_ids.append(event.id)
+                del self.events[event.id]
+
+        self._save_events()
+        rebalance_result = self.rebalance_schedule()
+        updated_dates.update(rebalance_result.get("updated_dates", []) or [])
+
+        return {
+            "success": True,
+            "removed_count": len(removed_ids),
+            "removed_ids": removed_ids,
+            "rebalance": rebalance_result,
+            "updated_dates": sorted(updated_dates),
+        }
+
+    def reschedule_commitment(
+        self,
+        group_key: CommitmentGroupKey,
+        new_deadline: str,
+    ) -> Dict[str, Any]:
+        try:
+            deadline_day = date.fromisoformat(str(new_deadline).strip())
+        except Exception:
+            return {"success": False, "error": "Data inválida", "updated_dates": []}
+
+        if deadline_day < datetime.now().date():
+            return {"success": False, "error": "A data de conclusão deve estar no futuro", "updated_dates": []}
+
+        events = self.list_commitment_events(group_key, include_completed=False)
+        if not events:
+            return {"success": False, "error": "Compromisso não encontrado", "updated_dates": []}
+
+        event_type, scope, identifier = group_key
+        updated_dates = {event.start.date().isoformat() for event in events}
+
+        if event_type == AgendaEventType.LEITURA.value and scope == "book":
+            result = self._reschedule_reading_commitment(identifier, events, deadline_day.isoformat())
+        elif event_type == AgendaEventType.DISSERTACAO.value and scope in {"project", "title"}:
+            result = self._reschedule_writing_commitment(events, deadline_day.isoformat())
+        else:
+            result = self._reschedule_generic_commitment(events, deadline_day.isoformat())
+
+        updated_dates.update(result.get("updated_dates", []) or [])
+        result["updated_dates"] = sorted(updated_dates)
+        return result
+
+    def _reschedule_reading_commitment(
+        self,
+        book_id: str,
+        events: List[AgendaEvent],
+        deadline: str,
+    ) -> Dict[str, Any]:
+        sample = events[0]
+        metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
+        strategy = str(metadata.get("scheduling_strategy") or "balanced")
+        preferred_time = str(metadata.get("preferred_time") or "")
+        pages_per_day = metadata.get("pages_per_day")
+        try:
+            pages_per_day_value = float(pages_per_day) if pages_per_day is not None else None
+        except Exception:
+            pages_per_day_value = None
+
+        removed_ids: List[str] = []
+        for event in list(self.events.values()):
+            if (
+                event.book_id == book_id
+                and event.type == AgendaEventType.LEITURA
+                and not event.completed
+            ):
+                removed_ids.append(event.id)
+                del self.events[event.id]
+
+        self._save_events()
+        allocation = self.allocate_reading_time(
+            book_id=book_id,
+            pages_per_day=pages_per_day_value,
+            strategy=strategy,
+            deadline=deadline,
+            preferred_time=preferred_time,
+        )
+        if allocation.get("error"):
+            return {
+                "success": False,
+                "error": allocation["error"],
+                "removed_ids": removed_ids,
+                "updated_dates": [],
+            }
+
+        updated_dates = set()
+        for item in (allocation.get("allocations") or {}).values():
+            day = str(item.get("date") or "").strip()
+            if day:
+                updated_dates.add(day)
+
+        return {
+            "success": bool(allocation.get("success", True)),
+            "removed_ids": removed_ids,
+            "allocation": allocation,
+            "updated_dates": sorted(updated_dates),
+        }
+
+    def _reschedule_writing_commitment(
+        self,
+        events: List[AgendaEvent],
+        deadline: str,
+    ) -> Dict[str, Any]:
+        sample = events[0]
+        metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
+        title = str(metadata.get("source_title") or "").strip()
+        if not title:
+            title = str(sample.title or "").replace("Dissertação: Escrita -", "").strip() or "Dissertação"
+
+        total_minutes = sum(max(15, int(event.duration_minutes())) for event in events)
+        preferred_time = str(metadata.get("preferred_time") or "")
+        session_minutes = int(metadata.get("max_session_minutes", 90) or 90)
+        min_session_minutes = int(metadata.get("min_session_minutes", 45) or 45)
+        discipline = str(sample.discipline or metadata.get("discipline") or "Dissertação")
+
+        removed_ids: List[str] = []
+        target_ids = {event.id for event in events}
+        for event_id in list(target_ids):
+            if event_id in self.events and not self.events[event_id].completed:
+                removed_ids.append(event_id)
+                del self.events[event_id]
+
+        self._save_events()
+        allocation = self.allocate_writing_time(
+            title=title,
+            deadline=deadline,
+            estimated_hours=max(0.75, total_minutes / 60.0),
+            discipline=discipline,
+            preferred_time=preferred_time,
+            session_minutes=session_minutes,
+            min_session_minutes=min_session_minutes,
+        )
+        if allocation.get("error"):
+            return {
+                "success": False,
+                "error": allocation["error"],
+                "removed_ids": removed_ids,
+                "updated_dates": [],
+            }
+
+        updated_dates = set()
+        for item in allocation.get("allocations") or []:
+            start_raw = str(item.get("start") or "")
+            try:
+                updated_dates.add(datetime.fromisoformat(start_raw.replace("Z", "+00:00")).date().isoformat())
+            except Exception:
+                continue
+
+        return {
+            "success": True,
+            "removed_ids": removed_ids,
+            "allocation": allocation,
+            "updated_dates": sorted(updated_dates),
+        }
+
+    def _reschedule_generic_commitment(
+        self,
+        events: List[AgendaEvent],
+        deadline: str,
+    ) -> Dict[str, Any]:
+        now = datetime.now()
+        active = [event for event in events if not event.completed and event.end > now]
+        if not active:
+            return {"success": False, "error": "Nenhuma sessão futura para remanejar", "updated_dates": []}
+
+        active.sort(key=lambda item: item.start)
+        if len(active) == 1 and not self._is_rebalance_movable_event(active[0]):
+            event = active[0]
+            duration = event.end - event.start
+            try:
+                deadline_day = date.fromisoformat(deadline)
+            except Exception:
+                return {"success": False, "error": "Data inválida", "updated_dates": []}
+
+            new_end = datetime.combine(deadline_day, event.end.time())
+            if new_end <= now:
+                new_end = datetime.combine(deadline_day, datetime.min.time()).replace(hour=22, minute=0)
+            new_start = new_end - duration
+            if new_start < now:
+                new_start = now
+                new_end = new_start + duration
+
+            event.start = new_start
+            event.end = new_end
+            if isinstance(event.metadata, dict):
+                event.metadata["deadline"] = deadline
+            self._save_events()
+            return {
+                "success": True,
+                "moved_count": 1,
+                "updated_dates": sorted({event.start.date().isoformat(), event.end.date().isoformat()}),
+            }
+
+        movable_ids = {event.id for event in active if self._is_rebalance_movable_event(event)}
+        if movable_ids:
+            for event in active:
+                if event.id in movable_ids and isinstance(event.metadata, dict):
+                    event.metadata["deadline"] = deadline
+            self._save_events()
+            try:
+                deadline_day = date.fromisoformat(deadline)
+                horizon_days = max(30, (deadline_day - now.date()).days + 1)
+            except Exception:
+                horizon_days = 30
+            rebalance_result = self.rebalance_schedule(
+                horizon_days=horizon_days,
+                only_event_ids=movable_ids,
+                deadline_override=deadline,
+            )
+            return {
+                "success": bool(rebalance_result.get("success", True)),
+                "rebalance": rebalance_result,
+                "updated_dates": rebalance_result.get("updated_dates", []),
+            }
+
+        return self._reschedule_generic_commitment_fixed_sessions(active, deadline)
+
+    def _reschedule_generic_commitment_fixed_sessions(
+        self,
+        events: List[AgendaEvent],
+        deadline: str,
+    ) -> Dict[str, Any]:
+        now = datetime.now()
+        active = [event for event in events if not event.completed and event.end > now]
+        if not active:
+            return {"success": False, "error": "Nenhuma sessão futura para remanejar", "updated_dates": []}
+
+        try:
+            deadline_day = date.fromisoformat(deadline)
+        except Exception:
+            return {"success": False, "error": "Data inválida", "updated_dates": []}
+
+        if deadline_day < now.date():
+            return {"success": False, "error": "A data de conclusão deve estar no futuro", "updated_dates": []}
+
+        active.sort(key=lambda item: item.start)
+        span_days = max(0, (deadline_day - now.date()).days)
+        moved_count = 0
+        updated_dates = set()
+
+        if len(active) == 1:
+            offsets = [span_days]
+        else:
+            step = span_days / max(1, len(active) - 1)
+            offsets = [int(round(step * index)) for index in range(len(active))]
+
+        for event, offset in zip(active, offsets):
+            target_day = now.date() + timedelta(days=offset)
+            if target_day > deadline_day:
+                target_day = deadline_day
+            duration = event.end - event.start
+            new_start = datetime.combine(target_day, event.start.time())
+            if new_start < now:
+                new_start = now
+            new_end = new_start + duration
+            if new_end.date() > deadline_day:
+                new_end = datetime.combine(deadline_day, event.end.time())
+                new_start = new_end - duration
+                if new_start < now:
+                    new_start = now
+                    new_end = new_start + duration
+
+            if event.start != new_start or event.end != new_end:
+                moved_count += 1
+            event.start = new_start
+            event.end = new_end
+            if isinstance(event.metadata, dict):
+                event.metadata["deadline"] = deadline
+            updated_dates.add(event.start.date().isoformat())
+            updated_dates.add(event.end.date().isoformat())
+
+        self._save_events()
+        return {
+            "success": True,
+            "moved_count": moved_count,
             "updated_dates": sorted(updated_dates),
         }

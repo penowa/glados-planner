@@ -4,6 +4,8 @@ View de biblioteca com visual superficial de livros (título + capa).
 from __future__ import annotations
 
 import logging
+import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
@@ -38,6 +40,8 @@ from ui.utils.citation_notes import backfill_citation_notes
 from ui.utils.nerd_icons import LEGACY_BOOK_FILE_PATTERNS, NerdIcons, nerd_font
 
 logger = logging.getLogger("GLaDOS.UI.LibraryView")
+
+AULAS_AUTHOR = "Aulas"
 
 try:
     from core.config.settings import settings as core_settings
@@ -152,6 +156,7 @@ class LibraryBookTile(QFrame):
     metadata_requested = pyqtSignal(Path)
     schedule_requested = pyqtSignal(Path)
     review_requested = pyqtSignal(Path)
+    remove_requested = pyqtSignal(Path)
 
     def __init__(
         self,
@@ -249,6 +254,8 @@ class LibraryBookTile(QFrame):
         edit_action = menu.addAction("Editar metadados")
         schedule_action = menu.addAction("Agendar sessões")
         review_action = menu.addAction("Abrir revisão")
+        menu.addSeparator()
+        remove_action = menu.addAction("Remover")
         selected = menu.exec(self.options_button.mapToGlobal(self.options_button.rect().bottomLeft()))
         if selected == edit_action:
             self.metadata_requested.emit(self.book_dir)
@@ -256,6 +263,8 @@ class LibraryBookTile(QFrame):
             self.schedule_requested.emit(self.book_dir)
         elif selected == review_action:
             self.review_requested.emit(self.book_dir)
+        elif selected == remove_action:
+            self.remove_requested.emit(self.book_dir)
 
     def _placeholder_cover(self) -> QPixmap:
         pixmap = QPixmap(self.cover_label.size())
@@ -445,10 +454,19 @@ class LibraryView(QWidget):
         for mode, label in filter_defs:
             button = QPushButton(label)
             button.setObjectName("library_filter_button")
-            button.setCheckable(True)
             button.clicked.connect(lambda checked, m=mode: self._set_status_filter_mode(m))
             self.filter_buttons[mode] = button
             filters_layout.addWidget(button)
+
+        aulas_hint = QLabel("Aulas")
+        aulas_hint.setObjectName("library_filters_hint")
+        filters_layout.addWidget(aulas_hint)
+
+        aulas_button = QPushButton("Aulas")
+        aulas_button.setObjectName("library_filter_button")
+        aulas_button.clicked.connect(lambda checked: self._set_status_filter_mode("aulas"))
+        self.filter_buttons["aulas"] = aulas_button
+        filters_layout.addWidget(aulas_button)
 
         filters_spacer = QLabel("Arraste PDFs/EPUBs diretamente para a área das capas.")
         filters_spacer.setObjectName("library_filters_hint")
@@ -722,10 +740,24 @@ class LibraryView(QWidget):
             return
         self.add_book_card.handle_file_selected(file_path)
 
+    def _is_aulas_book(self, book: Dict[str, Any]) -> bool:
+        return str(book.get("author", "")).strip().casefold() == AULAS_AUTHOR.casefold()
+
+    def _books_in_current_scope(self) -> list[Dict[str, Any]]:
+        if self.status_filter_mode == "aulas":
+            return [book for book in self._books_cache if self._is_aulas_book(book)]
+        return [book for book in self._books_cache if not self._is_aulas_book(book)]
+
+    def _set_filter_button_active(self, button: QPushButton, active: bool):
+        button.setProperty("activeFilter", "true" if active else "false")
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+
     def _set_status_filter_mode(self, mode: str):
         self.status_filter_mode = mode
         for current_mode, button in self.filter_buttons.items():
-            button.setChecked(current_mode == mode)
+            self._set_filter_button_active(button, current_mode == mode)
         self._render_books_grid()
 
     def on_view_activated(self):
@@ -912,19 +944,46 @@ class LibraryView(QWidget):
         entry.total_pages = int(data.get("total_pages", 0) or entry.total_pages or 0)
         manager._save_progress()
 
+    def _resolve_book_source_file(self, metadata: Dict[str, Any]) -> str:
+        vault_root = self._vault_root()
+        book_id = str(metadata.get("book_id") or "").strip()
+        if not vault_root or not book_id:
+            return ""
+
+        registry_file = vault_root / "06-RECURSOS" / "registros_livros" / f"{book_id}.json"
+        if not registry_file.exists():
+            return ""
+
+        try:
+            registry_data = json.loads(registry_file.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+
+        candidate = str(registry_data.get("file_path") or "").strip()
+        if candidate and Path(candidate).expanduser().exists():
+            return str(Path(candidate).expanduser())
+        return ""
+
     def _ensure_book_in_reading_manager(self, metadata: Dict[str, Any]) -> str:
         manager = self.reading_controller.reading_manager
         existing = metadata.get("book_id")
+        source_file = self._resolve_book_source_file(metadata)
         if existing and existing in manager.readings:
+            if source_file:
+                manager.update_book_source_path(str(existing), source_file)
             return str(existing)
-        return str(
+        book_id = str(
             manager.add_book(
                 title=metadata.get("title", "Livro sem título"),
                 author=metadata.get("author", "Desconhecido"),
                 total_pages=max(int(metadata.get("total_pages", 0) or 0), 1),
                 book_id=existing if existing else None,
+                source_file=source_file,
             )
         )
+        if source_file:
+            manager.update_book_source_path(book_id, source_file)
+        return book_id
 
     def _update_book_notes_metadata(self, book_dir: Path, metadata: Dict[str, Any]):
         if not self.book_controller or not getattr(self.book_controller, "vault_manager", None):
@@ -1077,7 +1136,11 @@ class LibraryView(QWidget):
             logger.warning("Falha no backfill de notas de citações: %s", exc)
 
     def _apply_status_and_search_filters(self, books: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
-        filtered = list(books)
+        if self.status_filter_mode == "aulas":
+            filtered = [book for book in books if self._is_aulas_book(book)]
+        else:
+            filtered = [book for book in books if not self._is_aulas_book(book)]
+
         query = str(self.search_input.text() if self.search_input else "").strip().lower()
         if query:
             filtered = [
@@ -1086,6 +1149,9 @@ class LibraryView(QWidget):
                 if query in str(book.get("title", "")).lower()
                 or query in str(book.get("author", "")).lower()
             ]
+
+        if self.status_filter_mode == "aulas":
+            return filtered
 
         if self.status_filter_mode == "completed":
             filtered = [book for book in filtered if bool(book.get("progress_completed", False))]
@@ -1117,6 +1183,7 @@ class LibraryView(QWidget):
             books.append(
                 {
                     **book,
+                    "author": metadata.get("author", book.get("author", "")),
                     "book_id": metadata.get("book_id"),
                     "progress_percent": progress["percent"],
                     "progress_completed": progress["completed"],
@@ -1160,13 +1227,15 @@ class LibraryView(QWidget):
                     widget.deleteLater()
 
             sorted_books = self._sorted_books()
-            total_books = len(self._books_cache)
+            total_books = len(self._books_in_current_scope())
             visible_books = len(sorted_books)
             self._update_books_counter(visible_books, total_books)
 
             if self.empty_label:
-                if total_books == 0:
+                if len(self._books_cache) == 0:
                     self.empty_label.setText("Sua biblioteca está vazia. Arraste um PDF/EPUB ou use o botão +.")
+                elif total_books == 0 and self.status_filter_mode == "aulas":
+                    self.empty_label.setText("Nenhuma aula processada encontrada.")
                 else:
                     self.empty_label.setText("Nenhum livro encontrado para os filtros atuais.")
                 self.empty_label.setVisible(visible_books == 0)
@@ -1257,6 +1326,7 @@ class LibraryView(QWidget):
                     tile.metadata_requested.connect(self._open_metadata_editor)
                     tile.schedule_requested.connect(self._open_schedule_dialog)
                     tile.review_requested.connect(self._open_review_dialog)
+                    tile.remove_requested.connect(self._remove_book)
 
                     if self.sort_mode == "author":
                         rows_to_render[0].addWidget(tile)
@@ -1325,6 +1395,114 @@ class LibraryView(QWidget):
         shelves_layout.setSpacing(12)
         self.books_shelves_layout = shelves_layout
         return shelves_layout
+
+    def _is_removable_book_dir(self, book_dir: Path) -> bool:
+        resolved = book_dir.resolve(strict=False)
+        if not resolved.is_dir():
+            return False
+        for root in self._books_roots():
+            readings_root = root.resolve(strict=False)
+            try:
+                relative = resolved.relative_to(readings_root)
+            except ValueError:
+                continue
+            if len(relative.parts) == 2:
+                return True
+        return False
+
+    def _registry_file_for_book(self, book_id: Optional[str]) -> Optional[Path]:
+        if not book_id:
+            return None
+        vault_root = self._vault_root()
+        if not vault_root:
+            return None
+        registry_file = vault_root / "06-RECURSOS" / "registros_livros" / f"{book_id}.json"
+        return registry_file if registry_file.exists() and registry_file.is_file() else None
+
+    def _remove_book_from_reading_manager(self, book_id: Optional[str]):
+        if not book_id:
+            return
+        if not self.reading_controller or not getattr(self.reading_controller, "reading_manager", None):
+            return
+        manager = self.reading_controller.reading_manager
+        if book_id in manager.readings:
+            del manager.readings[book_id]
+            manager._save_progress()
+
+    def _remove_book_from_controller_registry(self, book_id: Optional[str]):
+        if not book_id or not self.book_controller:
+            return
+        registry = getattr(self.book_controller, "book_registry", None)
+        if isinstance(registry, dict) and book_id in registry:
+            del registry[book_id]
+
+    def _remove_book(self, book_dir: Path):
+        if not self._is_removable_book_dir(book_dir):
+            QMessageBox.warning(
+                self,
+                "Remover livro",
+                "Não foi possível identificar um diretório de livro válido para remoção.",
+            )
+            return
+
+        metadata = self._load_book_metadata(book_dir)
+        title = str(metadata.get("title") or book_dir.name).strip() or book_dir.name
+        author = str(metadata.get("author") or "").strip()
+        book_id = metadata.get("book_id")
+        registry_file = self._registry_file_for_book(str(book_id) if book_id else None)
+
+        details = [f"Livro: {title}"]
+        if author:
+            details.append(f"Autor: {author}")
+        details.append(f"Pasta: {book_dir}")
+        if registry_file:
+            details.append(f"Registro: {registry_file.name}")
+        details.append("")
+        details.append("Esta ação é permanente e não pode ser desfeita.")
+
+        reply = QMessageBox.question(
+            self,
+            "Remover livro",
+            "Deseja remover este livro por completo do sistema?\n\n" + "\n".join(details),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        errors: list[str] = []
+        try:
+            shutil.rmtree(book_dir)
+        except Exception as exc:
+            logger.error("Falha ao remover diretório do livro %s: %s", book_dir, exc)
+            errors.append(f"Pasta do livro: {exc}")
+            QMessageBox.warning(
+                self,
+                "Remover livro",
+                f"Não foi possível remover o livro.\n\nErro: {exc}",
+            )
+            return
+
+        if registry_file:
+            try:
+                registry_file.unlink()
+            except Exception as exc:
+                logger.error("Falha ao remover registro %s: %s", registry_file, exc)
+                errors.append(f"Registro JSON: {exc}")
+
+        self._remove_book_from_reading_manager(str(book_id) if book_id else None)
+        self._remove_book_from_controller_registry(str(book_id) if book_id else None)
+        self._schedule_feedback.pop(str(book_dir), None)
+        self.refresh_books()
+
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Remover livro",
+                f"O livro foi removido parcialmente.\n\n" + "\n".join(errors),
+            )
+        else:
+            QMessageBox.information(self, "Remover livro", f"'{title}' foi removido com sucesso.")
 
     def _open_book_from_tile(self, book_dir: Path):
         metadata = self._load_book_metadata(book_dir)

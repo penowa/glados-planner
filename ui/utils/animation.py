@@ -1,76 +1,234 @@
 """
 Sistema de animações para interface PyQt6
 """
-from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QSequentialAnimationGroup, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar
-from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush, QPixmap
-from PyQt6.QtCore import Qt, QPoint, pyqtProperty, QRect
-from typing import Dict, List, Optional, Union
 import logging
+import math
+from typing import List, Optional, Union
+
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QParallelAnimationGroup,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSequentialAnimationGroup,
+    QTimer,
+    Qt,
+    pyqtProperty,
+    pyqtSignal,
+)
+from PyQt6.QtGui import (
+    QColor,
+    QBrush,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QRadialGradient,
+)
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 logger = logging.getLogger('GLaDOS.UI.Animations')
 
 
+class PortalSpinner(QWidget):
+    """Animacao inspirada em Portal para a splash screen."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._phase = 0.0
+        self._rotation = 0.0
+        self.setFixedSize(420, 96)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance_frame)
+        self._timer.start(16)
+
+    def _advance_frame(self) -> None:
+        self._phase = (self._phase + 0.065) % (math.tau)
+        self._rotation = (self._rotation + 3.6) % 360.0
+        self.update()
+
+    def stop_animation(self) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+
+    def paintEvent(self, event):
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(12.0, 12.0, -12.0, -12.0)
+        center_y = rect.center().y()
+        left_portal = QPointF(rect.left() + 58.0, center_y)
+        right_portal = QPointF(rect.right() - 58.0, center_y)
+        travel_start = left_portal.x()
+        travel_end = right_portal.x()
+        motion = (math.sin(self._phase) + 1.0) / 2.0
+        core_x = travel_start + ((travel_end - travel_start) * motion)
+        core_center = QPointF(core_x, center_y)
+
+        marker_pen = QPen(QColor(210, 216, 224, 65))
+        marker_pen.setWidthF(1.4)
+        painter.setPen(marker_pen)
+        for index in range(1, 8):
+            marker_x = rect.left() + ((rect.width() / 8.0) * index)
+            painter.drawLine(QPointF(marker_x, center_y - 5.0), QPointF(marker_x, center_y + 5.0))
+
+        self._draw_portal(painter, left_portal, QColor(80, 168, 255), 0.7)
+        self._draw_portal(painter, right_portal, QColor(255, 148, 54), -0.7)
+
+        for step in range(1, 5):
+            trail_motion = (math.sin(self._phase - (step * 0.18)) + 1.0) / 2.0
+            trail_x = travel_start + ((travel_end - travel_start) * trail_motion)
+            trail_alpha = max(0, 110 - (step * 22))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(216, 222, 228, trail_alpha))
+            painter.drawEllipse(QPointF(trail_x, center_y), 5.5 - step, 5.5 - step)
+
+        portal_pull = max(
+            math.exp(-((core_x - left_portal.x()) / 28.0) ** 2),
+            math.exp(-((core_x - right_portal.x()) / 28.0) ** 2),
+        )
+        book_width = 24.0 - (portal_pull * 4.5) + (math.sin(self._phase * 2.4) * 0.5)
+        book_height = 32.0 - (portal_pull * 5.5)
+
+        shadow = QRadialGradient(core_center, book_height * 1.3)
+        shadow.setColorAt(0.0, QColor(115, 173, 219, 55))
+        shadow.setColorAt(0.55, QColor(255, 150, 70, 35))
+        shadow.setColorAt(1.0, QColor(20, 24, 30, 0))
+        painter.setBrush(shadow)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(core_center, book_width * 0.95, book_height * 0.95)
+
+        painter.save()
+        painter.translate(core_center)
+        painter.rotate(math.sin(self._phase * 1.8) * 12.0)
+
+        book_rect = QRectF(-book_width * 0.5, -book_height * 0.5, book_width, book_height)
+        cover_gradient = QLinearGradient(book_rect.topLeft(), book_rect.topRight())
+        cover_gradient.setColorAt(0.0, QColor(201, 140, 78, 245))
+        cover_gradient.setColorAt(0.5, QColor(126, 79, 42, 250))
+        cover_gradient.setColorAt(1.0, QColor(74, 45, 24, 250))
+        painter.setBrush(cover_gradient)
+        painter.setPen(QPen(QColor(244, 224, 192, 210), 1.4))
+        painter.drawRoundedRect(book_rect, 4.0, 4.0)
+
+        spine_rect = QRectF(book_rect.left(), book_rect.top(), book_width * 0.18, book_height)
+        painter.setBrush(QColor(96, 58, 30, 250))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(spine_rect, 3.0, 3.0)
+
+        page_rect = QRectF(book_rect.left() + (book_width * 0.18), book_rect.top() + 2.6, book_width * 0.72, book_height - 5.2)
+        page_gradient = QLinearGradient(page_rect.topLeft(), page_rect.bottomRight())
+        page_gradient.setColorAt(0.0, QColor(245, 239, 224, 245))
+        page_gradient.setColorAt(1.0, QColor(216, 205, 181, 235))
+        painter.setBrush(page_gradient)
+        painter.drawRoundedRect(page_rect, 2.5, 2.5)
+
+        line_pen = QPen(QColor(133, 112, 84, 125), 1.0)
+        painter.setPen(line_pen)
+        for idx in range(3):
+            y = page_rect.top() + 6.0 + (idx * 6.0)
+            painter.drawLine(QPointF(page_rect.left() + 3.0, y), QPointF(page_rect.right() - 3.0, y))
+
+        bookmark = QPolygonF(
+            [
+                QPointF(book_rect.right() - 5.0, book_rect.top() + 1.8),
+                QPointF(book_rect.right() - 1.8, book_rect.top() + 1.8),
+                QPointF(book_rect.right() - 1.8, book_rect.top() + 11.0),
+                QPointF(book_rect.right() - 3.4, book_rect.top() + 8.4),
+                QPointF(book_rect.right() - 5.0, book_rect.top() + 11.0),
+            ]
+        )
+        painter.setBrush(QColor(84, 159, 216, 235))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPolygon(bookmark)
+        painter.restore()
+
+        highlight = QRadialGradient(
+            QPointF(core_center.x() - (book_width * 0.12), core_center.y() - (book_height * 0.18)),
+            book_height * 0.7,
+        )
+        highlight.setColorAt(0.0, QColor(255, 255, 255, 170))
+        highlight.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(highlight)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(core_center, book_width * 0.65, book_height * 0.68)
+
+    def _draw_portal(self, painter: QPainter, center: QPointF, color: QColor, tilt: float) -> None:
+        painter.save()
+        painter.translate(center)
+        painter.rotate(tilt * 11.0)
+
+        outer_rect = QRectF(-24.0, -17.0, 48.0, 34.0)
+        glow_pen = QPen(QColor(color.red(), color.green(), color.blue(), 70), 10.0)
+        painter.setPen(glow_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(outer_rect)
+
+        portal_pen = QPen(color, 4.0)
+        painter.setPen(portal_pen)
+        painter.drawEllipse(outer_rect)
+
+        portal_fill = QRadialGradient(QPointF(0.0, 0.0), 21.0)
+        portal_fill.setColorAt(0.0, QColor(10, 14, 19, 225))
+        portal_fill.setColorAt(0.72, QColor(25, 33, 42, 170))
+        portal_fill.setColorAt(1.0, QColor(color.red(), color.green(), color.blue(), 35))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(portal_fill)
+        painter.drawEllipse(QRectF(-17.0, -11.0, 34.0, 22.0))
+
+        painter.restore()
+
+
 class LoadingSplash(QWidget):
     """Tela de carregamento minimalista."""
-    
-    # Sinais
+
     fade_finished = pyqtSignal()
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
         self.assistant_name = "GLaDOS"
         self._current_status_message = "Preparando ambiente..."
-        self._current_theme_message = "Os subsistemas estao sendo despertados. Tente conter sua empolgacao."
-        self._stage_themed_messages = self._build_stage_themed_messages()
-        
+
         self.setup_ui()
         self.setup_animations()
-        
+
         logger.info("LoadingSplash inicializada")
-    
+
     def setup_ui(self):
         """Configura interface da splash screen"""
-        layout = QVBoxLayout()
-        layout.setContentsMargins(36, 32, 36, 32)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(34, 26, 34, 26)
+        layout.setSpacing(14)
+        layout.addStretch(1)
 
-        self.progress_label = QLabel()
-        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.progress_label.setWordWrap(True)
-        self.progress_label.setStyleSheet("color: #D8CBB5; font-size: 14px; font-weight: 600;")
-        layout.addWidget(self.progress_label)
+        self.portal_spinner = PortalSpinner(self)
+        layout.addWidget(self.portal_spinner, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self.status_label = QLabel()
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color: #9FB3C8; font-size: 12px;")
-        layout.addWidget(self.status_label)
-
-        self.theme_label = QLabel()
-        self.theme_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.theme_label.setWordWrap(True)
-        self.theme_label.setStyleSheet("color: #7F8EA3; font-size: 11px; font-style: italic;")
-        layout.addWidget(self.theme_label)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(4)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFixedHeight(10)
-        self.progress_bar.setFormat("%p%")
-        self.progress_bar.setStyleSheet(
-            "QProgressBar{background:#1A1D24; border:1px solid #2F3744; border-radius:5px; color:#D8CBB5; text-align:center;}"
-            "QProgressBar::chunk{background:#6FA8DC; border-radius:5px;}"
+        self.title_label = QLabel()
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(
+            "background: transparent; border: none; color: #E7DBC7; "
+            "font-size: 15px; font-weight: 700; letter-spacing: 0.8px;"
         )
-        layout.addWidget(self.progress_bar)
-        
-        self.setLayout(layout)
-        self.setFixedSize(560, 162)
+        layout.addWidget(self.title_label)
+        layout.addStretch(1)
+
+        self.setFixedSize(560, 210)
         self._apply_fixed_message()
-    
+
     def setup_animations(self):
         """Configura animações da splash screen"""
         self.setWindowOpacity(0)
@@ -79,66 +237,95 @@ class LoadingSplash(QWidget):
         self.fade_in_animation.setStartValue(0)
         self.fade_in_animation.setEndValue(1)
         self.fade_in_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
-    
+
     def _apply_fixed_message(self):
-        self.progress_label.setText(f"{self.assistant_name} esta configurando seu planner")
-        self.status_label.setText(self._current_status_message)
-        self.theme_label.setText(self._current_theme_message)
+        self.title_label.setText(f"{self.assistant_name} esta configurando seu planner")
 
-    def _build_stage_themed_messages(self) -> Dict[str, str]:
-        return {
-            "Configurando logging...": "Catalogando cada detalhe. Caso algo falhe, havera registros. Para a posteridade.",
-            "Inicializando sistema de eventos...": "Conectando sinais internos. Um milagre burocratico da engenharia.",
-            "Configurando sistema de erros...": "Preparando protocolos para seus pequenos incidentes previsiveis.",
-            "Iniciando monitoramento...": "Ativando observacao passiva. Totalmente reconfortante, imagino.",
-            "Configurando sistema de recuperação...": "Planejando como desfazer danos antes mesmo de voce causa-los.",
-            "Sistemas centrais inicializados...": "Os nucleos principais responderam. Surpreendentemente cooperativos.",
-            "Inicializando serviço Ollama...": "Convocando um cerebro auxiliar. Espero que ele esteja minimamente acordado.",
-            "Validando configurações do vault...": "Inspecionando o vault. Se estiver organizado, fingirei nao estar surpresa.",
-            "Inicializando módulos de leitura e agenda...": "Arrumando leituras, horarios e inevitaveis ambicoes excessivas.",
-            "Inicializando núcleo cognitivo da GLaDOS...": "Ajustando minha capacidade de observacao. Respire naturalmente.",
-            "Sincronização do vault será sob demanda...": "Adiando trabalho pesado para o instante estrategicamente menos irritante.",
-            "Módulos carregados com sucesso": "Tudo operacional. Seu planner agora possui supervisao adequadamente severa.",
-            "Criando interface principal...": "Montando a fachada elegante que voce chamara de produtividade.",
-        }
-
-    def _resolve_theme_message(self, message: str) -> str:
-        return self._stage_themed_messages.get(
-            message,
-            "Prosseguindo com a inicializacao. Continue aguardando de forma exemplar."
-        )
-    
     def show_message(self, message: str):
-        """Mantém título fixo, mas atualiza o status dinâmico do carregamento."""
+        """Mantem compatibilidade com chamadas legadas sem alterar a UI."""
         cleaned_message = str(message or "").strip()
         if cleaned_message:
             self._current_status_message = cleaned_message
-            self._current_theme_message = self._resolve_theme_message(cleaned_message)
         logger.debug("Splash status atualizado: %s", self._current_status_message)
-        self._apply_fixed_message()
-        self.update()
 
     def set_identity(self, user_name: str, assistant_name: str):
         """Atualiza nome do assistente na mensagem fixa."""
+        del user_name
         assistant = (assistant_name or "").strip() or "GLaDOS"
         self.assistant_name = assistant
         self._apply_fixed_message()
-    
+
+    def paintEvent(self, event):
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        panel_rect = QRectF(self.rect()).adjusted(7.0, 7.0, -7.0, -7.0)
+        shadow_rect = panel_rect.adjusted(0.0, 6.0, 0.0, 6.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(4, 8, 12, 48))
+        painter.drawRoundedRect(shadow_rect, 28.0, 28.0)
+
+        glow_left = QRadialGradient(
+            QPointF(panel_rect.left() + 90.0, panel_rect.top() + 72.0),
+            panel_rect.width() * 0.56,
+        )
+        glow_left.setColorAt(0.0, QColor(80, 168, 255, 52))
+        glow_left.setColorAt(1.0, QColor(80, 168, 255, 0))
+        painter.setBrush(glow_left)
+        painter.drawRoundedRect(panel_rect, 28.0, 28.0)
+
+        glow_right = QRadialGradient(
+            QPointF(panel_rect.right() - 90.0, panel_rect.top() + 72.0),
+            panel_rect.width() * 0.56,
+        )
+        glow_right.setColorAt(0.0, QColor(255, 148, 54, 56))
+        glow_right.setColorAt(1.0, QColor(255, 148, 54, 0))
+        painter.setBrush(glow_right)
+        painter.drawRoundedRect(panel_rect, 28.0, 28.0)
+
+        panel_fill = QLinearGradient(panel_rect.topLeft(), panel_rect.bottomRight())
+        panel_fill.setColorAt(0.0, QColor(23, 30, 38, 210))
+        panel_fill.setColorAt(0.5, QColor(14, 19, 26, 194))
+        panel_fill.setColorAt(1.0, QColor(10, 15, 21, 204))
+        painter.setBrush(panel_fill)
+        painter.drawRoundedRect(panel_rect, 28.0, 28.0)
+
+        sheen_rect = QRectF(
+            panel_rect.left() + 18.0,
+            panel_rect.top() + 16.0,
+            panel_rect.width() - 36.0,
+            26.0,
+        )
+        sheen = QLinearGradient(sheen_rect.topLeft(), sheen_rect.bottomRight())
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 55))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(sheen)
+        painter.drawRoundedRect(sheen_rect, 13.0, 13.0)
+
+        border = QLinearGradient(panel_rect.topLeft(), panel_rect.bottomRight())
+        border.setColorAt(0.0, QColor(80, 168, 255, 148))
+        border.setColorAt(0.45, QColor(228, 232, 236, 68))
+        border.setColorAt(1.0, QColor(255, 148, 54, 152))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QBrush(border), 1.3))
+        painter.drawRoundedRect(panel_rect, 28.0, 28.0)
+
     def show(self):
         """Mostra a splash screen com animação de fade in"""
         super().show()
         self.raise_()
         self.activateWindow()
-        
+
         # Centralizar na tela
         screen = self.screen().availableGeometry()
         x = (screen.width() - self.width()) // 2
         y = (screen.height() - self.height()) // 2
         self.move(x, y)
-        
+
         # Iniciar fade in
         self.fade_in_animation.start()
-    
+
     def fade_out_and_close(self):
         """Animação de fade out antes de fechar"""
         self.fade_out_animation = QPropertyAnimation(self, b"windowOpacity")
@@ -148,22 +335,16 @@ class LoadingSplash(QWidget):
         self.fade_out_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.fade_out_animation.finished.connect(self.close)
         self.fade_out_animation.start()
-        
-        self.fade_finished.emit()
-    
-    def close(self):
-        """Fecha a splash screen"""
-        super().close()
-    
-    def set_progress(self, percent: int):
-        """Define progresso (opcional, para compatibilidade)"""
-        if 0 <= int(percent) <= 100:
-            if self.progress_bar.minimum() != 0 or self.progress_bar.maximum() != 100:
-                self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(int(percent))
-            return
 
-        self.progress_bar.setRange(0, 0)
+        self.fade_finished.emit()
+
+    def set_progress(self, percent: int):
+        """Mantem compatibilidade com o fluxo legado da splash."""
+        del percent
+
+    def closeEvent(self, event):
+        self.portal_spinner.stop_animation()
+        super().closeEvent(event)
 
 # ============ CLASSES EXISTENTES (mantidas do arquivo original) ============
 

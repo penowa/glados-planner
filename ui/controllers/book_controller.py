@@ -1589,6 +1589,15 @@ class BookController(QObject):
                         else:
                             result["errors"].append("Falha ao adicionar ao ReadingManager")
                     else:
+                        if file_path:
+                            try:
+                                self.reading_manager.update_book_source_path(book_id, str(file_path))
+                            except Exception as exc:
+                                logger.warning(
+                                    "Falha ao atualizar source_file do livro existente %s: %s",
+                                    book_id,
+                                    exc,
+                                )
                         result["systems_registered"].append("reading_manager (existing)")
                         logger.info(f"Livro {book_id} já existe no ReadingManager")
                         

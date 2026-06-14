@@ -73,7 +73,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
-    QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+    QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QStackedWidget, QFrame, QToolBar,
     QStatusBar, QDialog, QGridLayout, QSizePolicy
 )
@@ -85,21 +85,7 @@ from PyQt6.QtGui import (
 class PhilosophyPlannerApp:
     """Classe principal da aplicação com todos os sistemas integrados"""
 
-    SPLASH_PROGRESS_BY_STAGE = {
-        "Configurando logging...": 8,
-        "Inicializando sistema de eventos...": 16,
-        "Configurando sistema de erros...": 24,
-        "Iniciando monitoramento...": 32,
-        "Configurando sistema de recuperação...": 40,
-        "Sistemas centrais inicializados...": 48,
-        "Inicializando serviço Ollama...": 58,
-        "Validando configurações do vault...": 66,
-        "Inicializando módulos de leitura e agenda...": 76,
-        "Inicializando núcleo cognitivo da GLaDOS...": 86,
-        "Sincronização do vault será sob demanda...": 90,
-        "Módulos carregados com sucesso": 95,
-        "Criando interface principal...": 100,
-    }
+    SPLASH_MIN_VISIBLE_SECONDS = 1.6
     
     _instance = None
     
@@ -116,6 +102,7 @@ class PhilosophyPlannerApp:
         self.app = None
         self.window = None
         self.splash = None
+        self._splash_shown_at = 0.0
         self.config_manager = ConfigManager.instance()
         
         self.event_bus = None
@@ -191,9 +178,6 @@ class PhilosophyPlannerApp:
         """Atualiza texto da splash e força repaint imediato sem bloquear animações."""
         if self.splash:
             self.splash.show_message(message)
-            progress = self.SPLASH_PROGRESS_BY_STAGE.get(str(message or "").strip())
-            if progress is not None:
-                self.splash.set_progress(progress)
             self._pump_ui_events()
 
     @staticmethod
@@ -370,6 +354,7 @@ class PhilosophyPlannerApp:
         """Exibe tela de carregamento"""
         _, assistant_name = self._resolve_custom_identity()
         self.splash = LoadingSplash()
+        self._splash_shown_at = time.monotonic()
         self.splash.set_identity("", assistant_name)
         self.splash.show_message(f"{assistant_name} esta configurando seu planner")
         self.splash.show()
@@ -501,6 +486,15 @@ class PhilosophyPlannerApp:
     
     def create_main_window(self):
         """Cria janela principal com todos os sistemas integrados"""
+        if self.window is not None:
+            return
+
+        elapsed = max(0.0, time.monotonic() - float(self._splash_shown_at or 0.0))
+        remaining = self.SPLASH_MIN_VISIBLE_SECONDS - elapsed
+        if remaining > 0:
+            QTimer.singleShot(int(remaining * 1000), self.create_main_window)
+            return
+
         self._set_splash_message("Criando interface principal...")
         
         self.window = MainWindow(

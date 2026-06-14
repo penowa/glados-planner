@@ -3,13 +3,13 @@ Janela principal da aplicação com todos os sistemas integrados
 Implementa navegação, temas, controllers, e integração com backend
 """
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QStackedWidget, QSizePolicy, QFrame, QLabel, 
     QPushButton, QToolBar, QStatusBar, QMessageBox,
     QDialog, QProgressBar, QMenu, QListWidget, QLineEdit, QDialogButtonBox,
     QGraphicsOpacityEffect, QSystemTrayIcon
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QPointF, QRect, QEasingCurve, QPropertyAnimation
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QPoint, QPointF, QRect, QEasingCurve, QPropertyAnimation, QEventLoop
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction, QPainter, QResizeEvent
 
 # Sistemas centrais
@@ -22,7 +22,7 @@ from core.recovery.state_recovery import StateRecoveryManager
 from ui.utils.theme_manager import ThemeManager
 from ui.utils.shortcut_manager import ShortcutManager
 from ui.utils.responsive import ResponsiveManager
-from ui.utils.animation import FadeAnimation, SlideAnimation
+from ui.utils.animation import FadeAnimation, PortalSpinner, SlideAnimation
 from ui.utils.config_manager import ConfigManager
 from ui.utils.system_notifier import SystemNotifier
 
@@ -55,6 +55,64 @@ from pathlib import Path
 import os
 
 logger = logging.getLogger('GLaDOS.UI.MainWindow')
+
+
+class LazyViewLoadingOverlay(QWidget):
+    """Overlay temporário para mascarar carregamento síncrono de views lazy."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.hide()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.panel = QFrame(self)
+        self.panel.setFixedSize(560, 210)
+        self.panel.setStyleSheet(
+            "QFrame {"
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            "stop:0 rgba(23, 30, 38, 210),"
+            "stop:0.5 rgba(14, 19, 26, 194),"
+            "stop:1 rgba(10, 15, 21, 204));"
+            "border: 1px solid rgba(120, 170, 220, 120);"
+            "border-radius: 28px;"
+            "}"
+        )
+        panel_layout = QVBoxLayout(self.panel)
+        panel_layout.setContentsMargins(34, 26, 34, 26)
+        panel_layout.setSpacing(14)
+        panel_layout.addStretch(1)
+
+        self.spinner = PortalSpinner(self.panel)
+        panel_layout.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.title_label = QLabel("Carregando visualizacao...")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(
+            "background: transparent; border: none; color: #E7DBC7;"
+            "font-size: 15px; font-weight: 700; letter-spacing: 0.8px;"
+        )
+        panel_layout.addWidget(self.title_label)
+        panel_layout.addStretch(1)
+
+        layout.addWidget(self.panel, 0, Qt.AlignmentFlag.AlignCenter)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.raise_()
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(5, 8, 12, 110))
+
+    def show_message(self, message: str) -> None:
+        self.title_label.setText(str(message or "").strip() or "Carregando visualizacao...")
 
 
 class AdHocReadingDialog(QDialog):
@@ -214,6 +272,7 @@ class MainWindow(QMainWindow):
         self.current_theme = "philosophy_dark"
         self.current_view = 'dashboard'
         self.views = {}
+        self.view_factories: Dict[str, Callable[[], QWidget]] = {}
         self.controllers = {}
         self.widgets = {}
         self._header_spacing_layout: QHBoxLayout | None = None
@@ -227,6 +286,7 @@ class MainWindow(QMainWindow):
         self._header_more_opacity_anim: QPropertyAnimation | None = None
         self._tray_icon: QSystemTrayIcon | None = None
         self._tray_menu: QMenu | None = None
+        self._lazy_view_overlay: LazyViewLoadingOverlay | None = None
         
         # Configurações de UI
         self.animations_enabled = True
@@ -239,6 +299,7 @@ class MainWindow(QMainWindow):
         # Inicializar
         self.setup_window()
         self.init_controllers()
+        self.configure_view_factories()
         self.setup_ui()
         self.setup_connections()
         self.setup_systems()
@@ -305,6 +366,19 @@ class MainWindow(QMainWindow):
         _safe_init('focus', lambda: FocusController())
         _safe_init('glados', lambda: GladosController(self.backend_modules['llm_module']))
         _safe_init('reading', lambda: ReadingController(self.backend_modules['reading_manager']))
+
+    def configure_view_factories(self):
+        """Registra fábricas para criar views sob demanda."""
+        self.view_factories = {
+            'dashboard': lambda: DashboardView(self.controllers),
+            'vault_glados': lambda: VaultGladosView(self.controllers),
+            'discipline_chat': lambda: DisciplineChatView(self.controllers),
+            'session': lambda: SessionView(self.controllers),
+            'library': lambda: LibraryView(self.controllers),
+            'agenda': lambda: AgendaView(self.controllers.get('agenda')),
+            'weekly_review': lambda: WeeklyReviewView(self.controllers),
+            'review_workspace': lambda: ReviewWorkspaceView(self.controllers),
+        }
     
     def setup_ui(self):
         """Configura interface principal com todos os componentes"""
@@ -341,6 +415,10 @@ class MainWindow(QMainWindow):
         
         # 4. Status bar com informações do sistema
         self.setup_status_bar()
+        self._lazy_view_overlay = LazyViewLoadingOverlay(central_widget)
+        self._lazy_view_overlay.setGeometry(central_widget.rect())
+        self._lazy_view_overlay.raise_()
+        self._lazy_view_overlay.hide()
         
         # 5. Toolbar customizada (opcional, pode ser removida se não for necessária)
         # self.setup_toolbar()
@@ -756,66 +834,89 @@ class MainWindow(QMainWindow):
         pass
     
     def init_views(self):
-        """Inicializa todas as views do sistema"""
-        # Criar views com referências aos controllers
-        self.views['dashboard'] = DashboardView(self.controllers)
-        if hasattr(self.views['dashboard'], "update_identity"):
-            self.views['dashboard'].update_identity(
-                self.custom_user_name,
-                self.custom_assistant_name
-            )
-        self.views['dashboard'].navigate_to.connect(self.change_view)
-        if hasattr(self.views['dashboard'], "review_requested"):
-            self.views['dashboard'].review_requested.connect(self.open_review_planner_from_dashboard)
-        if hasattr(self.views['dashboard'], "review_workspace_requested"):
-            self.views['dashboard'].review_workspace_requested.connect(
-                self.open_review_workspace_from_dashboard
-            )
-        self.views['vault_glados'] = VaultGladosView(self.controllers)
-        if hasattr(self.views['vault_glados'], "update_identity"):
-            self.views['vault_glados'].update_identity(
-                self.custom_user_name,
-                self.custom_assistant_name
-            )
-        self.views['vault_glados'].navigate_to.connect(self.change_view)
-        self.views['discipline_chat'] = DisciplineChatView(self.controllers)
-        self.views['discipline_chat'].navigate_to.connect(self.change_view)
-        self.views['session'] = SessionView(self.controllers)
-        self.views['session'].navigate_to.connect(self.change_view)
-        self.views['library'] = LibraryView(self.controllers)
-        self.views['library'].navigate_to.connect(self.change_view)
-        self.views['library'].open_book_requested.connect(self.open_book_from_library)
-        if hasattr(self.views['library'], "review_workspace_requested"):
-            self.views['library'].review_workspace_requested.connect(
-                self.open_review_workspace_from_library
-            )
-        self.views['agenda'] = AgendaView(self.controllers.get('agenda'))
-        self.views['agenda'].navigate_to.connect(self.change_view)
-        self.views['weekly_review'] = WeeklyReviewView(self.controllers)
-        self.views['weekly_review'].navigate_to.connect(self.change_view)
-        self.views['review_workspace'] = ReviewWorkspaceView(self.controllers)
-        self.views['review_workspace'].navigate_to.connect(self.change_view)
-        #self.views['library'] =  LibraryView(self.controllers['reading'])
-        #self.views['focus'] = FocusView(self.controllers['focus'])
-        #self.views['concepts'] = ConceptsView(self.controllers['book'])
-        #self.views['analytics'] = AnalyticsView(self.controllers)
-        #self.views['goals'] = GoalsView(self.controllers['reading'])
-        #self.views['glados'] = GladosView(self.controllers['glados'])
-        #self.views['settings'] = SettingsView(self.config)
-        
-        # Adicionar ao stack
-        for view_name, view in self.views.items():
-            # Necessário para SlideAnimation.transition_to(view_name)
-            # localizar corretamente a view pelo nome lógico.
-            view.setObjectName(view_name)
-            self.view_stack.addWidget(view)
-            
-            # Conectar sinais comuns
-            if hasattr(view, 'data_updated'):
-                view.data_updated.connect(lambda data, v=view_name: self.on_view_data_updated(v, data))
-        
-        # Definir view inicial
-        self.view_stack.setCurrentWidget(self.views['dashboard'])
+        """Inicializa views prioritárias cedo e deixa o restante sob demanda."""
+        dashboard_view = self._ensure_view('dashboard')
+        self._ensure_view('agenda')
+        self._ensure_view('discipline_chat')
+        if dashboard_view is not None:
+            self.view_stack.setCurrentWidget(dashboard_view)
+
+    def _update_lazy_overlay_geometry(self) -> None:
+        if self._lazy_view_overlay is None:
+            return
+        parent = self.centralWidget()
+        if parent is None:
+            return
+        self._lazy_view_overlay.setGeometry(parent.rect())
+        self._lazy_view_overlay.raise_()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_lazy_overlay_geometry()
+
+    def _show_lazy_view_overlay(self, view_name: str) -> None:
+        if self._lazy_view_overlay is None:
+            return
+        self._update_lazy_overlay_geometry()
+        self._lazy_view_overlay.show_message(f"{self._get_view_title(view_name)} esta sendo carregada")
+        self._lazy_view_overlay.show()
+        self._lazy_view_overlay.raise_()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+
+    def _hide_lazy_view_overlay(self) -> None:
+        if self._lazy_view_overlay is None:
+            return
+        self._lazy_view_overlay.hide()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+
+    def _ensure_view(self, view_name: str) -> Optional[QWidget]:
+        """Cria e registra a view apenas quando realmente necessária."""
+        existing = self.views.get(view_name)
+        if existing is not None:
+            return existing
+
+        factory = self.view_factories.get(view_name)
+        if factory is None:
+            logger.warning("Factory de view não encontrada: %s", view_name)
+            return None
+
+        should_show_overlay = self.isVisible() and view_name not in {'dashboard', 'agenda', 'discipline_chat'}
+        if should_show_overlay:
+            self._show_lazy_view_overlay(view_name)
+        try:
+            view = factory()
+        finally:
+            if should_show_overlay:
+                self._hide_lazy_view_overlay()
+        self.views[view_name] = view
+
+        if hasattr(view, "navigate_to"):
+            view.navigate_to.connect(self.change_view)
+
+        if view_name == "dashboard":
+            if hasattr(view, "update_identity"):
+                view.update_identity(self.custom_user_name, self.custom_assistant_name)
+            if hasattr(view, "review_requested"):
+                view.review_requested.connect(self.open_review_planner_from_dashboard)
+            if hasattr(view, "review_workspace_requested"):
+                view.review_workspace_requested.connect(self.open_review_workspace_from_dashboard)
+        elif view_name == "vault_glados":
+            if hasattr(view, "update_identity"):
+                view.update_identity(self.custom_user_name, self.custom_assistant_name)
+        elif view_name == "library":
+            if hasattr(view, "open_book_requested"):
+                view.open_book_requested.connect(self.open_book_from_library)
+            if hasattr(view, "review_workspace_requested"):
+                view.review_workspace_requested.connect(self.open_review_workspace_from_library)
+
+        view.setObjectName(view_name)
+        self.view_stack.addWidget(view)
+
+        if hasattr(view, 'data_updated'):
+            view.data_updated.connect(lambda data, v=view_name: self.on_view_data_updated(v, data))
+
+        logger.info("View '%s' criada sob demanda", view_name)
+        return view
     
     def setup_connections(self):
         """Configura todas as conexões entre sistemas"""
@@ -987,7 +1088,8 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def change_view(self, view_name: str):
         """Muda a view atual com animação"""
-        if view_name not in self.views:
+        target_view = self._ensure_view(view_name)
+        if target_view is None:
             logger.warning(f"View não encontrada: {view_name}")
             return
         
@@ -1007,7 +1109,7 @@ class MainWindow(QMainWindow):
         if self.animations_enabled and hasattr(self, 'view_stack_transition'):
             self.view_stack_transition.transition_to(view_name)
         else:
-            self.view_stack.setCurrentWidget(self.views[view_name])
+            self.view_stack.setCurrentWidget(target_view)
         
         # Emitir sinal
         self.view_changed.emit(view_name)
@@ -1016,7 +1118,7 @@ class MainWindow(QMainWindow):
         logger.info(f"View alterada: {old_view} → {view_name}")
         
         # Atualizar view se necessário
-        current_view = self.views[view_name]
+        current_view = target_view
         if hasattr(current_view, 'on_view_activated'):
             current_view.on_view_activated()
 
@@ -1289,15 +1391,15 @@ class MainWindow(QMainWindow):
         picker = AdHocReadingDialog(book_dirs, self)
         if picker.exec() != QDialog.DialogCode.Accepted or not picker.selected_book_dir:
             return
-
-        session_view = self.views.get("session")
+    
+        session_view = self._ensure_view("session")
         if session_view and hasattr(session_view, "start_ad_hoc_reading"):
             session_view.start_ad_hoc_reading(picker.selected_book_dir)
         self.change_view("session")
 
     def open_book_from_library(self, book_dir: Path):
         """Abre livro selecionado na biblioteca via fluxo padrão de sessão."""
-        session_view = self.views.get("session")
+        session_view = self._ensure_view("session")
         if not session_view or not hasattr(session_view, "start_ad_hoc_reading"):
             return
         try:
@@ -1317,7 +1419,7 @@ class MainWindow(QMainWindow):
         self._open_review_workspace(payload or {}, source="library")
 
     def _open_review_workspace(self, payload: Dict[str, Any], source: str = ""):
-        review_view = self.views.get("review_workspace")
+        review_view = self._ensure_view("review_workspace")
         if not review_view or not hasattr(review_view, "open_review"):
             QMessageBox.warning(self, "Revisão", "Review workspace não está disponível.")
             return

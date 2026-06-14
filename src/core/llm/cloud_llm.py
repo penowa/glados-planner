@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
 import re
 import sys
@@ -18,6 +19,8 @@ from urllib.parse import urlsplit, urlunsplit
 from core.config.settings import settings
 from core.llm.glados.brain.vault_connector import VaultStructure
 from core.llm.glados.personality import create_personality_voice
+
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 
 try:
     import litellm

@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -17,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .base_card import PhilosophyCard
+from ui.utils.nerd_icons import NerdIcons, nerd_font
 
 logger = logging.getLogger("GLaDOS.UI.AgendaCard")
 
@@ -56,7 +58,7 @@ class AgendaCard(PhilosophyCard):
         self.refresh()
 
     def _build_ui(self):
-        self.set_title("📅 Agenda da Semana")
+        self.set_title(f"{NerdIcons.CALENDAR} Agenda da Semana")
         self.set_minimizable(True)
         self.set_draggable(True)
 
@@ -99,9 +101,10 @@ class AgendaCard(PhilosophyCard):
         stats_layout.addWidget(self.completed_label, 0, 1)
         stats_layout.addWidget(self.remaining_label, 0, 2)
 
-        self.checkin_button = QPushButton("🔔")
+        self.checkin_button = QPushButton(NerdIcons.WARNING)
         self.checkin_button.setObjectName("checkin_button")
         self.checkin_button.setFixedSize(40, 40)
+        self.checkin_button.setFont(nerd_font(14, weight=QFont.Weight.Bold))
         self.checkin_button.setToolTip("Daily Check-in")
 
         header_layout.addWidget(timer_box, 1)
@@ -112,9 +115,9 @@ class AgendaCard(PhilosophyCard):
         nav_layout = QHBoxLayout(nav)
         nav_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.prev_week_button = QPushButton("◀ Semana")
+        self.prev_week_button = QPushButton(f"{NerdIcons.COMPASS} Semana")
         self.today_button = QPushButton("Hoje")
-        self.next_week_button = QPushButton("Semana ▶")
+        self.next_week_button = QPushButton(f"Semana {NerdIcons.LINK}")
         self.week_label = QLabel("")
         self.week_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -141,12 +144,20 @@ class AgendaCard(PhilosophyCard):
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.add_button = QPushButton("➕ Adicionar")
+        self.add_button = QPushButton(f"{NerdIcons.PLUS} Adicionar")
         self.add_button.setObjectName("action_button")
-        self.review_button = QPushButton("🧠 Abrir revisão")
+        self.review_button = QPushButton(f"{NerdIcons.FLASK} Abrir revisão")
         self.review_button.setObjectName("action_button")
-        self.details_button = QPushButton("📋 Ver Detalhes")
+        self.details_button = QPushButton(f"{NerdIcons.NOTE} Ver detalhes")
         self.details_button.setObjectName("action_button")
+
+        action_font = nerd_font(10, weight=QFont.Weight.Medium)
+        self.prev_week_button.setFont(action_font)
+        self.today_button.setFont(action_font)
+        self.next_week_button.setFont(action_font)
+        self.add_button.setFont(action_font)
+        self.review_button.setFont(action_font)
+        self.details_button.setFont(action_font)
 
         actions_layout.addWidget(self.add_button)
         actions_layout.addWidget(self.review_button)

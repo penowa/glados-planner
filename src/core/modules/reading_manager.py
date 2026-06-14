@@ -546,6 +546,10 @@ class ReadingManager:
                 source_format=self._source_format_from_path(source_file),
             )
             self._save_progress()
+        elif source_file and not str(self.readings[book_id].source_file or "").strip():
+            self.readings[book_id].source_file = str(source_file)
+            self.readings[book_id].source_format = self._source_format_from_path(source_file)
+            self._save_progress()
         
         return book_id
     

@@ -207,11 +207,27 @@ class DashboardView(QWidget):
         self.greeting_label.setObjectName("minimal_greeting")
         self.greeting_label.setFont(nerd_font(18, weight=QFont.Weight.Medium))
         
-        # Data atual sutil
-        self.date_label = QLabel(QDateTime.currentDateTime().toString("dddd, dd 'de' MMMM"))
+        # Data atual sutil, clicável para abrir a agenda
+        self.date_label = QPushButton(QDateTime.currentDateTime().toString("dddd, dd 'de' MMMM"))
         self.date_label.setObjectName("minimal_date")
         self.date_label.setFont(nerd_font(10))
-        self.date_label.setStyleSheet("color: #8F8F8F;")
+        self.date_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.date_label.setFlat(True)
+        self.date_label.setStyleSheet(
+            """
+            QPushButton#minimal_date {
+                color: #8F8F8F;
+                background: transparent;
+                border: none;
+                padding: 0;
+                text-align: left;
+            }
+            QPushButton#minimal_date:hover {
+                color: #C7CDD6;
+            }
+            """
+        )
+        self.date_label.clicked.connect(lambda: self.navigate_to.emit("agenda"))
         
         # Botão de refresh
         refresh_button = QPushButton(NerdIcons.REFRESH)
@@ -222,10 +238,11 @@ class DashboardView(QWidget):
         refresh_button.clicked.connect(self.refresh_data)
 
         # Botão único de check-in (matinal/noturno)
-        self.checkin_action_button = QPushButton("É hora do check-up!")
+        self.checkin_action_button = QPushButton(f"{NerdIcons.WARNING} É hora do check-up!")
         self.checkin_action_button.setObjectName("dashboard_checkin_button")
         self.checkin_action_button.setMinimumWidth(220)
         self.checkin_action_button.setFixedHeight(32)
+        self.checkin_action_button.setFont(nerd_font(11, weight=QFont.Weight.Bold))
         self.checkin_action_button.clicked.connect(self._handle_dashboard_checkin)
         
         layout.addWidget(self.greeting_label)
@@ -599,11 +616,31 @@ class DashboardView(QWidget):
                 target_pages = (
                     session_data.get("target_pages")
                     or metadata.get("pages_planned")
+                    or metadata.get("target_pages")
                     or 10
                 ) if isinstance(session_data, dict) else 10
+                duration_minutes = 0
+                if isinstance(session_data, dict):
+                    duration_minutes = int(session_data.get("duration_minutes") or 0)
+                    if duration_minutes <= 0:
+                        start_raw = str(session_data.get("start") or "").strip()
+                        end_raw = str(session_data.get("end") or "").strip()
+                        if start_raw and end_raw:
+                            try:
+                                from datetime import datetime
+                                start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+                                end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+                                duration_minutes = max(1, int((end_dt - start_dt).total_seconds() // 60))
+                            except Exception:
+                                duration_minutes = 0
 
                 if book_id and hasattr(self.reading_controller, "start_reading_session"):
-                    self.reading_controller.start_reading_session(str(book_id), int(target_pages))
+                    self.reading_controller.start_reading_session(
+                        str(book_id),
+                        int(target_pages),
+                        agenda_event=session_data if isinstance(session_data, dict) else None,
+                        duration_minutes=duration_minutes or None,
+                    )
                     logger.info("Sessão de leitura iniciada para livro %s", book_id)
                 else:
                     logger.warning("Sessão iniciada sem book_id válido no evento: %s", session_data)
@@ -778,9 +815,9 @@ class DashboardView(QWidget):
         if not button:
             return
 
-        button.setText("É hora do check-up!")
         controller = self.daily_checkin_controller
         if not controller:
+            button.setText(f"{NerdIcons.WARNING} Check-in indisponível")
             button.setEnabled(False)
             button.setVisible(True)
             button.setToolTip("Controller de check-in não inicializado.")
@@ -818,6 +855,8 @@ class DashboardView(QWidget):
         if not pulse:
             self._checkin_pulse_phase = False
 
+        button.setText(self._build_checkin_button_text())
+
         if active_type == "morning":
             button.setToolTip("Check-in matinal pendente. O alerta visual encerra às 18h.")
         elif active_type == "evening" and pulse:
@@ -835,6 +874,15 @@ class DashboardView(QWidget):
             button.setToolTip("Check-ins do dia concluídos.")
 
         self._apply_checkin_button_style()
+
+    def _build_checkin_button_text(self):
+        if self._active_checkin_type == "morning":
+            return f"{NerdIcons.COFFEE} Check-in matinal"
+        if self._active_checkin_type == "evening":
+            return f"{NerdIcons.MOON} Check-in noturno"
+        if self._all_checkins_done:
+            return f"{NerdIcons.SUCCESS} Check-ins concluídos"
+        return f"{NerdIcons.WARNING} É hora do check-up!"
 
     def _apply_checkin_button_style(self):
         if not self.checkin_action_button:

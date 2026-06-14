@@ -1110,6 +1110,44 @@ class AgendaController(QObject):
             return {"success": False, "error": str(e), "updated_dates": []}
         return {"success": False, "error": "Agenda indisponível", "updated_dates": []}
 
+    @pyqtSlot(object, result=dict)
+    def remove_commitment(self, group_key) -> Dict:
+        """Remove um compromisso consolidado e reorganiza a agenda."""
+        try:
+            if self.agenda_manager and hasattr(self.agenda_manager, "remove_commitment"):
+                result = self.agenda_manager.remove_commitment(tuple(group_key))
+                self._invalidate_agenda_cache()
+                for date_str in result.get("updated_dates", []) or []:
+                    self.load_agenda(date_str)
+                if result.get("success"):
+                    self.agenda_updated.emit("", [])
+                    self.schedule_rebalanced.emit(result.get("rebalance") or {})
+                return result
+        except Exception as e:
+            logger.error(f"Erro ao remover compromisso: {e}")
+            return {"success": False, "error": str(e), "updated_dates": []}
+        return {"success": False, "error": "Agenda indisponível", "updated_dates": []}
+
+    @pyqtSlot(object, str, result=dict)
+    def reschedule_commitment(self, group_key, new_deadline: str) -> Dict:
+        """Reagenda sessões de um compromisso consolidado até a nova data limite."""
+        try:
+            if self.agenda_manager and hasattr(self.agenda_manager, "reschedule_commitment"):
+                result = self.agenda_manager.reschedule_commitment(tuple(group_key), new_deadline)
+                self._invalidate_agenda_cache()
+                for date_str in result.get("updated_dates", []) or []:
+                    self.load_agenda(date_str)
+                if result.get("success"):
+                    self.agenda_updated.emit("", [])
+                    rebalance = result.get("rebalance")
+                    if isinstance(rebalance, dict):
+                        self.schedule_rebalanced.emit(rebalance)
+                return result
+        except Exception as e:
+            logger.error(f"Erro ao remanejar compromisso: {e}")
+            return {"success": False, "error": str(e), "updated_dates": []}
+        return {"success": False, "error": "Agenda indisponível", "updated_dates": []}
+
     @pyqtSlot(str, int, int, int)
     def find_free_slots(self, date_str: str, duration_minutes: int, start_hour: int = 8, end_hour: int = 22):
         """Busca slots livres e emite sinal."""

@@ -15,6 +15,7 @@ class LLMBackendProxy:
     def __init__(self):
         self._backend: Any = None
         self._backend_kind: str = ""
+        self._pending_personality: Any = None
 
     def _desired_backend_kind(self) -> str:
         value = str(getattr(settings.llm, "backend", "local") or "local").strip().lower()
@@ -35,8 +36,36 @@ class LLMBackendProxy:
         if self._backend is None or self._backend_kind != kind:
             self._backend = self._build_backend(kind)
             self._backend_kind = kind
+            self._apply_pending_personality()
             print(f"🧠 Backend LLM ativo: {kind}")
         return self._backend
+
+    def _apply_pending_personality(self) -> None:
+        personality = self._pending_personality
+        backend = self._backend
+        if personality is None or backend is None:
+            return
+
+        try:
+            if hasattr(backend, "glados_voice"):
+                setattr(backend, "glados_voice", personality)
+        except Exception:
+            pass
+
+        model = getattr(backend, "model", None)
+        if model is None:
+            return
+
+        try:
+            if hasattr(model, "glados_voice"):
+                setattr(model, "glados_voice", personality)
+            if hasattr(model, "assistant_name"):
+                setattr(model, "assistant_name", str(getattr(personality, "assistant_name", "GLaDOS") or "GLaDOS"))
+            instruction_fn = getattr(personality, "get_llm_persona_instruction", None)
+            if hasattr(model, "persona_instruction") and callable(instruction_fn):
+                setattr(model, "persona_instruction", str(instruction_fn() or "").strip())
+        except Exception:
+            pass
 
     def reload(self):
         self._backend = None

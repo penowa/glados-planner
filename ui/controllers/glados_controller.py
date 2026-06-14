@@ -331,9 +331,12 @@ class GladosController(QObject):
 
         targets: List[Any] = []
         if backend_proxy is not None:
-            targets.append(backend_proxy)
+            try:
+                setattr(backend_proxy, "_pending_personality", personality)
+            except Exception:
+                pass
             inner = getattr(backend_proxy, "_backend", None)
-            if inner is not None and inner is not backend_proxy:
+            if inner is not None:
                 targets.append(inner)
 
         for target in targets:

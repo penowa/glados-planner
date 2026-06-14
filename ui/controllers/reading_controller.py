@@ -207,20 +207,31 @@ class ReadingController(BackendController):
     # ============================================================================
     
     @pyqtSlot(str, int)
-    def start_reading_session(self, book_id: str, target_pages: int = 10):
+    def start_reading_session(
+        self,
+        book_id: str,
+        target_pages: int = 10,
+        agenda_event: Optional[Dict[str, Any]] = None,
+        duration_minutes: Optional[int] = None,
+    ):
         """
         Inicia sessão de leitura (síncrono - apenas no controller)
         
         Args:
             book_id: ID do livro
             target_pages: Meta de páginas para a sessão
+            agenda_event: Evento da agenda que originou a sessão (opcional)
+            duration_minutes: Duração planejada em minutos (opcional)
         """
         session_data = {
             'book_id': book_id,
             'target_pages': target_pages,
             'start_time': self.get_timestamp(),
             'pages_read': 0,
-            'status': 'active'
+            'status': 'active',
+            'agenda_event': dict(agenda_event or {}),
+            'agenda_event_id': str((agenda_event or {}).get('id') or '').strip(),
+            'duration_minutes': max(0, int(duration_minutes or 0)),
         }
         
         self.current_session = session_data

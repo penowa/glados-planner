@@ -882,7 +882,7 @@ QPushButton#library_filter_button:hover {
     background: #242931;
 }
 
-QPushButton#library_filter_button:checked {
+QPushButton#library_filter_button[activeFilter="true"] {
     border-color: #6B9FE6;
     color: #ECF5FF;
     background: #2A3340;

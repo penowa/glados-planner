@@ -579,6 +579,7 @@ class AgendaView(QWidget):
         controls_layout.setContentsMargins(8, 8, 8, 6)
 
         self.prev_month_btn = QPushButton("◀")
+        self.commitments_list_btn = QPushButton("Lista de Compromissos")
         self.next_month_btn = QPushButton("▶")
         self.today_btn = QPushButton("Hoje")
         self.routine_settings_btn = QPushButton(NerdIcons.SETTINGS)
@@ -589,6 +590,7 @@ class AgendaView(QWidget):
         self.month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         controls_layout.addWidget(self.prev_month_btn)
+        controls_layout.addWidget(self.commitments_list_btn)
         controls_layout.addWidget(self.month_label, 1)
         controls_layout.addWidget(self.today_btn)
         controls_layout.addWidget(self.routine_settings_btn)
@@ -643,7 +645,7 @@ class AgendaView(QWidget):
         self.add_event_btn = QPushButton(f"{NerdIcons.PLUS} Adicionar compromisso")
         self.refresh_day_btn = QPushButton(f"{NerdIcons.REFRESH} Reorganizar agenda")
         self.refresh_day_btn.setToolTip(
-            "Redistribui compromissos flexíveis respeitando aulas, refeições e blocos protegidos."
+            "Redistribui apenas leituras e blocos de escrita, preservando prazos e compromissos fixos."
         )
         self.hide_day_detail_btn = QPushButton("Ocultar")
         actions.addWidget(self.add_event_btn)
@@ -697,10 +699,10 @@ class AgendaView(QWidget):
 
         self.refresh_action = QAction(f"{NerdIcons.REFRESH} Reorganizar agenda", self)
         self.refresh_action.setToolTip(
-            "Redistribui compromissos flexíveis respeitando aulas, refeições e blocos protegidos."
+            "Redistribui apenas leituras e blocos de escrita, preservando prazos e compromissos fixos."
         )
         self.refresh_action.setStatusTip(
-            "Reorganizar agenda respeitando horários reservados."
+            "Reorganizar leituras e escrita sem mover compromissos fixos."
         )
         self.refresh_action.triggered.connect(self.rebalance_agenda)
 
@@ -710,6 +712,7 @@ class AgendaView(QWidget):
 
     def setup_connections(self):
         self.prev_month_btn.clicked.connect(self.previous_month)
+        self.commitments_list_btn.clicked.connect(self.open_commitments_list)
         self.next_month_btn.clicked.connect(self.next_month)
         self.today_btn.clicked.connect(self.go_to_today)
         self.routine_settings_btn.clicked.connect(self.open_routine_settings)
@@ -856,7 +859,7 @@ class AgendaView(QWidget):
 
     def rebalance_agenda(self):
         self.status_label.setText(
-            "Reorganizando agenda com base em aulas, refeições e blocos protegidos..."
+            "Reorganizando leituras e blocos de escrita sem mover compromissos fixos..."
         )
         rebalance_result = {}
         if self.controller and hasattr(self.controller, "rebalance_schedule"):
@@ -868,6 +871,12 @@ class AgendaView(QWidget):
         self.status_label.setText("Atualizando visualização da agenda...")
         self._reload_agenda_view()
         QTimer.singleShot(1200, lambda: self.status_label.setText("Pronto"))
+
+    def open_commitments_list(self):
+        from ui.widgets.dialogs.commitments_list_dialog import CommitmentsListDialog
+
+        dialog = CommitmentsListDialog(self.controller, self)
+        dialog.exec()
 
     def open_routine_settings(self):
         if not self.controller:

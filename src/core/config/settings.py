@@ -33,9 +33,9 @@ class CpuConfig(BaseModel):
     use_mlock: bool = True
 
 class LlmCloudConfig(BaseModel):
-    model: str = "ollama/qwen2.5:1.5b"
+    model: str = "groq/llama-3.1-8b-instant"
     api_key: str = ""
-    api_base: str = "http://127.0.0.1:11434"
+    api_base: str = ""
     api_version: str = ""
     organization: str = ""
     timeout_seconds: int = 120
@@ -355,8 +355,22 @@ class Settings(BaseSettings):
 def reload_settings(yaml_path: str = "config/settings.yaml") -> Settings:
     """Recarrega a instância global de configurações a partir do YAML."""
     global settings
-    settings = Settings.from_yaml(yaml_path)
+    refreshed = Settings.from_yaml(yaml_path)
+    current = globals().get("settings")
+    if isinstance(current, Settings):
+        for field_name in Settings.model_fields:
+            setattr(current, field_name, getattr(refreshed, field_name))
+        settings = current
+    else:
+        settings = refreshed
     return settings
 
 # Instância global
 settings = Settings.from_yaml()
+
+# Evita instâncias duplicadas do módulo quando partes do app importam
+# `core.config.settings` e outras usam `src.core.config.settings`.
+if __name__ == "core.config.settings":
+    sys.modules.setdefault("src.core.config.settings", sys.modules[__name__])
+elif __name__ == "src.core.config.settings":
+    sys.modules.setdefault("core.config.settings", sys.modules[__name__])
