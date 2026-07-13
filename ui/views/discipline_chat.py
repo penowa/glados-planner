@@ -3363,6 +3363,23 @@ class DisciplineChatView(QWidget):
                 "strategy": config.get("strategy", ""),
             },
         }
+        if settings["auto_schedule"] and settings["scheduling_config"].get("deadline"):
+            disclaimer = (
+                "Este processamento pode reorganizar sessões de leitura já existentes.\n\n"
+                "Quando o prazo é curto, o sistema pode deslocar leituras com prazo mais folgado "
+                "para encaixar a nova leitura na agenda."
+            )
+            if (
+                QMessageBox.question(
+                    self,
+                    "Aviso de agendamento",
+                    disclaimer,
+                    QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Ok,
+                )
+                != QMessageBox.StandardButton.Ok
+            ):
+                return
         try:
             book_controller.process_book_with_config(settings)
             self._append_history_message(

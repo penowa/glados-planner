@@ -570,6 +570,9 @@ class SessionView(QWidget):
         self._zathura_capture_queue_offset: int = 0
         self._pomodoro_blocks_minutes: list[int] = []
         self._pomodoro_block_index: int = 0
+        self._pomodoro_plan: list[dict[str, Any]] = []
+        self._pomodoro_profiles: list[dict[str, Any]] = []
+        self._selected_pomodoro_profile_id: str = ""
         self._pomodoro_half_notified: bool = False
         self._pomodoro_end_notified: bool = False
         self._ending_session_after_zathura: bool = False
@@ -710,6 +713,12 @@ class SessionView(QWidget):
             "font-weight: 700; padding: 2px 6px;"
         )
 
+        self.session_pomodoro_profile_button = QPushButton("Perfil 25 min ▾")
+        self.session_pomodoro_profile_button.setObjectName("library_chip_button")
+        self.session_pomodoro_profile_button.setToolTip("Escolha o perfil de Pomodoro para esta sessão")
+        self.session_pomodoro_profile_button.setFixedHeight(32)
+        self.session_pomodoro_profile_button.setMinimumWidth(120)
+
         self.note_button = QPushButton(NerdIcons.NOTE)
         self.note_button.setObjectName("secondary_button")
         self.note_button.setFixedSize(24, 24)
@@ -729,6 +738,7 @@ class SessionView(QWidget):
         header.addWidget(self.note_button)
         header.addStretch()
         header.addWidget(self.pomodoro_timer_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        header.addWidget(self.session_pomodoro_profile_button, alignment=Qt.AlignmentFlag.AlignHCenter)
         header.addStretch()
         header.addWidget(self.controls_menu_button)
         root.addWidget(self.header_widget)
@@ -786,6 +796,16 @@ class SessionView(QWidget):
         self.session_phase_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.session_phase_label.setStyleSheet("color: #9FB0C7; font-size: 12px;")
         focus_layout.addWidget(self.session_phase_label)
+
+        self.session_pomodoro_profile_details = QLabel("Perfil: 25 min / 1 ciclo")
+        self.session_pomodoro_profile_details.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_pomodoro_profile_details.setStyleSheet("color: #B0C2D8; font-size: 11px;")
+        focus_layout.addWidget(self.session_pomodoro_profile_details)
+
+        self.session_pomodoro_pages_label = QLabel("Páginas desta sessão: —")
+        self.session_pomodoro_pages_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.session_pomodoro_pages_label.setStyleSheet("color: #9FB0C7; font-size: 11px;")
+        focus_layout.addWidget(self.session_pomodoro_pages_label)
 
         session_controls = QHBoxLayout()
         session_controls.setSpacing(8)
@@ -1063,6 +1083,7 @@ class SessionView(QWidget):
         self.action_pomodoro_config.triggered.connect(self._open_pomodoro_config_dialog)
 
         self.session_pomodoro_toggle_button.clicked.connect(self._toggle_pomodoro_from_timer)
+        self.session_pomodoro_profile_button.clicked.connect(self._show_pomodoro_profiles_menu)
         self.session_pomodoro_reset_button.clicked.connect(self._reset_pomodoro)
         self.session_pomodoro_config_button.clicked.connect(self._open_pomodoro_config_dialog)
         self.launch_pdf_button.clicked.connect(self._open_current_pdf_session)
@@ -1271,13 +1292,243 @@ class SessionView(QWidget):
 
     def _reset_pomodoro_plan(self):
         total_minutes = self._resolve_agenda_session_minutes()
-        self._pomodoro_blocks_minutes = self._split_session_minutes_into_blocks(
-            total_minutes,
-            self._default_pomodoro_block_minutes(),
-        )
+        self._pomodoro_profiles = self._build_pomodoro_profiles(total_minutes)
+        persisted_profile_id = self._load_persisted_pomodoro_profile_id()
+        available_ids = {profile["id"] for profile in self._pomodoro_profiles}
+        if persisted_profile_id in available_ids:
+            self._selected_pomodoro_profile_id = persisted_profile_id
+        else:
+            self._selected_pomodoro_profile_id = self._pomodoro_profiles[0]["id"] if self._pomodoro_profiles else ""
+        self._apply_selected_pomodoro_profile()
         self._pomodoro_block_index = 0
         self._pomodoro_half_notified = False
         self._pomodoro_end_notified = False
+
+    def _pomodoro_profile_scope_key(self) -> str:
+        current_session: Dict[str, Any] = {}
+        if self.reading_controller and hasattr(self.reading_controller, "get_current_session"):
+            try:
+                current_session = self.reading_controller.get_current_session() or {}
+            except Exception:
+                current_session = {}
+
+        book_id = str(current_session.get("book_id") or self._manual_book_id or "").strip()
+        if book_id:
+            return f"ui/pomodoro_profile_by_book/{book_id}"
+
+        agenda_event = current_session.get("agenda_event")
+        if isinstance(agenda_event, dict):
+            event_id = str(agenda_event.get("id") or "").strip()
+            if event_id:
+                return f"ui/pomodoro_profile_by_event/{event_id}"
+
+        event_id = str(current_session.get("agenda_event_id") or "").strip()
+        if event_id:
+            return f"ui/pomodoro_profile_by_event/{event_id}"
+
+        return ""
+
+    def _load_persisted_pomodoro_profile_id(self) -> str:
+        key = self._pomodoro_profile_scope_key()
+        if not key:
+            return ""
+        try:
+            return str(self.config_manager.get(key, "") or "").strip()
+        except Exception:
+            return ""
+
+    def _save_persisted_pomodoro_profile_id(self, profile_id: str):
+        key = self._pomodoro_profile_scope_key()
+        if not key or not profile_id:
+            return
+        try:
+            self.config_manager.set(key, profile_id)
+        except Exception:
+            pass
+
+    def _apply_pomodoro_profile_from_session(self):
+        if not self.reading_controller or not hasattr(self.reading_controller, "get_current_session"):
+            return
+
+        try:
+            current_session = self.reading_controller.get_current_session() or {}
+        except Exception:
+            return
+
+        profile = current_session.get("pomodoro_profile") if isinstance(current_session, dict) else None
+        if not isinstance(profile, dict):
+            return
+
+        profile_id = str(profile.get("id") or "").strip()
+        if not profile_id or not self._pomodoro_profiles:
+            return
+
+        selected = next((p for p in self._pomodoro_profiles if p["id"] == profile_id), None)
+        if not selected:
+            return
+
+        self._selected_pomodoro_profile_id = selected["id"]
+        self._apply_selected_pomodoro_profile()
+        self._save_persisted_pomodoro_profile_id(selected["id"])
+        self._update_session_pages_label()
+
+    def _current_session_pages_planned(self) -> int:
+        current_session: Dict[str, Any] = {}
+        if self.reading_controller and hasattr(self.reading_controller, "get_current_session"):
+            try:
+                current_session = self.reading_controller.get_current_session() or {}
+            except Exception:
+                current_session = {}
+
+        for key in ("pages_planned", "planned_pages", "target_pages"):
+            try:
+                value = int(current_session.get(key) or 0)
+            except Exception:
+                value = 0
+            if value > 0:
+                return value
+
+        agenda_event = current_session.get("agenda_event")
+        if isinstance(agenda_event, dict):
+            metadata = agenda_event.get("metadata") if isinstance(agenda_event.get("metadata"), dict) else {}
+            for key in ("pages_planned", "planned_pages", "target_pages"):
+                raw = metadata.get(key, agenda_event.get(key))
+                try:
+                    value = int(raw or 0)
+                except Exception:
+                    value = 0
+                if value > 0:
+                    return value
+
+            start_raw = str(agenda_event.get("start") or "").strip()
+            end_raw = str(agenda_event.get("end") or "").strip()
+            if start_raw and end_raw:
+                try:
+                    start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+                    end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+                    duration_minutes = max(0, int((end_dt - start_dt).total_seconds() // 60))
+                    if duration_minutes > 0:
+                        return max(0, int(round(duration_minutes / 6.0)))
+                except Exception:
+                    pass
+
+        return 0
+
+    def _update_session_pages_label(self):
+        if not hasattr(self, "session_pomodoro_pages_label"):
+            return
+        pages = self._current_session_pages_planned()
+        if pages > 0:
+            self.session_pomodoro_pages_label.setText(f"Páginas desta sessão: {pages}")
+        else:
+            self.session_pomodoro_pages_label.setText("Páginas desta sessão: —")
+
+    def _apply_selected_pomodoro_profile(self):
+        profile = next((p for p in self._pomodoro_profiles if p["id"] == self._selected_pomodoro_profile_id), None)
+        if not profile:
+            self._pomodoro_blocks_minutes = [self._default_pomodoro_block_minutes()]
+        else:
+            self._pomodoro_blocks_minutes = profile["blocks"]
+        self._update_pomodoro_profile_label(profile)
+        self._update_session_pages_label()
+
+    def _update_pomodoro_profile_label(self, profile: dict[str, Any] | None):
+        if not hasattr(self, "session_pomodoro_profile_details"):
+            return
+        if not profile:
+            self.session_pomodoro_profile_details.setText("Perfil padrão")
+            if hasattr(self, "session_pomodoro_profile_button"):
+                self.session_pomodoro_profile_button.setText("— min")
+            return
+        blocks = profile["blocks"]
+        cycles = len(blocks)
+        interval = profile.get("interval_minutes", 0)
+        total = profile.get("total_minutes", sum(blocks))
+        self.session_pomodoro_profile_details.setText(
+            f"{cycles} ciclos · intervalo {interval} min"
+        )
+        if hasattr(self, "session_pomodoro_profile_button"):
+            self.session_pomodoro_profile_button.setText(f"{total} min")
+
+    @staticmethod
+    def _build_pomodoro_profiles(total_minutes: int) -> list[dict[str, Any]]:
+        total = max(1, int(total_minutes or 1))
+        profiles: list[dict[str, Any]] = []
+
+        candidates = [50, 45, 40, 35, 30, 25, 20, 15, 10]
+        for work in candidates:
+            max_cycles = total // work
+            if max_cycles < 1:
+                continue
+            for cycles in range(1, min(max_cycles, 6) + 1):
+                if cycles == 1:
+                    if work == total:
+                        profiles.append({
+                            "id": f"{work}x{cycles}_0",
+                            "label": f"{cycles}×{work} min",
+                            "blocks": [work],
+                            "interval_minutes": 0,
+                            "total_minutes": total,
+                        })
+                    continue
+
+                remaining = total - work * cycles
+                interval_raw = remaining / (cycles - 1)
+                if interval_raw < 1 or interval_raw > 20:
+                    continue
+
+                interval = round(interval_raw, 1)
+                if abs(interval_raw - interval) > 0.05:
+                    continue
+                total_with_breaks = work * cycles + interval * (cycles - 1)
+                if abs(total_with_breaks - total) > 0.5:
+                    continue
+
+                profiles.append({
+                    "id": f"{work}x{cycles}_{interval}",
+                    "label": f"{cycles}×{work} min",
+                    "blocks": [work] * cycles,
+                    "interval_minutes": interval,
+                    "total_minutes": total,
+                })
+
+        if not profiles:
+            profiles = [{
+                "id": f"default_{total}",
+                "label": f"{total} min",
+                "blocks": [total],
+                "interval_minutes": 0,
+                "total_minutes": total,
+            }]
+
+        # Remove duplicados e ordena por ciclos maiores primeiro
+        unique = {}
+        for profile in profiles:
+            unique[profile["id"]] = profile
+        sorted_profiles = sorted(unique.values(), key=lambda p: (-len(p["blocks"]), p["blocks"][0]))
+        return sorted_profiles
+
+    def _show_pomodoro_profiles_menu(self):
+        from PyQt6.QtWidgets import QMenu
+
+        if not hasattr(self, "session_pomodoro_profile_button"):
+            return
+
+        menu = QMenu(self)
+        for profile in self._pomodoro_profiles:
+            label = profile["label"]
+            interval = profile["interval_minutes"]
+            cycles = len(profile["blocks"])
+            action = menu.addAction(f"{label} — {cycles} ciclos — intervalo {interval} min")
+            action.setData(profile["id"])
+        action = menu.exec(self.session_pomodoro_profile_button.mapToGlobal(self.session_pomodoro_profile_button.rect().bottomLeft()))
+        if action:
+            selected_id = action.data()
+            if selected_id:
+                self._selected_pomodoro_profile_id = selected_id
+                self._apply_selected_pomodoro_profile()
+                self._reset_pomodoro()
+                self._save_persisted_pomodoro_profile_id(selected_id)
 
     def _current_pomodoro_block_minutes(self) -> int:
         if not self._pomodoro_blocks_minutes:
@@ -1676,6 +1927,7 @@ class SessionView(QWidget):
 
         self.left_page = self._left_page_from_current(self.current_page)
         self._reset_pomodoro_plan()
+        self._apply_pomodoro_profile_from_session()
         self._refresh_pages()
         self._apply_session_mode_ui()
 
@@ -6189,6 +6441,13 @@ class SessionView(QWidget):
                     )
                 except Exception as exc:
                     logger.warning("Falha ao encerrar sessão no ReadingController: %s", exc)
+
+                try:
+                    event_id = str(current_session.get("agenda_event_id") or "").strip()
+                    if event_id and self.agenda_controller and hasattr(self.agenda_controller, "toggle_event_completion"):
+                        self.agenda_controller.toggle_event_completion(event_id, True)
+                except Exception as exc:
+                    logger.warning("Falha ao marcar evento da agenda como concluído: %s", exc)
 
     def _save_progress_absolute(self, page: int, notes: str = ""):
         if self._temporary_read_only_session:

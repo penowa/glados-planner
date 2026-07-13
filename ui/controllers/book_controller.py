@@ -1748,6 +1748,11 @@ class BookController(QObject):
                 result["success"] = True
                 result["agenda_events_created"] = scheduling_result.get("total_sessions", 0)
                 result["allocation_details"] = scheduling_result
+                if deadline:
+                    result["warning"] = (
+                        "Este agendamento pode reorganizar sessões de leitura já existentes. "
+                        "Quando o prazo é curto, leituras com prazo mais folgado podem ser deslocadas."
+                    )
                 
                 # Emitir sinal de agendamento
                 self.book_scheduled.emit(book_id, result)

@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -150,6 +151,12 @@ class AgendaCard(PhilosophyCard):
         self.review_button.setObjectName("action_button")
         self.details_button = QPushButton(f"{NerdIcons.NOTE} Ver detalhes")
         self.details_button.setObjectName("action_button")
+        self.clear_agenda_button = QPushButton(f"{NerdIcons.ERROR} Limpar agenda")
+        self.clear_agenda_button.setObjectName("danger_button")
+        self.clear_agenda_button.setStyleSheet("background: #DC2626; color: #FFFFFF;")
+        self.clear_agenda_button.setToolTip(
+            "Remove todos os compromissos não fixos da agenda, preservando blocos fixos como sono, refeições e revisão semanal."
+        )
 
         action_font = nerd_font(10, weight=QFont.Weight.Medium)
         self.prev_week_button.setFont(action_font)
@@ -158,10 +165,12 @@ class AgendaCard(PhilosophyCard):
         self.add_button.setFont(action_font)
         self.review_button.setFont(action_font)
         self.details_button.setFont(action_font)
+        self.clear_agenda_button.setFont(action_font)
 
         actions_layout.addWidget(self.add_button)
         actions_layout.addWidget(self.review_button)
         actions_layout.addWidget(self.details_button)
+        actions_layout.addWidget(self.clear_agenda_button)
 
         layout.addWidget(header)
         layout.addWidget(nav)
@@ -219,6 +228,7 @@ class AgendaCard(PhilosophyCard):
         self.prev_week_button.clicked.connect(self.show_previous_week)
         self.today_button.clicked.connect(self.show_current_week)
         self.next_week_button.clicked.connect(self.show_next_week)
+        self.clear_agenda_button.clicked.connect(self.on_clear_schedule)
 
         if not self.controller:
             return
@@ -512,6 +522,38 @@ class AgendaCard(PhilosophyCard):
 
     def on_checkin_clicked(self):
         self.request_checkin.emit()
+
+    def on_clear_schedule(self):
+        if QMessageBox.question(
+            self,
+            "Limpar agenda",
+            "Deseja remover todos os compromissos agendados não fixos? Isso manterá sono, refeições, revisão semanal e outros compromissos fixos.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        if self.controller and hasattr(self.controller, "clear_schedule"):
+            result = self.controller.clear_schedule()
+            if isinstance(result, dict) and not result.get("success"):
+                QMessageBox.warning(
+                    self,
+                    "Falha ao limpar agenda",
+                    str(result.get("error", "Não foi possível limpar a agenda.")),
+                )
+            else:
+                removed = int(result.get("removed", 0)) if isinstance(result, dict) else 0
+                QMessageBox.information(
+                    self,
+                    "Agenda limpa",
+                    f"{removed} compromissos não fixos foram removidos.",
+                )
+                self.refresh()
+        else:
+            QMessageBox.warning(
+                self,
+                "Limpar agenda indisponível",
+                "O controlador de agenda não oferece suporte a esta ação.",
+            )
 
     def on_item_completed(self, event_id: str, completed: bool):
         self.item_completed.emit(event_id, completed)

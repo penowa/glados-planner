@@ -213,6 +213,7 @@ class ReadingController(BackendController):
         target_pages: int = 10,
         agenda_event: Optional[Dict[str, Any]] = None,
         duration_minutes: Optional[int] = None,
+        pomodoro_profile: Optional[Dict[str, Any]] = None,
     ):
         """
         Inicia sessão de leitura (síncrono - apenas no controller)
@@ -232,6 +233,7 @@ class ReadingController(BackendController):
             'agenda_event': dict(agenda_event or {}),
             'agenda_event_id': str((agenda_event or {}).get('id') or '').strip(),
             'duration_minutes': max(0, int(duration_minutes or 0)),
+            'pomodoro_profile': dict(pomodoro_profile or {}),
         }
         
         self.current_session = session_data

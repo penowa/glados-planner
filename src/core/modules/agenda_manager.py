@@ -1081,6 +1081,96 @@ class AgendaManager:
             return 0.6
         return 0.45  # domingo
 
+    def _reading_capacity_for_day(
+        self,
+        target_day: date,
+        strategy: str,
+        preferred_time: str = "",
+        session_minimum: int = 30,
+        session_cap: int = 2,
+        max_daily_minutes: int = 180,
+    ) -> Dict[str, Any]:
+        """Calcula os slots de leitura disponíveis para um dia."""
+        def _time_windows() -> List[Tuple[int, int]]:
+            preferred = str(preferred_time or "").strip().lower()
+            if "manhã" in preferred or "manha" in preferred:
+                return [(8, 12)]
+            if "tarde" in preferred:
+                return [(14, 18)]
+            if "noite" in preferred:
+                return [(19, 22)]
+            if strategy == "intensive":
+                return [(8, 12), (14, 18), (19, 22)]
+            return [(8, 12), (14, 18), (19, 22)]
+
+        date_str = target_day.isoformat()
+        slots: List[Dict[str, Any]] = []
+        for window_start, window_end in _time_windows():
+            slots.extend(
+                self.find_free_slots(
+                    date_str,
+                    duration_minutes=session_minimum,
+                    start_hour=window_start,
+                    end_hour=window_end,
+                    consider_preferences=True,
+                )
+            )
+
+        slots.sort(
+            key=lambda slot: (
+                -float(slot.get("quality_score", 0.5) or 0.5),
+                str(slot.get("start") or ""),
+            )
+        )
+
+        day_cap = max(0, int(max_daily_minutes))
+        capacity_minutes = 0
+        normalized_slots: List[Dict[str, Any]] = []
+        for slot in slots:
+            try:
+                slot_start = datetime.fromisoformat(str(slot.get("start")).replace(" ", "T"))
+                slot_end = datetime.fromisoformat(str(slot.get("end")).replace(" ", "T"))
+            except Exception:
+                continue
+            if slot_end <= slot_start:
+                continue
+
+            slot_minutes = int((slot_end - slot_start).total_seconds() // 60)
+            allocation_minutes = min(slot_minutes, day_cap if day_cap > 0 else slot_minutes)
+            if allocation_minutes < session_minimum:
+                continue
+            if len(normalized_slots) >= session_cap:
+                break
+
+            normalized = dict(slot)
+            normalized["allocated_minutes"] = allocation_minutes
+            normalized_slots.append(normalized)
+            capacity_minutes += allocation_minutes
+
+        return {
+            "slots": normalized_slots,
+            "capacity_minutes": capacity_minutes,
+        }
+
+    def _deadline_priority_for_reading(self, deadline: Optional[str]) -> EventPriority:
+        """Converte prazo em prioridade operacional."""
+        if not deadline:
+            return EventPriority.MEDIA
+
+        try:
+            deadline_day = date.fromisoformat(str(deadline).strip())
+        except Exception:
+            return EventPriority.MEDIA
+
+        days_until = (deadline_day - datetime.now().date()).days
+        if days_until <= 1:
+            return EventPriority.ALTA
+        if days_until <= 3:
+            return EventPriority.MEDIA
+        if days_until <= 7:
+            return EventPriority.MEDIA
+        return EventPriority.BAIXA
+
     def _normalize_event_type(self, event_type: str) -> str:
         """Converte aliases legados para o tipo canônico."""
         normalized = str(event_type or "casual").strip().lower()
@@ -1151,11 +1241,6 @@ class AgendaManager:
         if pages_remaining_total <= 0:
             return {"error": "Livro já concluído"}
 
-        # Calcula tempo necessário
-        pages_per_hour = max(reading_speed, 1)
-        minutes_per_page = 60 / pages_per_hour
-        requested_pages_per_day = max(1.0, float(pages_per_day or 1.0))
-
         # Define estratégia
         session_settings = {
             "balanced": {"min_session": 30, "max_session": 90, "sessions_per_day": 2},
@@ -1190,17 +1275,6 @@ class AgendaManager:
         if not all_candidate_days:
             all_candidate_days = [first_day]
 
-        if deadline:
-            computed_pages_per_day = max(
-                1,
-                int((pages_remaining_total + len(all_candidate_days) - 1) / len(all_candidate_days))
-            )
-            target_pages_per_day = computed_pages_per_day
-        else:
-            target_pages_per_day = max(1, int(round(requested_pages_per_day)))
-
-        required_minutes_per_day = min(max_daily_minutes, max(settings["min_session"], int(target_pages_per_day * minutes_per_page)))
-
         allocations = {}
         pages_remaining = pages_remaining_total
         sessions_created = 0
@@ -1210,17 +1284,63 @@ class AgendaManager:
             for candidate_day in all_candidate_days
         }
 
-        def _time_windows() -> List[Tuple[int, int]]:
-            preferred = str(preferred_time or "").strip().lower()
-            if "manhã" in preferred or "manha" in preferred:
-                return [(8, 12)]
-            if "tarde" in preferred:
-                return [(14, 18)]
-            if "noite" in preferred:
-                return [(19, 22)]
-            if strategy == "intensive":
-                return [(8, 12), (14, 18), (19, 22)]
-            return [(8, 12), (14, 18), (19, 22)]
+        target_pages_per_day = 0
+        day_capacity_map: Dict[str, Dict[str, Any]] = {}
+        if deadline:
+            for candidate_day in all_candidate_days:
+                date_str = candidate_day.isoformat()
+                load_factor = max(0.0, float(day_load_factors.get(date_str, 1.0) or 0.0))
+                if load_factor <= 0:
+                    continue
+
+                weekday = candidate_day.weekday()
+                weekend_light = weekday >= 5 and load_factor < 1.0
+                session_minimum = max(20, min(settings["min_session"], 45)) if weekend_light else settings["min_session"]
+                session_cap = 1 if weekend_light else settings["sessions_per_day"]
+
+                capacity = self._reading_capacity_for_day(
+                    candidate_day,
+                    strategy=strategy,
+                    preferred_time=preferred_time,
+                    session_minimum=session_minimum,
+                    session_cap=9999,
+                    max_daily_minutes=0,
+                )
+                if capacity["slots"]:
+                    day_capacity_map[date_str] = {
+                        "load_factor": load_factor,
+                        "session_minimum": session_minimum,
+                        "session_cap": session_cap,
+                        "slots": capacity["slots"],
+                        "capacity_minutes": capacity["capacity_minutes"],
+                    }
+
+            total_capacity_minutes = sum(
+                int(item.get("capacity_minutes", 0) or 0) for item in day_capacity_map.values()
+            )
+            if total_capacity_minutes <= 0:
+                return {
+                    "error": "Não há slots suficientes na agenda para criar sessões de leitura até a data limite."
+                }
+
+            required_minutes_total = int(round((pages_remaining_total / max(reading_speed, 1.0)) * 60))
+            if required_minutes_total > total_capacity_minutes:
+                logger.warning(
+                    "Leitura inviável no prazo: precisam %d minutos, capacidade disponível %d minutos para %s",
+                    required_minutes_total,
+                    total_capacity_minutes,
+                    book_id,
+                )
+                deadline_capacity_warning = (
+                    f"O prazo informado exige cerca de {required_minutes_total} minutos, "
+                    f"mas a agenda oferece apenas {total_capacity_minutes} minutos livres."
+                )
+            else:
+                deadline_capacity_warning = ""
+        else:
+            requested_pages_per_day = max(1.0, float(pages_per_day or 1.0))
+            target_pages_per_day = max(1, int(round(requested_pages_per_day)))
+            deadline_capacity_warning = ""
 
         for target_day in all_candidate_days:
             if pages_remaining <= 0:
@@ -1230,62 +1350,61 @@ class AgendaManager:
             load_factor = max(0.0, float(day_load_factors.get(date_str, 1.0) or 0.0))
             if load_factor <= 0:
                 continue
-
-            remaining_days = [d for d in all_candidate_days if d >= target_day]
-            remaining_weight = sum(
-                max(0.0, float(day_load_factors.get(day.isoformat(), 1.0) or 0.0))
-                for day in remaining_days
-            )
-            if remaining_weight <= 0:
-                remaining_weight = max(1.0, float(len(remaining_days)))
-
+            weekday = target_day.weekday()
+            weekend_light = weekday >= 5 and load_factor < 1.0
+            session_minimum = max(20, min(settings["min_session"], 45)) if weekend_light else settings["min_session"]
+            session_cap = 9999 if deadline else (1 if weekend_light else settings["sessions_per_day"])
             if deadline:
-                weighted_share = int(round(pages_remaining * (load_factor / remaining_weight)))
-                pages_for_day = min(pages_remaining, max(1, weighted_share))
+                day_capacity = day_capacity_map.get(date_str)
+                if not day_capacity:
+                    continue
+                pages_for_day = min(
+                    pages_remaining,
+                    max(1, int(round(day_capacity["capacity_minutes"] / max(60 / max(reading_speed, 1.0), 1e-6)))),
+                )
+                minutes_per_page = 60 / max(reading_speed, 1.0)
+                minutes_remaining_day = day_capacity["capacity_minutes"]
+                available_slots = list(day_capacity["slots"])
             else:
                 pages_for_day = min(
                     pages_remaining,
                     max(1, int(round(target_pages_per_day * load_factor))),
                 )
+                minutes_per_page = 60 / max(reading_speed, 1.0)
+                per_day_minutes_cap = max(
+                    session_minimum,
+                    int(round(max_daily_minutes * load_factor)),
+                )
+                minutes_remaining_day = min(
+                    per_day_minutes_cap,
+                    max(session_minimum, int(pages_for_day * minutes_per_page)),
+                )
+                available_slots = []
+                for window_start, window_end in ((8, 12), (14, 18), (19, 22)):
+                    free_slots = self.find_free_slots(
+                        date_str,
+                        duration_minutes=session_minimum,
+                        start_hour=window_start,
+                        end_hour=window_end,
+                        consider_preferences=True
+                    )
+                    available_slots.extend(free_slots)
+
+                if not available_slots:
+                    continue
+
+                available_slots.sort(
+                    key=lambda slot: (
+                        -float(slot.get("quality_score", 0.5) or 0.5),
+                        str(slot.get("start") or ""),
+                    )
+                )
 
             daily_targets[date_str] = pages_for_day
-            weekday = target_day.weekday()
-            weekend_light = weekday >= 5 and load_factor < 1.0
-            session_minimum = max(20, min(settings["min_session"], 45)) if weekend_light else settings["min_session"]
-            session_cap = 1 if weekend_light else settings["sessions_per_day"]
-            per_day_minutes_cap = max(
-                session_minimum,
-                int(round(max_daily_minutes * load_factor)),
-            )
-            minutes_remaining_day = min(
-                per_day_minutes_cap,
-                max(session_minimum, int(pages_for_day * minutes_per_page)),
-            )
-
-            daily_slots: List[Dict[str, Any]] = []
-            for window_start, window_end in _time_windows():
-                free_slots = self.find_free_slots(
-                    date_str,
-                    duration_minutes=session_minimum,
-                    start_hour=window_start,
-                    end_hour=window_end,
-                    consider_preferences=True
-                )
-                daily_slots.extend(free_slots)
-
-            if not daily_slots:
-                continue
-
-            daily_slots.sort(
-                key=lambda slot: (
-                    -float(slot.get("quality_score", 0.5) or 0.5),
-                    str(slot.get("start") or ""),
-                )
-            )
 
             sessions_today = 0
             occupied_ranges: List[Tuple[datetime, datetime]] = []
-            for slot in daily_slots:
+            for slot in available_slots:
                 if minutes_remaining_day <= 0 or pages_remaining <= 0:
                     break
                 if sessions_today >= session_cap:
@@ -1299,11 +1418,19 @@ class AgendaManager:
                 if slot_end <= slot_start:
                     continue
 
+                slot_duration_minutes = int((slot_end - slot_start).total_seconds() // 60)
                 allocation_minutes = min(
-                    int((slot_end - slot_start).total_seconds() // 60),
-                    min(settings["max_session"], 45) if weekend_light else settings["max_session"],
+                    slot_duration_minutes,
                     minutes_remaining_day,
                 )
+                if not deadline:
+                    allocation_minutes = min(
+                        allocation_minutes,
+                        min(settings["max_session"], 45) if weekend_light else settings["max_session"],
+                    )
+                else:
+                    needed_minutes_for_remaining_pages = int(round(pages_remaining * minutes_per_page))
+                    allocation_minutes = min(allocation_minutes, needed_minutes_for_remaining_pages)
                 if allocation_minutes < session_minimum:
                     continue
 
@@ -1314,7 +1441,7 @@ class AgendaManager:
                 if overlaps:
                     continue
 
-                slot_pages = max(1, min(pages_remaining, int(allocation_minutes / minutes_per_page)))
+                slot_pages = max(1, min(pages_remaining, int(round(allocation_minutes / minutes_per_page))))
                 event_id = self.add_event(
                     title=f"Leitura: {book_progress.get('title', book_id)}",
                     start=slot_start.isoformat(),
@@ -1327,6 +1454,7 @@ class AgendaManager:
                     scheduling_strategy=strategy,
                     preferred_time=preferred_time,
                     deadline=deadline,
+                    priority=self._deadline_priority_for_reading(deadline).value,
                     pages_planned=slot_pages,
                 )
 
@@ -1347,6 +1475,23 @@ class AgendaManager:
 
         # Registra estatísticas
         self._record_allocation_statistics(allocations, strategy)
+
+        if deadline:
+            reading_event_ids = {
+                event.id
+                for event in self.events.values()
+                if event.type == AgendaEventType.LEITURA and not event.completed and event.end > datetime.now()
+            }
+            if reading_event_ids:
+                rebalance_result = self.rebalance_schedule(
+                    horizon_days=max(7, (deadline_day - datetime.now().date()).days + 1),
+                    only_event_ids=reading_event_ids,
+                    deadline_override=deadline_day.isoformat(),
+                )
+            else:
+                rebalance_result = {"success": True, "moved_count": 0, "updated_dates": []}
+        else:
+            rebalance_result = {"success": True, "moved_count": 0, "updated_dates": []}
         
         return {
             "book_id": book_id,
@@ -1354,11 +1499,13 @@ class AgendaManager:
             "total_sessions": len(allocations),
             "allocations": allocations,
             "pages_remaining_unscheduled": max(0, pages_remaining),
-            "pages_target_per_day": target_pages_per_day,
+            "pages_target_per_day": next(iter(daily_targets.values()), 0) if daily_targets else 0,
             "daily_targets": daily_targets,
             "start_date": first_day.isoformat(),
             "deadline": deadline_day.isoformat(),
             "success": bool(sessions_created > 0),
+            "warning": deadline_capacity_warning or None,
+            "rebalance": rebalance_result,
         }
     
     def emergency_mode(self, objective: str, days: int = 3,
@@ -2083,6 +2230,7 @@ class AgendaManager:
                 "protected_count": len(protected_events),
                 "unscheduled_count": 0,
                 "updated_dates": [],
+                "moved_events": [],
             }
 
         touched_dates = {
@@ -2209,6 +2357,7 @@ class AgendaManager:
 
         moved_count = 0
         updated_dates = set(touched_dates)
+        moved_events: List[Dict[str, Any]] = []
         for event in movable_events:
             placement = placement_by_id.get(event.id)
             if not placement:
@@ -2223,6 +2372,17 @@ class AgendaManager:
             if event.start != new_start or event.end != new_end:
                 updated_dates.add(event.start.date().isoformat())
                 updated_dates.add(new_start.date().isoformat())
+                moved_events.append(
+                    {
+                        "event_id": event.id,
+                        "title": event.title,
+                        "book_id": event.book_id,
+                        "old_start": event.start.isoformat(),
+                        "old_end": event.end.isoformat(),
+                        "new_start": new_start.isoformat(),
+                        "new_end": new_end.isoformat(),
+                    }
+                )
                 event.start = new_start
                 event.end = new_end
                 moved_count += 1
@@ -2234,6 +2394,7 @@ class AgendaManager:
             "protected_count": len(protected_events),
             "unscheduled_count": len(unscheduled),
             "updated_dates": sorted(updated_dates),
+            "moved_events": moved_events,
         }
 
     def list_commitment_events(

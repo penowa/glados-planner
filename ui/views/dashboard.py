@@ -11,7 +11,7 @@ from PyQt6.QtGui import QFont
 import logging
 from pathlib import Path
 
-from ui.widgets.cards.agenda_card import AgendaCard
+from ui.widgets.cards.dynamic_event_card import DynamicEventCard
 from ui.widgets.cards.upcoming_commitments_card import UpcomingCommitmentsCard
 from ui.widgets.cards.event_creation_card import EventCreationDialog
 from ui.widgets.dialogs.class_notes_dialog import ClassNotesDialog
@@ -138,9 +138,13 @@ class DashboardView(QWidget):
         row1_layout = QHBoxLayout()
         row1_layout.setSpacing(12)
         
-        # 1. AgendaCard (40%)
-        self.agenda_card = AgendaCard(
-            agenda_controller=self.agenda_backend
+        # 1. DynamicEventCard (replaces AgendaCard)
+        self.agenda_card = DynamicEventCard(
+            agenda_backend=self.agenda_backend,
+            reading_controller=self.reading_controller,
+            book_controller=self.book_controller,
+            daily_checkin_controller=self.daily_checkin_controller,
+            vault_controller=self.vault_controller,
         )
         self.agenda_card.setObjectName("dashboard_card")
         self.agenda_card.setMinimumHeight(400)  # Altura ajustada
@@ -279,26 +283,78 @@ class DashboardView(QWidget):
     
     def setup_connections(self):
         """Configura conexões com controllers e cards"""
-        # Conectar sinais dos cards
+        # Conectar sinais dos cards (suporta AgendaCard e DynamicEventCard)
         if self.agenda_card:
-            self.agenda_card.navigate_to_detailed_view.connect(
-                self.open_week_event_editor_dialog
-            )
-            self.agenda_card.item_clicked.connect(self.handle_agenda_item_clicked)
-            self.agenda_card.quick_action.connect(self.handle_agenda_quick_action)
-            self.agenda_card.add_event_requested.connect(self.open_event_creation_dialog)
-            
-            # Conectar sinais de sessão de leitura (agora na agenda)
+            # Old AgendaCard signals (backwards compatibility)
+            if hasattr(self.agenda_card, 'navigate_to_detailed_view'):
+                try:
+                    self.agenda_card.navigate_to_detailed_view.connect(self.open_week_event_editor_dialog)
+                except Exception:
+                    pass
+            if hasattr(self.agenda_card, 'item_clicked'):
+                try:
+                    self.agenda_card.item_clicked.connect(self.handle_agenda_item_clicked)
+                except Exception:
+                    pass
+            if hasattr(self.agenda_card, 'quick_action'):
+                try:
+                    self.agenda_card.quick_action.connect(self.handle_agenda_quick_action)
+                except Exception:
+                    pass
+            if hasattr(self.agenda_card, 'add_event_requested'):
+                try:
+                    self.agenda_card.add_event_requested.connect(self.open_event_creation_dialog)
+                except Exception:
+                    pass
+
+            # Reading/session related compatibility
             if hasattr(self.agenda_card, 'start_reading_session'):
-                self.agenda_card.start_reading_session.connect(self.handle_start_session)
+                try:
+                    self.agenda_card.start_reading_session.connect(self.handle_start_session)
+                except Exception:
+                    pass
             if hasattr(self.agenda_card, 'start_review_session'):
-                self.agenda_card.start_review_session.connect(self.handle_start_review_session)
+                try:
+                    self.agenda_card.start_review_session.connect(self.handle_start_review_session)
+                except Exception:
+                    pass
             if hasattr(self.agenda_card, 'start_class_notes'):
-                self.agenda_card.start_class_notes.connect(self.handle_start_class_notes)
+                try:
+                    self.agenda_card.start_class_notes.connect(self.handle_start_class_notes)
+                except Exception:
+                    pass
             if hasattr(self.agenda_card, 'edit_reading_session'):
-                self.agenda_card.edit_reading_session.connect(self.handle_edit_session)
+                try:
+                    self.agenda_card.edit_reading_session.connect(self.handle_edit_session)
+                except Exception:
+                    pass
             if hasattr(self.agenda_card, 'skip_reading_session'):
-                self.agenda_card.skip_reading_session.connect(self.handle_skip_session)
+                try:
+                    self.agenda_card.skip_reading_session.connect(self.handle_skip_session)
+                except Exception:
+                    pass
+
+            # DynamicEventCard signals
+            if hasattr(self.agenda_card, 'navigate_to'):
+                try:
+                    self.agenda_card.navigate_to.connect(lambda dest: self.navigate_to.emit(dest))
+                except Exception:
+                    pass
+            if hasattr(self.agenda_card, 'open_session'):
+                try:
+                    self.agenda_card.open_session.connect(self.handle_start_session)
+                except Exception:
+                    pass
+            if hasattr(self.agenda_card, 'open_class_notes'):
+                try:
+                    self.agenda_card.open_class_notes.connect(self.handle_start_class_notes)
+                except Exception:
+                    pass
+            if hasattr(self.agenda_card, 'open_discipline_chat'):
+                try:
+                    self.agenda_card.open_discipline_chat.connect(self.open_discipline_chat_handler)
+                except Exception:
+                    pass
         
         # Conexões com controllers (se necessário)
         if self.book_controller:
@@ -325,6 +381,24 @@ class DashboardView(QWidget):
                 self.daily_checkin_controller.evening_checkin_needed.connect(self._refresh_checkin_button_state)
             if hasattr(self.daily_checkin_controller, "checkin_completed"):
                 self.daily_checkin_controller.checkin_completed.connect(self._on_checkin_completed)
+
+    def open_discipline_chat_handler(self, discipline: str):
+        """Navigate to discipline chat and try to set active discipline in controllers."""
+        try:
+            # Try to set active discipline on appropriate controllers if supported
+            if self.reading_controller and hasattr(self.reading_controller, 'set_active_discipline'):
+                try:
+                    self.reading_controller.set_active_discipline(discipline)
+                except Exception:
+                    pass
+            if self.vault_controller and hasattr(self.vault_controller, 'set_active_discipline'):
+                try:
+                    self.vault_controller.set_active_discipline(discipline)
+                except Exception:
+                    pass
+        finally:
+            # Navigate to discipline chat view
+            self.navigate_to.emit('discipline_chat')
         
     def show_import_dialog(self, file_path, initial_metadata):
         """Mostrar diálogo de configuração de importação"""
@@ -640,6 +714,7 @@ class DashboardView(QWidget):
                         int(target_pages),
                         agenda_event=session_data if isinstance(session_data, dict) else None,
                         duration_minutes=duration_minutes or None,
+                        pomodoro_profile=(session_data.get("pomodoro_profile") if isinstance(session_data, dict) else None),
                     )
                     logger.info("Sessão de leitura iniciada para livro %s", book_id)
                 else:

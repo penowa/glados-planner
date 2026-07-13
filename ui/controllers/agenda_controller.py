@@ -1110,6 +1110,38 @@ class AgendaController(QObject):
             return {"success": False, "error": str(e), "updated_dates": []}
         return {"success": False, "error": "Agenda indisponível", "updated_dates": []}
 
+    @pyqtSlot(result=dict)
+    def clear_schedule(self) -> Dict:
+        """Remove todos os compromissos não fixos da agenda."""
+        try:
+            if not self.agenda_manager:
+                return {"success": False, "error": "Agenda indisponível"}
+
+            removed_ids = []
+            updated_dates = set()
+            for event_id in list(self.agenda_manager.events.keys()):
+                event = self.agenda_manager.events.get(event_id)
+                if not event:
+                    continue
+
+                if hasattr(event, "is_flexible") and event.is_flexible():
+                    removed_ids.append(event_id)
+                    updated_dates.add(event.start.date().isoformat())
+
+            for event_id in removed_ids:
+                self.agenda_manager.events.pop(event_id, None)
+
+            if removed_ids:
+                self.agenda_manager._save_events()
+                self._invalidate_agenda_cache()
+                for date_str in sorted(updated_dates):
+                    self.load_agenda(date_str)
+
+            return {"success": True, "removed": len(removed_ids)}
+        except Exception as e:
+            logger.error(f"Erro ao limpar agenda: {e}")
+            return {"success": False, "error": str(e)}
+
     @pyqtSlot(object, result=dict)
     def remove_commitment(self, group_key) -> Dict:
         """Remove um compromisso consolidado e reorganiza a agenda."""

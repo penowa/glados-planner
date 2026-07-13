@@ -1547,6 +1547,20 @@ class LibraryView(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
+        disclaimer = (
+            "Este agendamento pode reorganizar sessões de leitura já existentes.\n\n"
+            "Quando o prazo é curto, o sistema pode deslocar leituras com prazo mais folgado "
+            "para encaixar a nova leitura na agenda."
+        )
+        if QMessageBox.question(
+            self,
+            "Aviso de agendamento",
+            disclaimer,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok,
+        ) != QMessageBox.StandardButton.Ok:
+            return
+
         deadline, strategy = dialog.values()
         book_id = self._ensure_book_in_reading_manager(metadata)
 

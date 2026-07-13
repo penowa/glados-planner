@@ -172,6 +172,54 @@ def test_allocate_reading_time_never_places_reading_inside_reserved_blocks(tmp_p
             assert not _overlaps(event.start, event.end, blocked_start, blocked_end)
 
 
+def test_allocate_reading_time_deadline_uses_required_reading_minutes(tmp_path: Path):
+    agenda_manager_cls = _load_agenda_manager_class()
+    manager = agenda_manager_cls(str(tmp_path))
+    manager.reading_manager.progress["book-deadline"] = {
+        "title": "Livro Prazo Curto",
+        "discipline": "Filosofia",
+        "total_pages": 260,
+        "current_page": 0,
+    }
+
+    result = manager.allocate_reading_time(
+        book_id="book-deadline",
+        pages_per_day=0,
+        reading_speed=10.0,
+        strategy="balanced",
+        start_date="2026-07-11",
+        deadline="2026-07-13",
+    )
+
+    assert result.get("success") is True
+    assert result.get("warning") in (None, "")
+    assert result.get("pages_remaining_unscheduled") == 0
+
+    reading_events = [
+        event for event in manager.events.values()
+        if event.book_id == "book-deadline" and event.type.value == "leitura"
+    ]
+    assert reading_events
+
+    total_minutes = sum(int(event.duration_minutes()) for event in reading_events)
+    total_pages = sum(int(event.metadata.get("pages_planned", 0) or 0) for event in reading_events)
+
+    assert total_pages == 260
+    assert total_minutes == 1560
+
+
+def test_deadline_priority_prefers_shorter_deadline(tmp_path: Path):
+    agenda_manager_cls = _load_agenda_manager_class()
+    manager = agenda_manager_cls(str(tmp_path))
+
+    urgent = manager._deadline_priority_for_reading("2026-07-12")
+    relaxed = manager._deadline_priority_for_reading("2026-07-20")
+
+    assert urgent.value >= relaxed.value
+    assert urgent.value == 3
+    assert relaxed.value == 1
+
+
 def test_preference_manager_includes_default_protected_time_blocks(tmp_path: Path):
     preference_manager_cls = _load_preference_manager_class()
     manager = preference_manager_cls(str(tmp_path))

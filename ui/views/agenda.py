@@ -841,21 +841,48 @@ class AgendaView(QWidget):
         if rebalance_result.get("success"):
             moved = int(rebalance_result.get("moved_count", 0) or 0)
             unscheduled = int(rebalance_result.get("unscheduled_count", 0) or 0)
+            moved_events = rebalance_result.get("moved_events") or []
+            detail_text = ""
+            if moved_events:
+                first = moved_events[0] or {}
+                title = str(first.get("title") or "Compromisso").strip()
+                old_start = str(first.get("old_start") or "").replace("T", " ")[:16]
+                new_start = str(first.get("new_start") or "").replace("T", " ")[:16]
+                if old_start and new_start:
+                    detail_text = f" Ex.: {title} saiu de {old_start} para {new_start}."
             if unscheduled > 0:
                 self.status_label.setText(
                     "Agenda reorganizada respeitando horários reservados: "
-                    f"{moved} compromisso(s) redistribuído(s), {unscheduled} sem novo encaixe"
+                    f"{moved} compromisso(s) redistribuído(s), {unscheduled} sem novo encaixe."
+                    f"{detail_text}"
                 )
             else:
                 self.status_label.setText(
                     "Agenda reorganizada respeitando horários reservados: "
-                    f"{moved} compromisso(s) redistribuído(s)"
+                    f"{moved} compromisso(s) redistribuído(s).{detail_text}"
                 )
         elif rebalance_result.get("error"):
             self.status_label.setText("A reorganização falhou, mas a agenda foi recarregada")
         else:
             self.status_label.setText("Agenda atualizada")
         QTimer.singleShot(1800, lambda: self.status_label.setText("Pronto"))
+
+    def _show_reading_scheduling_disclaimer(self) -> bool:
+        disclaimer = (
+            "Este agendamento pode reorganizar sessões de leitura já existentes.\n\n"
+            "Quando o prazo é curto, o sistema pode deslocar leituras com prazo mais folgado "
+            "para encaixar a nova leitura na agenda."
+        )
+        return (
+            QMessageBox.question(
+                self,
+                "Aviso de agendamento",
+                disclaimer,
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok,
+            )
+            == QMessageBox.StandardButton.Ok
+        )
 
     def rebalance_agenda(self):
         self.status_label.setText(
@@ -886,7 +913,7 @@ class AgendaView(QWidget):
         if hasattr(self.controller, "get_routine_preferences"):
             initial = self.controller.get_routine_preferences() or {}
 
-        dialog = RoutineSettingsDialog(initial, self)
+        dialog = RoutineSettingsDialog(initial, self, controller=self.controller)
         if dialog.exec():
             payload = dialog.get_payload()
             if hasattr(self.controller, "update_routine_preferences"):
@@ -1168,9 +1195,10 @@ class AgendaView(QWidget):
 class RoutineSettingsDialog(QDialog):
     """Diálogo para configurar rotina diária e revisão dominical."""
 
-    def __init__(self, initial: Optional[dict] = None, parent=None):
+    def __init__(self, initial: Optional[dict] = None, parent=None, controller=None):
         super().__init__(parent)
         self.initial = initial or {}
+        self.controller = controller
         self.setWindowTitle("Configurações da Rotina")
         self.setModal(True)
         self.setMinimumWidth(420)
@@ -1225,6 +1253,11 @@ class RoutineSettingsDialog(QDialog):
         info.setStyleSheet("color: #9CA3AF;")
         layout.addWidget(info)
 
+        self.clear_schedule_btn = QPushButton(f"{NerdIcons.ERROR} Limpar agenda")
+        self.clear_schedule_btn.setStyleSheet("background: #DC2626; color: #FFFFFF;")
+        self.clear_schedule_btn.clicked.connect(self.clear_schedule)
+        layout.addWidget(self.clear_schedule_btn)
+
         buttons = QHBoxLayout()
         cancel_btn = QPushButton("Cancelar")
         save_btn = QPushButton("Salvar")
@@ -1234,6 +1267,43 @@ class RoutineSettingsDialog(QDialog):
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
         layout.addLayout(buttons)
+
+    def clear_schedule(self):
+        if not self.controller or not hasattr(self.controller, "clear_schedule"):
+            QMessageBox.warning(
+                self,
+                "Limpar agenda indisponível",
+                "O controlador de agenda não oferece suporte a esta ação.",
+            )
+            return
+
+        if QMessageBox.question(
+            self,
+            "Limpar agenda",
+            "Deseja remover todos os compromissos agendados não fixos? Isso manterá sono, refeições, revisão semanal e outros compromissos fixos.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        result = self.controller.clear_schedule()
+        if not isinstance(result, dict) or not result.get("success", False):
+            QMessageBox.warning(
+                self,
+                "Falha ao limpar agenda",
+                str(result.get("error", "Não foi possível limpar a agenda.")),
+            )
+            return
+
+        removed = int(result.get("removed", 0))
+        QMessageBox.information(
+            self,
+            "Agenda limpa",
+            f"{removed} compromissos removidos. Os horários fixos foram preservados.",
+        )
+
+        parent = self.parent()
+        if parent and hasattr(parent, "refresh"):
+            parent.refresh()
 
     def get_payload(self) -> Dict[str, Any]:
         return {
@@ -1411,6 +1481,79 @@ class AddEventDialog(QDialog):
         self.category_widget = type_wrap
         form.addRow(self.category_label, self.category_widget)
 
+        self.reading_group = QGroupBox("Leitura")
+        reading_layout = QFormLayout(self.reading_group)
+        self.book_combo = QComboBox()
+        self.book_combo.setEditable(True)
+        self.book_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.book_combo.addItem("Carregando livros...", None)
+        reading_layout.addRow("Livro:", self.book_combo)
+
+        self.book_info_label = QLabel("")
+        self.book_info_label.setWordWrap(True)
+        self.book_info_label.setStyleSheet("color: #D1D5DB; font-size: 12px;")
+        self.book_info_row = QWidget()
+        book_info_layout = QHBoxLayout(self.book_info_row)
+        book_info_layout.setContentsMargins(0, 0, 0, 0)
+        book_info_layout.addWidget(self.book_info_label)
+        reading_layout.addRow("", self.book_info_row)
+
+        self.reading_option_combo = QComboBox()
+        self.reading_option_combo.addItem("Sessão única neste dia", "single_session")
+        self.reading_option_combo.addItem("Agendar até prazo", "deadline")
+        self.reading_option_combo.addItem("Agendar automaticamente", "auto")
+        self.reading_option_row = QWidget()
+        reading_option_layout = QHBoxLayout(self.reading_option_row)
+        reading_option_layout.setContentsMargins(0, 0, 0, 0)
+        reading_option_layout.addWidget(QLabel("Tipo de leitura:"))
+        reading_option_layout.addWidget(self.reading_option_combo)
+        reading_layout.addRow(self.reading_option_row)
+
+        self.reading_deadline_input = QDateTimeEdit()
+        self.reading_deadline_input.setDate(self.default_date)
+        self.reading_deadline_input.setTime(QTime(18, 0))
+        self.reading_deadline_input.setDisplayFormat("dd/MM/yyyy HH:mm")
+        self.reading_deadline_input.setCalendarPopup(True)
+        self.deadline_row = QWidget()
+        deadline_layout = QHBoxLayout(self.deadline_row)
+        deadline_layout.setContentsMargins(0, 0, 0, 0)
+        deadline_layout.addWidget(QLabel("Data limite:"))
+        deadline_layout.addWidget(self.reading_deadline_input)
+        reading_layout.addRow(self.deadline_row)
+
+        self.session_start_time_input = QTimeEdit()
+        self.session_start_time_input.setDisplayFormat("HH:mm")
+        self.session_start_time_input.setTime(QTime(18, 0))
+        self.session_end_time_input = QTimeEdit()
+        self.session_end_time_input.setDisplayFormat("HH:mm")
+        self.session_end_time_input.setTime(QTime(19, 0))
+        session_time_row = QWidget()
+        session_time_layout = QHBoxLayout(session_time_row)
+        session_time_layout.setContentsMargins(0, 0, 0, 0)
+        session_time_layout.addWidget(QLabel("Início"))
+        session_time_layout.addWidget(self.session_start_time_input)
+        session_time_layout.addWidget(QLabel("Fim"))
+        session_time_layout.addWidget(self.session_end_time_input)
+        self.session_time_row = QWidget()
+        session_time_wrapper = QHBoxLayout(self.session_time_row)
+        session_time_wrapper.setContentsMargins(0, 0, 0, 0)
+        session_time_wrapper.addWidget(QLabel("Horário da sessão:"))
+        session_time_wrapper.addWidget(session_time_row)
+        reading_layout.addRow(self.session_time_row)
+
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.addItem("Balanceado", "balanced")
+        self.strategy_combo.addItem("Intensivo", "intensive")
+        self.strategy_combo.addItem("Espaçado", "spaced")
+        self.strategy_row = QWidget()
+        strategy_layout = QHBoxLayout(self.strategy_row)
+        strategy_layout.setContentsMargins(0, 0, 0, 0)
+        strategy_layout.addWidget(QLabel("Estratégia:"))
+        strategy_layout.addWidget(self.strategy_combo)
+        reading_layout.addRow(self.strategy_row)
+
+        form.addRow(self.reading_group)
+
         self.dissertation_group = QGroupBox("Dissertação")
         dissertation_layout = QFormLayout(self.dissertation_group)
         self.deadline_input = QDateTimeEdit()
@@ -1499,19 +1642,22 @@ class AddEventDialog(QDialog):
         layout.addLayout(buttons)
         self.recurrence_combo.currentIndexChanged.connect(self._update_recurrence_visibility)
         self.type_combo.currentIndexChanged.connect(self._update_event_type_visibility)
+        self.reading_option_combo.currentIndexChanged.connect(self._update_reading_option_visibility)
+        self.book_combo.currentIndexChanged.connect(self._on_book_selected)
         idx = self.type_combo.findText(self.selected_event_type)
         if idx >= 0:
             self.type_combo.setCurrentIndex(idx)
         self._update_recurrence_visibility()
         self._update_event_type_visibility()
+        self._update_reading_option_visibility()
+        self._load_available_books()
 
     def save_event(self):
         title = self.title_input.text().strip()
-        if not title:
+        event_type = self.type_combo.currentText().strip()
+        if event_type != "leitura" and not title:
             QMessageBox.warning(self, "Aviso", "Informe um título para o compromisso.")
             return
-
-        event_type = self.type_combo.currentText().strip()
         is_leisure = event_type == "lazer"
 
         if event_type == "aula":
@@ -1611,6 +1757,69 @@ class AddEventDialog(QDialog):
 
             self.accept()
             return
+
+        if event_type == "leitura":
+            book_id = self.book_combo.currentData()
+            if not book_id:
+                QMessageBox.warning(self, "Aviso", "Selecione um livro para a leitura.")
+                return
+
+            book_title = self.book_combo.currentText().split(" - ", 1)[0].strip() or title
+            if not title:
+                title = f"Leitura: {book_title}"
+
+            reading_option = str(self.reading_option_combo.currentData() or "single_session")
+            if reading_option == "single_session":
+                start_time = self.session_start_time_input.time().toString("HH:mm")
+                end_time = self.session_end_time_input.time().toString("HH:mm")
+                date_str = self.default_date.toString("yyyy-MM-dd")
+                start_dt = datetime.strptime(f"{date_str} {start_time}", "%Y-%m-%d %H:%M")
+                end_dt = datetime.strptime(f"{date_str} {end_time}", "%Y-%m-%d %H:%M")
+                if end_dt <= start_dt:
+                    QMessageBox.warning(self, "Aviso", "O horário de término deve ser posterior ao início.")
+                    return
+
+                payload = {
+                    "title": title,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "event_type": "leitura",
+                    "priority": self._priority_from_value(self.priority_combo.currentText()),
+                    "description": self.description_input.toPlainText().strip(),
+                    "book_id": str(book_id),
+                }
+                event_id = self.controller.add_event(payload) if self.controller and hasattr(self.controller, "add_event") else ""
+                if not event_id:
+                    QMessageBox.warning(self, "Erro", "Não foi possível salvar a sessão de leitura.")
+                    return
+                self.accept()
+                return
+
+            if reading_option in {"deadline", "auto"}:
+                deadline_dt = self.reading_deadline_input.dateTime().toPyDateTime()
+                if reading_option == "deadline" and deadline_dt <= datetime.now():
+                    QMessageBox.warning(self, "Aviso", "A data limite precisa estar no futuro.")
+                    return
+
+                if not self._show_reading_scheduling_disclaimer():
+                    return
+
+                strategy = self.strategy_combo.currentData() or "balanced"
+                start_date = self.default_date.toString("yyyy-MM-dd")
+                operation_id = ""
+                if self.controller and hasattr(self.controller, "schedule_reading"):
+                    operation_id = self.controller.schedule_reading(
+                        str(book_id),
+                        pages_per_day=0.0,
+                        strategy=strategy,
+                        start_date=start_date,
+                        deadline=deadline_dt.date().isoformat() if reading_option == "deadline" else None,
+                    )
+                if not operation_id:
+                    QMessageBox.warning(self, "Erro", "Não foi possível iniciar o agendamento de leitura.")
+                    return
+                self.accept()
+                return
 
         if event_type == "dissertacao":
             deadline_dt = self.deadline_input.dateTime().toPyDateTime()
@@ -1751,9 +1960,11 @@ class AddEventDialog(QDialog):
         self.recurrence_end_date.setVisible(has_recurrence)
 
     def _update_event_type_visibility(self):
-        is_dissertation = self.type_combo.currentText().strip() == "dissertacao"
-        is_class = self.type_combo.currentText().strip() == "aula"
-        is_leisure = self.type_combo.currentText().strip() == "lazer"
+        event_type = self.type_combo.currentText().strip()
+        is_dissertation = event_type == "dissertacao"
+        is_class = event_type == "aula"
+        is_leisure = event_type == "lazer"
+        is_reading = event_type == "leitura"
         show_standard = not is_dissertation and not is_class
 
         self.category_label.setVisible(False)
@@ -1771,6 +1982,7 @@ class AddEventDialog(QDialog):
             checkbox.setVisible(show_recurrence and self.recurrence_combo.currentData() == "weekly")
         self.dissertation_group.setVisible(is_dissertation)
         self.class_group.setVisible(is_class)
+        self.reading_group.setVisible(is_reading)
 
         if is_leisure:
             self.recurrence_combo.setCurrentIndex(0)
@@ -1897,6 +2109,86 @@ class AddEventDialog(QDialog):
 
     def _selected_discipline(self) -> str:
         return self.discipline_input.currentText().strip() if self.discipline_input else ""
+
+    def _priority_from_value(self, value: Any) -> int:
+        priority_map = {
+            "Baixa": 1,
+            "Média": 2,
+            "Alta": 3,
+            "Fixo": 4,
+            "Bloqueio": 5,
+        }
+        return priority_map.get(str(value).strip(), 2)
+
+    def _load_available_books(self):
+        self.book_combo.clear()
+        self.book_combo.addItem("📚 Selecione um livro...", None)
+
+        reading_manager = None
+        if self.controller and getattr(self.controller, "agenda_manager", None):
+            reading_manager = getattr(self.controller.agenda_manager, "reading_manager", None)
+
+        if not reading_manager:
+            return
+
+        try:
+            books = reading_manager.list_books()
+            for book in books:
+                title = book.get("title", "Desconhecido")
+                author = book.get("author", "Autor desconhecido")
+                progress = book.get("current_page", 0)
+                total = book.get("total_pages", 0)
+                label = f"{title} - {author} ({progress}/{total})"
+                self.book_combo.addItem(label, book.get("id"))
+        except Exception as exc:
+            logger.warning(f"Falha ao carregar livros de leitura: {exc}")
+
+    def _on_book_selected(self, index):
+        book_id = self.book_combo.currentData()
+        if not book_id:
+            self.book_info_label.setText("")
+            return
+
+        reading_manager = None
+        if self.controller and getattr(self.controller, "agenda_manager", None):
+            reading_manager = getattr(self.controller.agenda_manager, "reading_manager", None)
+
+        if not reading_manager:
+            self.book_info_label.setText("")
+            return
+
+        try:
+            progress = reading_manager.get_reading_progress(book_id)
+            if not progress:
+                self.book_info_label.setText("")
+                return
+
+            title = progress.get("title", "Desconhecido")
+            current = progress.get("current_page", 0)
+            total = progress.get("total_pages", 0)
+            percentage = progress.get("percentage", 0.0)
+            self.book_info_label.setText(
+                f"<b>{title}</b> — Progresso: {current}/{total} ({percentage:.1f}%)"
+            )
+
+            if not self.title_input.text().strip():
+                self.title_input.setText(f"Leitura: {title}")
+        except Exception:
+            self.book_info_label.setText("")
+
+    def _update_reading_option_visibility(self):
+        is_reading = self.type_combo.currentText().strip() == "leitura"
+        self.reading_group.setVisible(is_reading)
+
+        option = str(self.reading_option_combo.currentData() or "single_session")
+        self.deadline_row.setVisible(option == "deadline")
+        self.session_time_row.setVisible(option == "single_session")
+        self.strategy_row.setVisible(option in {"deadline", "auto"})
+
+        if option == "single_session":
+            self.reading_deadline_input.setVisible(False)
+        else:
+            self.reading_deadline_input.setVisible(True)
 
     def _create_selected_discipline(self):
         name = self._selected_discipline()
