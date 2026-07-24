@@ -7,19 +7,18 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-**Um sistema integrado de gestão acadêmica para estudantes de filosofia**
+**Fiz esse sistema para gerenciar minha carga de leitura na faculdade**
 
-*Organize leituras, agenda, anotações, e gráficos
-*
+*Organize uma biblioteca, agenda, anotações, e gráficos*
 
 </div>
 
-## ✨ Features
+## Features Ferramentas
 
-- 📖 **Gestão de carga de Leituras** - 
-- 🗓️ **Agenda** - Calendário integrado
-- 📝 **Integração Obsidian** - Gerenciador de notas .md
-- 📊 **Estatísticas** - Analytics de produtividade com base em um diário
+- **Gestão de carga de Leituras** - 
+- **Agenda** - Calendário integrado
+- **Integração Obsidian** - Gerenciador de notas .md
+- **Estatísticas** - Analytics de produtividade com base em um diário
 
 ## 🚀 Como instalar
 
