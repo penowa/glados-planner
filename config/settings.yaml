@@ -1,137 +1,41 @@
+# Philosophy Planner - Configuration
+
 app:
-  name: Planner
-  version: 1.0.0
+  name: "Planner"
+  version: "1.0.0"
   debug: true
-  log_level: INFO
+  log_level: "INFO"
+
 paths:
-  vault: ~/Documents/Obsidian/Philosophy_Vault
-  data_dir: /home/penowa/glados-planner/data
-  models_dir: /home/penowa/glados-planner/data/models
-  exports_dir: /home/penowa/glados-planner/data/exports
-  cache_dir: /home/penowa/glados-planner/data/cache
+  vault: "~/Documents/Obsidian/Philosophy_Vault"  # Update this path
+  data_dir: "./data"
+  models_dir: "./data/models"
+  exports_dir: "./data/exports"
+
 database:
-  url: sqlite:////home/penowa/glados-planner/data/database/philosophy.db
+  url: "sqlite:///data/database/philosophy.db"
   echo: false
+
 llm:
-  backend: cloud
-  model_name: philosophy-llama-7b.Q4_K_M.gguf
-  model_path: /home/penowa/glados-planner/data/models/philosophy-llama-7b.Q4_K_M.gguf
-  models_dir: /home/penowa/glados-planner/data/models
+  model_path: "./data/models/philosophy-llama-7b.Q4_K_M.gguf"
   n_ctx: 2048
-  n_gpu_layers: 0
-  use_gpu: true
-  use_cpu: true
-  device_mode: auto
-  gpu_index: 0
-  vram_soft_limit_mb: 0
+  n_gpu_layers: 0  # Set based on your GPU
   temperature: 0.7
   top_p: 0.95
-  repeat_penalty: 1.12
-  max_tokens: 384
-  use_semantic_search: true
-  cpu:
-    threads: 4
-    batch_size: 128
-    use_mlock: true
-  cloud:
-    model: groq/llama-3.1-8b-instant
-    api_key: ''
-    api_base: ''
-    api_version: ''
-    organization: ''
-    timeout_seconds: 120
-    max_retries: 1
-  glados:
-    user_name: Pindarolas
-    glados_name: GLaDOS
-    personality_profile: auto
-    gender: feminino
-    personality_intensity: 0.7
-    enable_sarcasm: true
-    enable_brain_metaphor: true
-    area_behavior:
-      meta:
-        sarcasm_level: 0.5
-        formality: 0.8
-      leituras:
-        sarcasm_level: 0.5
-        formality: 0.8
-      conceitos:
-        sarcasm_level: 0.5
-        formality: 0.8
-      disciplinas:
-        sarcasm_level: 0.5
-        formality: 0.8
-      pessoal:
-        sarcasm_level: 0.5
-        formality: 0.8
-      geral:
-        sarcasm_level: 0.5
-        formality: 0.8
-    response:
-      include_intro_comment: true
-      include_signature: true
-      max_response_length: 1000
+
 obsidian:
-  templates_dir: ./config/templates
+  templates_dir: "./config/templates"
   auto_sync: true
-  sync_interval: 300
-  vault_structure: []
-  brain_regions: {}
+  sync_interval: 300  # seconds
+
 pomodoro:
   work_duration: 25
   short_break: 5
   long_break: 15
   sessions_before_long_break: 4
+
 features:
   enable_llm: true
   enable_obsidian_sync: true
   enable_pomodoro: true
   enable_translation: false
-  enable_glados_personality: true
-  enable_vault_as_brain: true
-review_view:
-  question_prompt_enabled: true
-  question_interval_minutes: 10
-  arrow_pan_step: 130
-zathura:
-  enabled: true
-  preset: classic
-  binary: zathura
-  config_dir: ~/.config/zathura
-  config_file: ~/.config/zathura/zathurarc
-  data_dir: ~/.local/share/zathura
-  cache_dir: ~/.cache/zathura
-  plugin_path: ''
-  sync_to_zathurarc: true
-  theme_mode: plain
-  pywal_generator: genzathurarc
-  pywal_colors_file: ~/.cache/wal/colors.sh
-  generated_theme_file: ~/.config/zathura/glados-theme.zathurarc
-  custom_theme_include_file: ''
-  selection_clipboard: clipboard
-  statusbar_basename: true
-  window_title_home_tilde: true
-  recolor: false
-  session_open_mode: fullscreen
-  session_use_fork: true
-  capture_enabled: true
-  capture_keybinding: <C-g>
-  capture_script_file: ~/.local/share/zathura/glados-zathura-capture.sh
-  capture_events_file: ~/.local/share/zathura/glados-captures.jsonl
-  capture_images_dir: ~/.local/share/zathura/glados-captures
-  capture_ocr_language: por+eng
-  capture_notify: true
-  extra_options: {}
-  include_files: []
-  keymaps: []
-  extra_config: ''
-cache:
-  enabled: true
-  max_size: 100
-  ttl: 3600
-  preload_vault: false
-development:
-  log_llm_prompts: false
-  log_vault_access: false
-  simulate_llm: false
