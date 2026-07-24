@@ -1,4 +1,4 @@
-# 📚 Philosophy Planner
+# 📚 Meu Assistente de Notas - MAN
 
 <div align="center">
 
@@ -9,33 +9,31 @@
 
 **Um sistema integrado de gestão acadêmica para estudantes de filosofia**
 
-*Organize leituras, agenda, anotações e análises com IA local*
+*Organize leituras, agenda, anotações, e gráficos
+*
 
 </div>
 
 ## ✨ Features
 
-- 📖 **Gestão Inteligente de Leituras** - Cronograma, progresso, revisão espaçada
-- 🗓️ **Agenda Filosófica** - Calendário acadêmico integrado
-- 🧠 **Assistente LLM Local** - Análise de textos com modelos privados
-- 📝 **Integração Obsidian** - Sincronia bidirecional com seu vault
-- ⏱️ **Pomodoro Filosófico** - Foco com citações inspiradoras
-- 🌐 **Tradução & Glossário** - Termos técnicos em grego/alemão
-- 📊 **Estatísticas** - Analytics de produtividade e aprendizado
+- 📖 **Gestão de carga de Leituras** - 
+- 🗓️ **Agenda** - Calendário integrado
+- 📝 **Integração Obsidian** - Gerenciador de notas .md
+- 📊 **Estatísticas** - Analytics de produtividade com base em um diário
 
-## 🚀 Quick Start
+## 🚀 Como instalar
 
 ### Pré-requisitos
-- Arch Linux (otimizado para Hyprland/Wayland)
+- Até hoje só usei no Arch Linux (otimizado para Hyprland/Wayland)
 - Python 3.11+
-- Obsidian (opcional, mas recomendado)
+- Obsidian (opcional, mas recomendo)
 
 ### Instalação
 
 ```bash
 # Clone o repositório
 git clone https://github.com/seu-usuario/philosophy-planner.git
-cd philosophy-planner
+cd glados-planner
 
 # Configure o ambiente
 chmod +x setup.sh
@@ -46,8 +44,9 @@ source venv/bin/activate  # bash/zsh
 # ou
 source venv/bin/activate.fish  # fish
 
-# Instale dependências
-pip install -r requirements.txt
+# Tem alguns scripts com algumas ferramentas úteis
+cd scripts/
+
 
 # Configure seu ambiente
 cp .env.example .env
