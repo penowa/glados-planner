@@ -31,7 +31,7 @@
 
 ```bash
 # Clone o repositório
-git clone https://github.com/seu-usuario/philosophy-planner.git
+git clone https://github.com/penowa/glados-planner.git
 cd glados-planner
 
 # Configure o ambiente
