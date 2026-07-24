@@ -20,7 +20,7 @@
 - **Integração Obsidian** - Gerenciador de notas .md
 - **Estatísticas** - Analytics de produtividade com base em um diário
 
-## 🚀 Como instalar
+## Como instalar
 
 ### Pré-requisitos
 - Até hoje só usei no Arch Linux (otimizado para Hyprland/Wayland)

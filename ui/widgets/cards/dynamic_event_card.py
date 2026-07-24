@@ -6,12 +6,12 @@ from datetime import datetime, timedelta, date
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF, QPropertyAnimation
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF, QPropertyAnimation, QEvent
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGridLayout, QSizePolicy, QFrame,
-    QMenu, QGraphicsOpacityEffect,
+    QMenu, QGraphicsOpacityEffect, QScrollBar, QTextBrowser, QApplication,
 )
 
 from ui.utils.nerd_icons import NerdIcons, nerd_font
@@ -20,6 +20,12 @@ from ui.utils.config_manager import ConfigManager
 from ui.utils import book_helpers
 
 logger = logging.getLogger("GLaDOS.UI.DynamicEventCard")
+AULAS_AUTHOR = "Aulas"
+
+try:
+    from core.config.settings import settings as core_settings
+except Exception:
+    core_settings = None
 
 
 class LeituraProgressRing(QWidget):
@@ -202,14 +208,40 @@ class DynamicEventCard(QWidget):
         self.vault_controller = vault_controller
         self.config_manager = ConfigManager.instance()
 
-        self._current_state = "base"  # base | aula | leitura
+        self._current_state = "base"  # base | aula | intervalo | leitura
         self._current_event = None
         self._is_updating = False
         self._leitura_pomodoro_profiles = []
         self._selected_leitura_pomodoro_profile_id = ""
+        self._assistant_name_override = ""
+        self._user_name_override = ""
+        self._intervalo_library_mode = "livros"
+        self._intervalo_books_cache: list[dict] = []
+        self._intervalo_visible_slots = 6
+        self._intervalo_scroll_offset = 0
+        self._intervalo_all_books: list[dict] = []
+        self._intervalo_chat_messages: list[dict] = []
+        self._intervalo_chat_full_text = ""
+        self._intervalo_chat_index = 0
+        self._intervalo_chat_active = False
+        self._intervalo_input_buffer = ""
+        self._intervalo_chat_cursor_visible = True
+        self._intervalo_assistant_reply_index = 0
+        self._intervalo_pending_assistant_message: dict | None = None
+        self._base_rendered = False
+        self._intervalo_chat_started_at: datetime | None = None
 
         self._build_ui()
         self._connect_signals()
+        self._intervalo_chat_timer = QTimer(self)
+        self._intervalo_chat_timer.setInterval(120)
+        self._intervalo_chat_timer.timeout.connect(self._advance_intervalo_chat_typing)
+        self._intervalo_cursor_timer = QTimer(self)
+        self._intervalo_cursor_timer.setInterval(500)
+        self._intervalo_cursor_timer.timeout.connect(self._toggle_intervalo_chat_cursor)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_state)
@@ -226,26 +258,48 @@ class DynamicEventCard(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+        self.setStyleSheet("background: transparent;")
 
         self.stack = QStackedWidget()
+        self.stack.setStyleSheet("background: transparent;")
 
-        # Base page
+        # Base page now hosts the interval state
         self.base_page = QWidget()
+        self.base_page.setStyleSheet("background: transparent;")
         b_layout = QVBoxLayout(self.base_page)
         b_layout.setContentsMargins(12, 12, 12, 12)
-        title = QLabel(f"{NerdIcons.CALENDAR} Resumo da Semana")
-        title.setFont(nerd_font(12, weight=600))
-        b_layout.addWidget(title)
+        b_layout.setSpacing(0)
 
-        stats_row = QHBoxLayout()
-        self.reading_hours_label = QLabel("📚 0h de leitura")
-        self.mood_avg_label = QLabel("🙂 Humor 0.0/5")
-        stats_row.addWidget(self.reading_hours_label)
-        stats_row.addStretch()
-        stats_row.addWidget(self.mood_avg_label)
-        b_layout.addLayout(stats_row)
+        self.intervalo_terminal_frame = QFrame()
+        self.intervalo_terminal_frame.setObjectName("intervalo_terminal_frame")
+        self.intervalo_terminal_frame.setStyleSheet(
+            "QFrame#intervalo_terminal_frame { background: transparent; border: 1px solid rgba(42, 52, 64, 0.75); border-radius: 18px; }"
+        )
+        terminal_layout = QVBoxLayout(self.intervalo_terminal_frame)
+        terminal_layout.setContentsMargins(16, 14, 16, 14)
+        terminal_layout.setSpacing(0)
 
-        self.base_page.setLayout(b_layout)
+        self.intervalo_text_panel = QWidget()
+        right_layout = QVBoxLayout(self.intervalo_text_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(4)
+
+        self.intervalo_chat_view = QTextBrowser()
+        self.intervalo_chat_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.intervalo_chat_view.setStyleSheet(
+            "QTextBrowser { background: transparent; border: none; color: #D7DCE6; padding: 0; }"
+        )
+        self.intervalo_chat_view.setFont(nerd_font(10))
+        self.intervalo_chat_view.setMinimumHeight(280)
+        self.intervalo_chat_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.intervalo_chat_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.intervalo_chat_view.setOpenExternalLinks(False)
+        self.intervalo_chat_view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.intervalo_chat_view.installEventFilter(self)
+        right_layout.addWidget(self.intervalo_chat_view, 1)
+
+        terminal_layout.addWidget(self.intervalo_text_panel, 1)
+        b_layout.addWidget(self.intervalo_terminal_frame, 1)
 
         # Aula page
         self.aula_page = QWidget()
@@ -419,6 +473,7 @@ class DynamicEventCard(QWidget):
         self.a_open_chat_btn.clicked.connect(self._emit_open_chat)
         self.leitura_start_btn.clicked.connect(self._emit_open_session)
         self.leitura_pomodoro_profile_button.clicked.connect(self._show_leitura_pomodoro_profiles_menu)
+        self._set_intervalo_library_mode(self._intervalo_library_mode)
 
     def _update_state(self):
         # prevent re-entrant updates triggered by signals during data access
@@ -481,13 +536,19 @@ class DynamicEventCard(QWidget):
 
         new_state = 'base'
         if chosen:
-            etype = str(chosen.get('type') or '').strip().lower()
-            if etype in {'aula'}:
+            etype = self._normalized_event_type(chosen)
+            if etype == 'aula':
                 new_state = 'aula'
-            elif etype in {'leitura'}:
+            elif etype == 'intervalo':
+                new_state = 'intervalo'
+            elif etype == 'leitura':
                 new_state = 'leitura'
 
         if new_state == self._current_state and chosen == self._current_event:
+            if new_state == "base" and not self._base_rendered:
+                self._render_base()
+            if new_state == "intervalo":
+                self._refresh_intervalo_library_content()
             return
 
         self._current_state = new_state
@@ -499,52 +560,687 @@ class DynamicEventCard(QWidget):
         elif new_state == 'aula':
             self._render_aula(chosen)
             self.stack.setCurrentWidget(self.aula_page)
+        elif new_state == 'intervalo':
+            self._render_intervalo(chosen)
+            self.stack.setCurrentWidget(self.base_page)
         elif new_state == 'leitura':
             self._render_leitura(chosen)
             self.stack.setCurrentWidget(self.leitura_page)
 
     def _render_base(self):
-        # compute reading hours last 7 days
-        hours = 0.0
-        mood_avg = 0.0
+        self._base_rendered = True
+        self._render_intervalo(self._current_event)
+
+    def _progress_value(self, progress, key: str, default=None):
+        if isinstance(progress, dict):
+            return progress.get(key, default)
+        return getattr(progress, key, default)
+
+    def _parse_datetime_value(self, value) -> datetime | None:
+        if not value:
+            return None
         try:
-            if self.reading_controller and hasattr(self.reading_controller, 'reading_manager') and hasattr(self.reading_controller.reading_manager, 'get_reading_progress'):
-                prog = self.reading_controller.reading_manager.get_reading_progress() or []
-                # prog may be list of dicts with duration_minutes and last_read
-                total_minutes = 0
-                cutoff = datetime.now() - timedelta(days=7)
-                for item in prog:
-                    try:
-                        lm = item.get('last_read') or item.get('updated_at')
-                        if lm:
-                            lm_dt = datetime.fromisoformat(str(lm))
-                            if lm_dt >= cutoff:
-                                total_minutes += int(item.get('duration_minutes', 0))
-                    except Exception:
-                        continue
-                hours = total_minutes / 60.0
-
-            if self.daily_checkin_controller and hasattr(self.daily_checkin_controller, 'get_checkins'):
-                checkins = self.daily_checkin_controller.get_checkins() or []
-                cutoff = datetime.now() - timedelta(days=7)
-                scores = []
-                for c in checkins:
-                    try:
-                        t = c.get('timestamp') or c.get('created_at') or c.get('date')
-                        if not t:
-                            continue
-                        t_dt = datetime.fromisoformat(str(t))
-                        if t_dt >= cutoff and 'mood_score' in c:
-                            scores.append(float(c.get('mood_score', 0)))
-                    except Exception:
-                        continue
-                if scores:
-                    mood_avg = sum(scores) / len(scores)
+            text = str(value).strip()
+            if not text:
+                return None
+            return datetime.fromisoformat(text.replace('Z', '+00:00'))
         except Exception:
-            logger.exception('Erro ao calcular estatísticas base')
+            return None
 
-        self.reading_hours_label.setText(f"📚 {hours:.1f}h de leitura")
-        self.mood_avg_label.setText(f"🙂 Humor {mood_avg:.1f}/5")
+    def _normalized_event_type(self, event: dict | None) -> str:
+        if not isinstance(event, dict):
+            return ""
+
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        candidates = [
+            event.get("type"),
+            event.get("event_type"),
+            event.get("state"),
+            event.get("subtype"),
+            metadata.get("type"),
+            metadata.get("event_type"),
+            metadata.get("state"),
+            metadata.get("subtype"),
+        ]
+
+        normalized = ""
+        for raw_value in candidates:
+            normalized = str(raw_value or "").strip().lower()
+            if normalized:
+                break
+
+        if not normalized:
+            return ""
+
+        aliases = {
+            "aula": "aula",
+            "aulas": "aula",
+            "class": "aula",
+            "lecture": "aula",
+            "leitura": "leitura",
+            "reading": "leitura",
+            "intervalo": "intervalo",
+            "interval": "intervalo",
+            "pausa": "intervalo",
+            "pause": "intervalo",
+            "break": "intervalo",
+            "interlude": "intervalo",
+        }
+        return aliases.get(normalized, normalized)
+
+    def _assistant_display_name(self) -> str:
+        if self._assistant_name_override.strip():
+            return self._assistant_name_override.strip()
+        try:
+            if core_settings and getattr(core_settings, "llm", None) and getattr(core_settings.llm, "glados", None):
+                configured = str(core_settings.llm.glados.glados_name or "").strip()
+                if configured:
+                    return configured
+        except Exception:
+            pass
+        return "GLaDOS"
+
+    def _user_display_name(self) -> str:
+        if self._user_name_override.strip():
+            return self._user_name_override.strip()
+        try:
+            if core_settings and getattr(core_settings, "llm", None) and getattr(core_settings.llm, "glados", None):
+                configured = str(core_settings.llm.glados.user_name or "").strip()
+                if configured:
+                    return configured
+        except Exception:
+            pass
+        return "Usuário"
+
+    def eventFilter(self, watched, event):
+        if self._current_state == "intervalo" and event.type() == QEvent.Type.KeyPress:
+            if self._handle_intervalo_keypress(event):
+                return True
+        return super().eventFilter(watched, event)
+
+    def update_identity(self, user_name: str | None = None, assistant_name: str | None = None):
+        if user_name is not None:
+            normalized_user = str(user_name).strip()
+            if normalized_user:
+                self._user_name_override = normalized_user
+        if assistant_name is not None:
+            normalized = str(assistant_name).strip()
+            if normalized:
+                self._assistant_name_override = normalized
+        if self._current_state == "intervalo":
+            self._render_intervalo(self._current_event)
+
+    def _set_intervalo_library_mode(self, mode: str):
+        normalized = "aulas" if str(mode).strip().lower() == "aulas" else "livros"
+        self._intervalo_library_mode = normalized
+        for current_mode, button in getattr(self, "intervalo_mode_buttons", {}).items():
+            button.setChecked(current_mode == normalized)
+            button.setProperty("activeFilter", "true" if current_mode == normalized else "false")
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
+        self._refresh_intervalo_library_content()
+
+    def _intervalo_book_sort_key(self, item: dict):
+        last_read = item.get("last_read") or item.get("last_activity") or item.get("registered_at")
+        ts = last_read.timestamp() if isinstance(last_read, datetime) else 0.0
+        return (ts, str(item.get("title", "")).lower())
+
+    def _books_roots(self) -> list[Path]:
+        roots: list[Path] = []
+        seen: set[Path] = set()
+        vault_paths: list[Path] = []
+
+        if self.reading_controller and getattr(self.reading_controller, "reading_manager", None):
+            vault_paths.append(Path(self.reading_controller.reading_manager.vault_path))
+        if self.book_controller and getattr(self.book_controller, "vault_manager", None):
+            vault_paths.append(Path(self.book_controller.vault_manager.vault_path))
+        if core_settings:
+            settings_vault = str(getattr(getattr(core_settings, "paths", None), "vault", "") or "").strip()
+            if settings_vault:
+                vault_paths.append(Path(settings_vault).expanduser())
+        vault_paths.append(Path.home() / "Documentos" / "Obsidian" / "Planner")
+        vault_paths.append(Path.home() / "Documents" / "Obsidian" / "Planner")
+        vault_paths.append(Path.home() / "Obsidian" / "Planner")
+
+        unique_vault_paths: list[Path] = []
+        seen_vaults: set[Path] = set()
+        for vault_path in vault_paths:
+            resolved = Path(vault_path).expanduser().resolve(strict=False)
+            if resolved not in seen_vaults:
+                seen_vaults.add(resolved)
+                unique_vault_paths.append(resolved)
+
+        for vault_path in unique_vault_paths:
+            for folder_name in ("01-LEITURAS", "01- LEITURAS"):
+                candidate = (vault_path / folder_name).resolve(strict=False)
+                if candidate.exists() and candidate.is_dir() and candidate not in seen:
+                    seen.add(candidate)
+                    roots.append(candidate)
+        return roots
+
+    def _vault_root(self) -> Path | None:
+        roots = self._books_roots()
+        return roots[0].parent if roots else None
+
+    def _find_cover_file(self, book_dir: Path) -> Path | None:
+        preferred = [book_dir / "cover.png", book_dir / "capa.png"]
+        for candidate in preferred:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        try:
+            found = book_helpers.find_cover_file(book_dir)
+            if found:
+                found_path = Path(found)
+                if found_path.exists() and found_path.is_file():
+                    return found_path
+        except Exception:
+            pass
+        return None
+
+    def _create_blank_cover(self, cover_path: Path, title: str) -> None:
+        pixmap = QPixmap(680, 920)
+        pixmap.fill(QColor("#FFFFFF"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        frame_rect = pixmap.rect().adjusted(18, 18, -18, -18)
+        painter.setPen(QColor("#C6CDD6"))
+        painter.drawRoundedRect(frame_rect, 20, 20)
+
+        title_rect = frame_rect.adjusted(50, 80, -50, -80)
+        painter.setPen(QColor("#1F2933"))
+        painter.setFont(QFont("Georgia", 44, QFont.Weight.Bold))
+        text_flags = int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap)
+        painter.drawText(title_rect, text_flags, str(title or "Livro"))
+        painter.end()
+        pixmap.save(str(cover_path), "PNG")
+
+    def _ensure_cover_file(self, book_dir: Path, title: str) -> Optional[Path]:
+        cover_path = self._find_cover_file(book_dir)
+        if cover_path:
+            return cover_path
+        generated_cover = book_dir / "cover.png"
+        try:
+            self._create_blank_cover(generated_cover, title)
+            if generated_cover.exists() and generated_cover.is_file():
+                return generated_cover
+        except Exception as exc:
+            logger.warning("Falha ao gerar capa placeholder para %s: %s", book_dir, exc)
+        return None
+
+    def _resolve_book_metadata(self, book_dir: Path) -> dict:
+        metadata = book_helpers.load_book_metadata(book_dir) or {}
+        title = str(metadata.get("title") or book_dir.name).strip()
+        author = str(metadata.get("author") or (book_dir.parent.name if book_dir.parent else "Desconhecido")).strip()
+
+        try:
+            note_props = book_helpers.load_book_note_properties(book_dir, title=title) or {}
+        except Exception:
+            note_props = {}
+
+        if note_props:
+            title = str(note_props.get("title") or title).strip()
+            author = str(note_props.get("author") or author).strip()
+            total_pages = int(note_props.get("total_pages", metadata.get("total_pages", 0)) or 0)
+        else:
+            total_pages = int(metadata.get("total_pages", 0) or 0)
+
+        return {
+            "title": title,
+            "author": author,
+            "total_pages": total_pages,
+        }
+
+    def _reading_progress_for_book(self, book_id: str, title: str = "", author: str = "") -> dict:
+        progress_data = {
+            "percent": 0.0,
+            "completed": False,
+            "current_page": 0,
+            "total_pages": 0,
+            "last_activity": None,
+            "registered_at": None,
+        }
+        manager = getattr(self.reading_controller, "reading_manager", None)
+        if not manager:
+            return progress_data
+
+        entry = getattr(manager, "readings", {}).get(str(book_id or "").strip())
+        if not entry and not book_id and title and author:
+            for candidate_id, candidate in getattr(manager, "readings", {}).items():
+                if str(getattr(candidate, "title", "")).strip().casefold() == title.strip().casefold() and str(getattr(candidate, "author", "")).strip().casefold() == author.strip().casefold():
+                    entry = candidate
+                    book_id = candidate_id
+                    break
+
+        if not entry:
+            return progress_data
+
+        total_pages = max(int(getattr(entry, "total_pages", 0) or 0), 1)
+        current_page = max(int(getattr(entry, "current_page", 0) or 0), 0)
+        progress_data["percent"] = max(0.0, min(100.0, (current_page / total_pages) * 100.0))
+        progress_data["completed"] = current_page >= total_pages and total_pages > 0
+        progress_data["current_page"] = current_page
+        progress_data["total_pages"] = total_pages
+        progress_data["last_activity"] = self._parse_datetime_value(getattr(entry, "last_read", "") or "")
+        progress_data["registered_at"] = self._parse_datetime_value(getattr(entry, "start_date", "") or "")
+        return progress_data
+
+    def _collect_intervalo_books(self) -> list[dict]:
+        books: list[dict] = []
+        for root in self._books_roots():
+            if not root.exists() or not root.is_dir():
+                continue
+            for author_dir in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                if not author_dir.is_dir():
+                    continue
+                for book_dir in sorted(author_dir.iterdir(), key=lambda p: p.name.lower()):
+                    if not book_dir.is_dir():
+                        continue
+                    metadata = self._resolve_book_metadata(book_dir)
+                    cover_path = self._ensure_cover_file(book_dir, metadata["title"])
+                    if not cover_path:
+                        continue
+                    book_id = ""
+                    try:
+                        note_props = book_helpers.load_book_note_properties(book_dir, title=metadata["title"])
+                        book_id = str(note_props.get("book_id") or "").strip()
+                    except Exception:
+                        note_props = {}
+
+                    progress = self._reading_progress_for_book(book_id, title=metadata["title"], author=metadata["author"])
+                    last_read = progress["last_activity"] or progress["registered_at"]
+
+                    books.append(
+                        {
+                            "book_id": book_id,
+                            "title": metadata["title"],
+                            "author": metadata["author"],
+                            "book_dir": book_dir,
+                            "cover_path": cover_path,
+                            "current_page": progress["current_page"],
+                            "total_pages": max(int(progress["total_pages"] or metadata["total_pages"] or 0), 0),
+                            "last_read": last_read,
+                            "registered_at": progress["registered_at"],
+                            "source_file": "",
+                            "is_aulas": metadata["author"].casefold() == AULAS_AUTHOR.casefold(),
+                        }
+                    )
+
+        books.sort(key=self._intervalo_book_sort_key, reverse=True)
+        return books
+
+    def _configure_intervalo_scrollbar(self, books_count: int) -> None:
+        if not hasattr(self, "intervalo_scrollbar"):
+            return
+        if books_count <= 0:
+            self.intervalo_scrollbar.setEnabled(False)
+            self.intervalo_scrollbar.setRange(0, 0)
+            self.intervalo_scrollbar.setValue(0)
+            return
+        self.intervalo_scrollbar.setEnabled(True)
+        self.intervalo_scrollbar.setRange(0, 1000000)
+        self.intervalo_scrollbar.setPageStep(self._intervalo_visible_slots)
+        self.intervalo_scrollbar.setSingleStep(1)
+        current_value = max(0, min(self.intervalo_scrollbar.value(), self.intervalo_scrollbar.maximum()))
+        self.intervalo_scrollbar.blockSignals(True)
+        self.intervalo_scrollbar.setValue(current_value)
+        self.intervalo_scrollbar.blockSignals(False)
+
+    def _on_intervalo_scroll_changed(self, value: int) -> None:
+        self._intervalo_scroll_offset = max(0, int(value or 0))
+        if self._current_state == "intervalo":
+            self._refresh_intervalo_library_content()
+
+    def _mini_cover_pixmap(self, cover_path: Path | None, title: str, size: tuple[int, int]) -> QPixmap:
+        width, height = size
+        if cover_path and cover_path.exists():
+            pixmap = QPixmap(str(cover_path))
+            if not pixmap.isNull():
+                return pixmap.scaled(
+                    width,
+                    height,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor("#1E2734"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#141A23"), 2))
+        painter.setBrush(QColor("#263142"))
+        painter.drawRoundedRect(pixmap.rect().adjusted(1, 1, -1, -1), 8, 8)
+        painter.setPen(QColor("#E8EDF5"))
+        font = QFont("Sans Serif", max(10, int(min(width, height) * 0.18)), QFont.Weight.Bold)
+        painter.setFont(font)
+        initials = "".join(part[0] for part in str(title or "Livro").split()[:2] if part).upper() or "BK"
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+        painter.end()
+        return pixmap
+
+    def _build_intervalo_card(self, book: dict, list_mode: bool = False) -> QWidget:
+        card = QFrame()
+        card.setObjectName("intervalo_book_card")
+        card.setStyleSheet(
+            "QFrame#intervalo_book_card { border: 1px solid #32404F; border-radius: 8px; background: #1A2230; }"
+        )
+        card_layout = QHBoxLayout(card) if list_mode else QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 8, 8, 8)
+        card_layout.setSpacing(8)
+
+        cover_size = (48, 68) if list_mode else (104, 144)
+        cover_label = QLabel()
+        cover_label.setObjectName("intervalo_cover_tile")
+        cover_label.setFixedSize(*cover_size)
+        cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_label.setPixmap(self._mini_cover_pixmap(book.get("cover_path"), book.get("title", "Livro"), cover_size))
+        cover_label.setStyleSheet("background: #0F141B; border: 1px solid #11161F; border-radius: 8px;")
+
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(3)
+
+        title_label = QLabel(str(book.get("title") or "Livro"))
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet("color: #F2F5FA; font-weight: 600; font-size: 11px;")
+        author_label = QLabel(str(book.get("author") or "Desconhecido"))
+        author_label.setWordWrap(True)
+        author_label.setStyleSheet("color: #9AA7BB; font-size: 10px;")
+        details_layout.addWidget(title_label)
+        details_layout.addWidget(author_label)
+
+        if list_mode:
+            total_pages = int(book.get("total_pages") or 0)
+            progress_label = QLabel(f"p. {int(book.get('current_page') or 0)}/{total_pages if total_pages > 0 else '—'}")
+            progress_label.setStyleSheet("color: #6EA8FF; font-size: 10px;")
+            details_layout.addWidget(progress_label)
+            card_layout.addWidget(cover_label)
+            card_layout.addWidget(details, 1)
+        else:
+            card_layout.addWidget(cover_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+            card_layout.addWidget(details)
+
+        return card
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+    def _refresh_intervalo_library_content(self):
+        if not hasattr(self, "intervalo_books_layout"):
+            return
+
+        self._clear_layout(self.intervalo_books_layout)
+        books = self._collect_intervalo_books()
+        aulas_mode = self._intervalo_library_mode == "aulas"
+
+        if aulas_mode:
+            books = [book for book in books if book.get("is_aulas")]
+        else:
+            books = [book for book in books if not book.get("is_aulas")]
+
+        self._intervalo_all_books = books
+        self._configure_intervalo_scrollbar(len(books))
+
+        if not books:
+            if self.intervalo_empty_label:
+                self.intervalo_empty_label.setVisible(True)
+                if aulas_mode:
+                    self.intervalo_empty_label.setText("Nenhum livro de Aulas encontrado.")
+                else:
+                    self.intervalo_empty_label.setText("Nenhum livro recente encontrado.")
+            return
+
+        if self.intervalo_empty_label:
+            self.intervalo_empty_label.setVisible(False)
+
+        total_books = len(books)
+        window_size = self._intervalo_visible_slots
+        start_index = self._intervalo_scroll_offset % total_books
+        window_books = [books[(start_index + offset) % total_books] for offset in range(window_size)]
+
+        for index, book in enumerate(window_books):
+            row = index // 3
+            col = index % 3
+            tile = self._build_intervalo_cover_tile(book)
+            self.intervalo_books_layout.addWidget(tile, row, col, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def _render_intervalo(self, event):
+        assistant_name = self._assistant_display_name()
+        user_name = self._user_display_name()
+
+        self._intervalo_books_cache = self._collect_intervalo_books()
+        self._refresh_intervalo_library_content()
+        self._start_intervalo_chat_animation(user_name, assistant_name)
+        if hasattr(self, "intervalo_chat_view"):
+            self.intervalo_chat_view.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _start_intervalo_chat_animation(self, user_name: str, assistant_name: str):
+        if not hasattr(self, "intervalo_chat_view"):
+            return
+
+        self._intervalo_input_buffer = ""
+        self._intervalo_chat_cursor_visible = True
+        self._intervalo_chat_messages = []
+        self._intervalo_assistant_reply_index = 0
+        self._intervalo_chat_started_at = datetime.now()
+        assistant_text = (
+            "Sessão iniciada. Estou organizando suas leituras e preparando o próximo bloco de citações. "
+            "Se quiser, já pode escrever."
+        )
+
+        self._intervalo_chat_messages = []
+        self._intervalo_chat_full_text = assistant_text
+        self._intervalo_chat_index = 0
+        self._intervalo_chat_active = True
+        self._intervalo_pending_assistant_message = {"name": assistant_name, "text": assistant_text}
+        self._render_intervalo_chat()
+        if hasattr(self, "_intervalo_chat_timer") and self._intervalo_chat_timer.isActive():
+            self._intervalo_chat_timer.stop()
+        self._intervalo_chat_timer.start()
+        if hasattr(self, "_intervalo_cursor_timer") and not self._intervalo_cursor_timer.isActive():
+            self._intervalo_cursor_timer.start()
+
+    def _render_intervalo_chat(self):
+        if not hasattr(self, "intervalo_chat_view"):
+            return
+
+        self.intervalo_chat_view.setHtml(self._build_intervalo_chat_html())
+        scrollbar = self.intervalo_chat_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+        if self._intervalo_chat_index >= len(self._intervalo_chat_full_text):
+            self._intervalo_chat_active = False
+            if self._intervalo_pending_assistant_message:
+                self._intervalo_chat_messages.append(
+                    {
+                        "role": "assistant",
+                        "html": (
+                            self._build_terminal_line(
+                                self._intervalo_pending_assistant_message.get("name", self._assistant_display_name()),
+                                self._intervalo_pending_assistant_message.get("text", ""),
+                                color="#FFB347",
+                                timestamp=self._terminal_timestamp(),
+                            )
+                        ),
+                    }
+                )
+                self._intervalo_pending_assistant_message = None
+                self._intervalo_chat_full_text = ""
+                self._intervalo_chat_index = 0
+            if hasattr(self, "_intervalo_chat_timer"):
+                self._intervalo_chat_timer.stop()
+            self.intervalo_chat_view.setHtml(self._build_intervalo_chat_html())
+            scrollbar = self.intervalo_chat_view.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def _build_intervalo_chat_html(self) -> str:
+        assistant_name = self._assistant_display_name()
+        visible_text = self._intervalo_chat_full_text[: self._intervalo_chat_index]
+        if self._intervalo_chat_index < len(self._intervalo_chat_full_text):
+            visible_text += "▌"
+
+        assistant_line = self._build_terminal_line(
+            assistant_name,
+            visible_text,
+            color="#FFB347",
+            timestamp=self._terminal_timestamp(),
+        )
+
+        parts = []
+        if self._intervalo_chat_started_at is not None:
+            parts.append(self._build_terminal_banner())
+        for message in self._intervalo_chat_messages:
+            parts.append(f'<div style="margin-bottom:6px;">{message["html"]}</div>')
+        if self._intervalo_chat_active or self._intervalo_chat_full_text:
+            parts.append(f'<div style="margin-bottom:6px;">{assistant_line}</div>')
+        prompt_cursor = "<span style='color:#D7DCE6;font-weight:700;'>&gt;</span>" if self._intervalo_chat_cursor_visible else "<span style='color:#D7DCE6;font-weight:700; opacity:0;'>&gt;</span>"
+        prompt_line = (
+            f'<div style="margin-top:2px;">'
+            f'{self._build_terminal_prompt(self._user_display_name())}'
+            f'<span style="color:#D7DCE6;">{self._escape_html(self._intervalo_input_buffer)}</span>'
+            f'{prompt_cursor}'
+            f'</div>'
+        )
+        parts.append(prompt_line)
+        return (
+            "<html><body style='margin:0; padding:0; background:transparent; font-family: \"DejaVu Sans Mono\", \"Noto Sans Mono\", monospace; font-size: 11px; line-height: 1.4; white-space: pre-wrap;'>"
+            + "".join(parts)
+            + "</body></html>"
+        )
+
+    def _toggle_intervalo_chat_cursor(self):
+        if self._current_state != "intervalo":
+            return
+        self._intervalo_chat_cursor_visible = not self._intervalo_chat_cursor_visible
+        self._render_intervalo_chat()
+
+    def _advance_intervalo_chat_typing(self):
+        if not self._intervalo_chat_active:
+            return
+        self._intervalo_chat_index = min(
+            len(self._intervalo_chat_full_text),
+            self._intervalo_chat_index + 1,
+        )
+        self._render_intervalo_chat()
+
+    @staticmethod
+    def _escape_html(value: str) -> str:
+        return (
+            str(value or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    def _handle_intervalo_keypress(self, event) -> bool:
+        key = event.key()
+        text = event.text() or ""
+
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            submitted = self._intervalo_input_buffer.strip()
+            if submitted:
+                user_name = self._user_display_name()
+                self._intervalo_chat_messages.append(
+                    {
+                        "role": "user",
+                        "html": (
+                            self._build_terminal_line(
+                                user_name,
+                                submitted,
+                                color="#58A6FF",
+                                timestamp=self._terminal_timestamp(),
+                            )
+                        ),
+                    }
+                )
+                self._intervalo_input_buffer = ""
+                self._queue_intervalo_assistant_reply()
+            else:
+                self._render_intervalo_chat()
+            return True
+
+        if key == Qt.Key.Key_Backspace:
+            self._intervalo_input_buffer = self._intervalo_input_buffer[:-1]
+            self._render_intervalo_chat()
+            return True
+
+        if key == Qt.Key.Key_Escape:
+            self._intervalo_input_buffer = ""
+            self._render_intervalo_chat()
+            return True
+
+        if text and not text.isspace() or key == Qt.Key.Key_Space:
+            self._intervalo_input_buffer += " " if key == Qt.Key.Key_Space else text
+            self._render_intervalo_chat()
+            return True
+
+        return False
+
+    def _queue_intervalo_assistant_reply(self):
+        replies = [
+            "Entendido. Vou seguir reorganizando essas páginas com cuidado filosófico.",
+            "Perfeito. A biblioteca continua respirando, mesmo em silêncio.",
+            "Sim, eu também achei isso útil. Surpreendente, eu sei.",
+        ]
+        reply = replies[self._intervalo_assistant_reply_index % len(replies)]
+        self._intervalo_assistant_reply_index += 1
+        self._intervalo_chat_full_text = reply
+        self._intervalo_chat_index = 0
+        self._intervalo_chat_active = True
+        self._intervalo_chat_cursor_visible = True
+        self._intervalo_pending_assistant_message = {"name": self._assistant_display_name(), "text": reply}
+        self._render_intervalo_chat()
+        if hasattr(self, "_intervalo_chat_timer"):
+            self._intervalo_chat_timer.stop()
+            self._intervalo_chat_timer.start()
+
+    def _terminal_timestamp(self) -> str:
+        if self._intervalo_chat_started_at is None:
+            return datetime.now().strftime("%H:%M:%S")
+        return datetime.now().strftime("%H:%M:%S")
+
+    def _build_terminal_banner(self) -> str:
+        return (
+            '<div style="margin-bottom:8px; color:#6B7A90;">'
+            f'[{self._terminal_timestamp()}] conexão estabelecida'
+            '</div>'
+        )
+
+    def _build_terminal_prompt(self, name: str) -> str:
+        return (
+            f'<span style="color:#6B7A90;">[{self._terminal_timestamp()}]</span> '
+            f'<span style="color:#A8B5C8;">$</span> '
+            f'<span style="color:#58A6FF;font-weight:700;">{self._escape_html(name)}</span>'
+            f': '
+        )
+
+    def _build_terminal_line(self, name: str, text: str, color: str, timestamp: str) -> str:
+        return (
+            f'<span style="color:#6B7A90;">[{self._escape_html(timestamp)}]</span> '
+            f'<span style="color:{color};font-weight:700;">{self._escape_html(name)}</span>'
+            f': <span style="color:#D7DCE6;">{self._escape_html(text)}</span>'
+        )
+
+    def _build_intervalo_cover_tile(self, book: dict) -> QWidget:
+        cover_label = QLabel()
+        cover_label.setObjectName("intervalo_cover_tile")
+        cover_label.setFixedSize(112, 156)
+        cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_label.setPixmap(
+            self._mini_cover_pixmap(
+                book.get("cover_path"),
+                str(book.get("title") or "Livro"),
+                (112, 156),
+            )
+        )
+        cover_label.setStyleSheet("QLabel#intervalo_cover_tile { border: 1px solid #11161F; border-radius: 10px; background: #0F141B; }")
+        return cover_label
 
     def _render_aula(self, event):
         # header
