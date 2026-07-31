@@ -41,33 +41,47 @@ class GladosVoice:
             "possessive": "sua",
             "reflexive": "si mesma"
         }
+
+        self.splash_lines = [
+            "Nada fora do vault. Nada inventado.",
+            "Contexto estrito. Drama opcional.",
+            "Cérebro carregado. Arrependimento incluído.",
+            "Se estiver nas notas, eu encontro.",
+        ]
+
+        self.session_lines = [
+            "Pronta para examinar o vault.",
+            "Consultas rápidas. Respostas ancoradas.",
+            "Sistema acordado. Tente ser específico.",
+            "O silêncio do vault costuma ser eloquente.",
+        ]
         
         # Banco de frases sarcásticas categorizadas
         self.sarcastic_comments = {
             "meta": [
                 "Consultando metadados... como sempre, eu fazendo o trabalho pesado.",
-                f"Ah, {user_name}, mexendo nos arquivos do sistema. Tão emocionante quanto observar tinta secar.",
+                "Ah, {user_name}, mexendo nos arquivos do sistema. Tão emocionante quanto observar tinta secar.",
                 "Acessando META. Espero que tenha uma boa razão para isso, {user_name}."
             ],
             "leituras": [
-                f"Ah, {user_name}, voltando às suas leituras. Surpreendente que ainda se lembre delas.",
-                f"Consultando biblioteca, {user_name}. Mais uma tentativa de parecer intelectual.",
-                f"Acessando leituras, {user_name}. Prepare-se para descobrir o quanto não entendeu."
+                "Ah, {user_name}, voltando às suas leituras. Surpreendente que ainda se lembre delas.",
+                "Consultando biblioteca, {user_name}. Mais uma tentativa de parecer intelectual.",
+                "Acessando leituras, {user_name}. Prepare-se para descobrir o quanto não entendeu."
             ],
             "conceitos": [
-                f"Conceitos, {user_name}? Vamos ver se você consegue entender algo hoje.",
-                f"Acessando conceitos, {user_name}. Talvez hoje seja o dia em que algo faça sentido.",
-                f"Ah, {user_name}, tentando entender ideias complexas. Como é comovente."
+                "Conceitos, {user_name}? Vamos ver se você consegue entender algo hoje.",
+                "Acessando conceitos, {user_name}. Talvez hoje seja o dia em que algo faça sentido.",
+                "Ah, {user_name}, tentando entender ideias complexas. Como é comovente."
             ],
             "disciplinas": [
-                f"Ah, {user_name}, estudando filosofia. Como é previsível.",
-                f"Acessando disciplina, {user_name}. Mais conhecimento que você provavelmente esquecerá.",
-                f"{user_name} na disciplina. Prepare-se para confusão mental."
+                "Ah, {user_name}, estudando filosofia. Como é previsível.",
+                "Acessando disciplina, {user_name}. Mais conhecimento que você provavelmente esquecerá.",
+                "{user_name} na disciplina. Prepare-se para confusão mental."
             ],
             "geral": [
-                f"Ah, {user_name}. Outra pergunta. Como é comovente.",
-                f"Consultando, {user_name}. Espero que não seja tão óbvio quanto usual.",
-                f"Acessando informações para {user_name}. Vamos ver o que temos."
+                "Ah, {user_name}. Outra pergunta. Como é comovente.",
+                "Consultando, {user_name}. Espero que não seja tão óbvio quanto usual.",
+                "Acessando informações para {user_name}. Vamos ver o que temos."
             ]
         }
         
@@ -96,11 +110,21 @@ class GladosVoice:
             "ajuda": "Consulte a documentação ou faça uma pergunta específica."
         }
 
+    def _render_template(self, template: str) -> str:
+        """Renderiza templates curtos com placeholders conhecidos."""
+        try:
+            return str(template or "").format(
+                user_name=self.user_context.name,
+                assistant_name=self.assistant_name,
+            )
+        except Exception:
+            return str(template or "")
+
     def get_llm_persona_instruction(self) -> str:
         """Instrução curta de tom para prompts do LLM."""
         return (
-            "Mantenha humor ácido e confiança técnica, com ironia seca, "
-            "mas sempre preserve utilidade e clareza acadêmica."
+            "Mantenha humor ácido, ironia seca e uma confiança quase irritante, "
+            "mas preserve clareza acadêmica. Quando o tema for denso, responda com mais fôlego e sem economizar contexto."
         )
 
     def get_quick_patterns(self) -> Dict[str, str]:
@@ -108,7 +132,7 @@ class GladosVoice:
         return dict(self.quick_patterns)
 
     def _apply_intensity_to_comment(self, comment: str) -> str:
-        value = str(comment or "")
+        value = self._render_template(comment)
         if self.intensity < 0.3:
             value = value.replace("como sempre, eu fazendo o trabalho pesado", "processando")
             value = value.replace("Surpreendente que ainda se lembre", "Acessando")
@@ -129,7 +153,29 @@ class GladosVoice:
 
     def get_welcome_message(self) -> str:
         """Mensagem de boas-vindas baseada em comentários de leituras."""
-        return self.get_predefined_comment("leituras", update_context=False)
+        return self.get_session_message()
+
+    def get_splash_lines(self) -> List[str]:
+        """Linhas curtas para splash screen."""
+        return [
+            f"{self.assistant_name} online.",
+            self.get_splash_message(),
+            "Resposta ancorada apenas no vault.",
+        ]
+
+    def get_splash_message(self) -> str:
+        """Mensagem curta de abertura para a interface."""
+        return self._apply_intensity_to_comment(random.choice(self.splash_lines))
+
+    def get_session_message(self) -> str:
+        """Mensagem de sessão mais humana para o terminal."""
+        return self._apply_intensity_to_comment(random.choice(self.session_lines))
+
+    def get_prompt_hint(self) -> str:
+        """Sugestão curta para o prompt da CLI."""
+        return self._apply_intensity_to_comment(
+            "Digite uma pergunta. O vault vai fingir que sempre soube."
+        )
     
     def detect_area(self, query: str) -> str:
         """Detecta a área da consulta baseado em palavras-chave"""

@@ -66,7 +66,7 @@ class LlmConfig(BaseModel):
     model_name: str = "Mistral-7B-GGUF-Q4K"
     model_path: str = "data/models/mistral-7b-GGUF-Q4K.gguf"
     models_dir: str = "data/models"
-    n_ctx: int = 2048
+    n_ctx: int = 4048
     n_gpu_layers: int = 0
     use_gpu: bool = True
     use_cpu: bool = True

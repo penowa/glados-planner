@@ -4,6 +4,7 @@ Atualizado com busca semântica integrada
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
+import re
 import yaml
 import frontmatter
 from dataclasses import dataclass
@@ -237,6 +238,221 @@ class VaultStructure:
         if notes:
             return notes
         return self.get_notes_by_folder("03 - Disciplinas")
+
+    def get_discipline_anchor_notes(self) -> List[VaultNote]:
+        """Retorna as notas-âncora de disciplinas."""
+        notes = self.get_notes_by_folder("05-DISCIPLINAS")
+        if notes:
+            return notes
+        return self.get_discipline_notes()
+
+    @staticmethod
+    def _normalize_terms(text: str) -> List[str]:
+        import re
+
+        cleaned = re.sub(r"[^\w\sà-úÀ-Ú-]", " ", str(text or ""), flags=re.UNICODE)
+        return [part for part in re.split(r"\s+", cleaned.lower()) if len(part) >= 3]
+
+    def _note_search_text(self, note: VaultNote) -> str:
+        parts = [
+            str(getattr(note, "title", "") or ""),
+            str(getattr(note, "content", "") or "")[:1800],
+            " ".join(str(tag) for tag in getattr(note, "tags", []) or []),
+            " ".join(str(link) for link in getattr(note, "links", []) or []),
+            str(getattr(note, "path", "") or ""),
+        ]
+        return " ".join(parts).lower()
+
+    def _score_anchor_match(self, note: VaultNote, query: str) -> float:
+        query_terms = set(self._normalize_terms(query))
+        note_terms = set(self._normalize_terms(self._note_search_text(note)))
+        if not query_terms or not note_terms:
+            return 0.0
+
+        overlap = len(query_terms.intersection(note_terms))
+        score = overlap / max(1, len(query_terms))
+
+        title = str(getattr(note, "title", "") or "").lower()
+        if any(term in title for term in query_terms):
+            score += 0.4
+
+        path = str(getattr(note, "path", "") or "").lower()
+        if "05-disciplinas" in path:
+            score += 0.2
+
+        return score
+
+    def _build_discipline_anchor(self, query: str) -> Optional[VaultNote]:
+        anchor_notes = self.get_discipline_anchor_notes()
+        if not anchor_notes:
+            return None
+
+        ranked: List[tuple[float, VaultNote]] = []
+        for note in anchor_notes:
+            ranked.append((self._score_anchor_match(note, query), note))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        if not ranked:
+            return None
+
+        top_score, top_note = ranked[0]
+        if top_score <= 0:
+            return None
+        return top_note
+
+    def _collect_related_notes(self, anchor: Optional[VaultNote], query: str, max_notes: int) -> List[VaultNote]:
+        all_notes = list(self.notes_cache.values())
+        if anchor is None:
+            if self.semantic_search:
+                try:
+                    results = self.semantic_search.search(query, limit=max_notes * 3, notes=all_notes)
+                    return [result.note for result in results[:max_notes]]
+                except Exception:
+                    pass
+            return all_notes[:max_notes]
+
+        anchor_terms = self._normalize_terms(f"{anchor.title} {query} {' '.join(anchor.tags)}")
+        anchor_links = {link.lower() for link in getattr(anchor, "links", []) or []}
+        try:
+            anchor_root = anchor.path.relative_to(self.vault_path).parts[0]
+        except Exception:
+            anchor_root = ""
+
+        candidate_notes: List[VaultNote] = []
+        for note in all_notes:
+            if note.path == anchor.path:
+                candidate_notes.append(note)
+                continue
+
+            note_text = self._note_search_text(note)
+            path_text = str(note.path).lower()
+            linked_text = " ".join(getattr(note, "links", []) or []).lower()
+
+            if any(term in note_text for term in anchor_terms):
+                candidate_notes.append(note)
+                continue
+            if any(link in linked_text for link in anchor_links):
+                candidate_notes.append(note)
+                continue
+            if anchor_root:
+                try:
+                    note_root = note.path.relative_to(self.vault_path).parts[0]
+                    if note_root == anchor_root:
+                        candidate_notes.append(note)
+                        continue
+                except Exception:
+                    pass
+
+        if anchor not in candidate_notes:
+            candidate_notes.insert(0, anchor)
+
+        if self.semantic_search:
+            try:
+                semantic_results = self.semantic_search.search(
+                    query,
+                    limit=max_notes * 4,
+                    notes=candidate_notes,
+                )
+                ordered_notes = [result.note for result in semantic_results]
+                if len(ordered_notes) >= max_notes:
+                    return ordered_notes[:max_notes]
+
+                seen_paths = {str(note.path) for note in ordered_notes}
+                for note in candidate_notes:
+                    if str(note.path) not in seen_paths:
+                        ordered_notes.append(note)
+                        seen_paths.add(str(note.path))
+                    if len(ordered_notes) >= max_notes:
+                        break
+                return ordered_notes[:max_notes]
+            except Exception:
+                pass
+
+        return candidate_notes[:max_notes]
+
+    def build_navigation_packet(self, query: str, max_notes: int = 8, excerpt_chars: int = 280) -> Dict[str, Any]:
+        """
+        Constrói um pacote de navegação centrado em disciplinas.
+
+        Retorna:
+            {
+                "discipline": str,
+                "anchor": Optional[Dict],
+                "notes": List[Dict],
+                "context": str,
+            }
+        """
+        anchor = self._build_discipline_anchor(query)
+        related_notes = self._collect_related_notes(anchor, query, max_notes=max_notes)
+        safe_excerpt_chars = max(120, min(int(excerpt_chars or 280), 480))
+
+        notes_payload: List[Dict[str, Any]] = []
+        for index, note in enumerate(related_notes, start=1):
+            note_dict = note.to_dict()
+            try:
+                note_dict["folder"] = note.path.relative_to(self.vault_path).parts[0]
+            except Exception:
+                note_dict["folder"] = "raiz"
+            note_dict["role"] = "anchor" if anchor and note.path == anchor.path else "related"
+            note_dict["index"] = index
+            notes_payload.append(note_dict)
+
+        discipline_name = str(anchor.title if anchor else "Geral").strip() or "Geral"
+        discipline_name = re.sub(r"(?i)^disciplina\s*-\s*", "", discipline_name).strip() or discipline_name
+        context_lines = [
+            "### INICIO_CONTEXTO_NAVEGACAO ###",
+            f"Disciplina identificada: {discipline_name}",
+            "Use a disciplina identificada como âncora para navegar até leituras, anotações e revisões relacionadas.",
+            "",
+            f"Pergunta do usuário: {query.strip()}",
+            "",
+        ]
+
+        if anchor is not None:
+            context_lines.extend(
+                [
+                    "Âncora principal:",
+                    f"- Título: {anchor.title}",
+                    f"- Caminho: {anchor.path}",
+                    f"- Tags: {', '.join(anchor.tags) if anchor.tags else 'sem tags'}",
+                    "",
+                ]
+            )
+
+        context_lines.append("Notas relacionadas para resposta:")
+        for note in related_notes:
+            try:
+                folder = note.path.relative_to(self.vault_path).parts[0]
+            except Exception:
+                folder = "raiz"
+            context_lines.append(f"--- {folder} :: {note.title} ---")
+            context_lines.append(f"Caminho: {note.path}")
+            if note.tags:
+                context_lines.append(f"Tags: {', '.join(note.tags[:6])}")
+            if note.links:
+                context_lines.append(f"Links: {', '.join(note.links[:6])}")
+            excerpt = note.content[:safe_excerpt_chars].strip()
+            if excerpt:
+                context_lines.append("Trecho:")
+                context_lines.append(f"> {excerpt}")
+            context_lines.append("")
+
+        context_lines.extend(
+            [
+                "Regras:",
+                "- Priorize a disciplina âncora e suas relações diretas.",
+                "- Expanda para livros, anotações e revisões associadas antes de responder.",
+                "- Se a informação estiver ausente, diga que não encontrou nas notas relacionadas.",
+                "### FIM_CONTEXTO_NAVEGACAO ###",
+            ]
+        )
+
+        return {
+            "discipline": discipline_name,
+            "anchor": anchor.to_dict() if anchor is not None else None,
+            "notes": notes_payload,
+            "context": "\n".join(context_lines),
+        }
     
     # ADICIONADO: Método para compatibilidade com local_llm.py
     def get_all_notes(self) -> List[VaultNote]:

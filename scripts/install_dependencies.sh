@@ -181,6 +181,7 @@ install_system_dependencies() {
                 python-virtualenv
                 base-devel
                 sqlite
+                spirv-headers
                 tesseract
                 tesseract-data-eng
                 tesseract-data-por

@@ -188,7 +188,7 @@ class Sembrain:
         # Fallback: primeiras palavras
         return content[:200] if len(content) > 200 else content
     
-    def search(self, query: str, limit: int = 5) -> List[SearchResult]:
+    def search(self, query: str, limit: int = 5, notes: Optional[List[Any]] = None) -> List[SearchResult]:
         """
         Busca semântica usando TF-IDF básico
         
@@ -201,9 +201,14 @@ class Sembrain:
         """
         if not query.strip():
             return []
+
+        notes_to_search = notes if notes is not None else self.notes
         
         # Cache simples
-        query_hash = hashlib.md5(query.encode()).hexdigest()
+        note_fingerprint = "|".join(
+            str(getattr(note, "path", "")) for note in (notes_to_search[:50] if notes_to_search else [])
+        )
+        query_hash = hashlib.md5(f"{query}:{note_fingerprint}".encode()).hexdigest()
         if query_hash in self.query_cache:
             cached_time, results = self.query_cache[query_hash]
             if (datetime.now().timestamp() - cached_time) < 3600:  # 1 hora
@@ -215,7 +220,7 @@ class Sembrain:
         query_vector = self._tf_idf_vector(query)
         
         results = []
-        for note in self.notes:
+        for note in notes_to_search:
             note_id = self._get_note_id(note)
             
             # Vetor da nota

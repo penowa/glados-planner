@@ -76,8 +76,7 @@ class LocalLLM:
             if device_mode == "cpu_only":
                 cpu_threads = requested_threads
             elif device_mode == "gpu_only":
-                cpu_enabled = bool(getattr(settings.llm, "use_cpu", True))
-                cpu_threads = max(1, requested_threads) if cpu_enabled else 1
+                cpu_threads = 1
             else:
                 cpu_threads = min(requested_threads, 4)
             force_cpu_only = device_mode == "cpu_only"
@@ -107,7 +106,7 @@ class LocalLLM:
                 n_ctx=settings.llm.n_ctx,
                 n_gpu_layers=0 if force_cpu_only else settings.llm.n_gpu_layers,
                 use_gpu=False if force_cpu_only else bool(getattr(settings.llm, "use_gpu", True)),
-                use_cpu=bool(getattr(settings.llm, "use_cpu", True)),
+                use_cpu=False if device_mode == "gpu_only" else bool(getattr(settings.llm, "use_cpu", True)),
                 device_mode=str(getattr(settings.llm, "device_mode", "auto")),
                 gpu_index=-1 if force_cpu_only else int(getattr(settings.llm, "gpu_index", 0) or 0),
                 vram_soft_limit_mb=int(getattr(settings.llm, "vram_soft_limit_mb", 0) or 0),
@@ -171,11 +170,17 @@ class LocalLLM:
         """Inicializa o sistema de busca semântica"""
         try:
             from core.llm.glados.brain.semantic_search import Sembrain
-            
-            # CORREÇÃO: usar get_all_notes() que agora existe
+
+            existing_semantic_search = getattr(self.vault_structure, "semantic_search", None)
+            if existing_semantic_search is not None:
+                self.sembrain = existing_semantic_search
+                notes_count = len(getattr(self.vault_structure, "notes_cache", {}) or {})
+                print(f"🧠 Sembrain reutilizado: {notes_count} notas indexadas")
+                return
+
             notes = self.vault_structure.get_all_notes()
             vault_path = Path(settings.paths.vault).expanduser()
-            
+
             self.sembrain = Sembrain(vault_path, notes)
             print(f"🧠 Sembrain inicializado: {len(notes)} notas indexadas")
             
@@ -212,6 +217,25 @@ class LocalLLM:
                 pickle.dump(self.response_cache, f)
         except Exception as e:
             print(f"⚠️  Erro salvando cache: {e}")
+
+    @staticmethod
+    def _extract_navigation_query(query: str) -> str:
+        """Extrai a pergunta real quando a UI envia contexto embutido."""
+        text = str(query or "").strip()
+        if not text:
+            return ""
+
+        markers = (
+            "### PERGUNTA_USUARIO ###",
+            "### PERGUNTA DO USUARIO ###",
+            "Pergunta do usuário:",
+            "Pergunta do usuario:",
+        )
+        for marker in markers:
+            if marker in text:
+                text = text.split(marker, 1)[1].strip()
+        text = re.sub(r"^Pergunta do usuário:\s*", "", text, flags=re.IGNORECASE).strip()
+        return text or str(query or "").strip()
 
     def _sanitize_response_text(self, text: str) -> str:
         """Limpa vazamentos evidentes de prompt quando vindos do cache/geração."""
@@ -285,7 +309,7 @@ class LocalLLM:
         if repeat_penalty is not None:
             cfg.repeat_penalty = float(max(1.0, min(repeat_penalty, 1.3)))
         if max_tokens is not None:
-            cfg.max_tokens = int(max(64, min(max_tokens, 700)))
+            cfg.max_tokens = int(max(64, min(max_tokens, 1024)))
 
         return {
             "updated": True,
@@ -304,8 +328,18 @@ class LocalLLM:
     ) -> Dict[str, Any]:
         """Gera resposta para uma consulta com contexto semântico"""
         metadata = request_metadata or {}
-        strict_no_fallback = bool(metadata.get("disable_sembrain_fallback", False))
-        
+        strict_vault_only = bool(metadata.get("vault_only", False) or metadata.get("strict_vault_only", False))
+        strict_no_fallback = bool(metadata.get("disable_sembrain_fallback", False) or strict_vault_only)
+        navigation_limit = int(metadata.get("navigation_max_notes", 12) or 12)
+        navigation_limit = max(4, min(navigation_limit, 24))
+        navigation_excerpt_chars = int(metadata.get("navigation_excerpt_chars", 280) or 280)
+        navigation_excerpt_chars = max(120, min(navigation_excerpt_chars, 480))
+        metadata["navigation_max_notes"] = navigation_limit
+        metadata["navigation_excerpt_chars"] = navigation_excerpt_chars
+
+        if strict_vault_only:
+            use_semantic = False
+
         # Verificar cache primeiro
         cache_key = self._get_cache_key(query, user_name)
         if cache_key in self.response_cache:
@@ -315,6 +349,8 @@ class LocalLLM:
                 response = dict(response)
                 response["text"] = self._sanitize_response_text(response.get("text", ""))
                 response["request_metadata"] = metadata
+                if "navigation_packet" not in response and isinstance(response.get("request_metadata"), dict):
+                    response["navigation_packet"] = response["request_metadata"].get("navigation_packet")
                 return {
                     **response,
                     "cached": True,
@@ -358,12 +394,37 @@ class LocalLLM:
         
         if user_name is None:
             user_name = settings.llm.glados.user_name
-        
+
         # Obter contexto semântico se disponível
         semantic_context = ""
-        if use_semantic and self.sembrain:
+        navigation_query = self._extract_navigation_query(query)
+
+        if self.vault_structure and hasattr(self.vault_structure, "build_navigation_packet"):
             try:
-                semantic_context = self.sembrain.get_context_for_llm(query, max_notes=3)
+                nav_packet = self.vault_structure.build_navigation_packet(
+                    navigation_query,
+                    max_notes=navigation_limit,
+                    excerpt_chars=navigation_excerpt_chars,
+                )
+                semantic_context = str(nav_packet.get("context", "") or "").strip()
+                if semantic_context:
+                    metadata["navigation_discipline"] = nav_packet.get("discipline")
+                    metadata["navigation_anchor"] = nav_packet.get("anchor", {})
+                    metadata["navigation_notes"] = len(nav_packet.get("notes", []) or [])
+                    metadata["navigation_packet"] = nav_packet
+                    print(
+                        f"🧭 Navegação por disciplina: {metadata.get('navigation_discipline', 'Geral')} "
+                        f"({metadata.get('navigation_notes', 0)} notas)"
+                    )
+            except Exception as e:
+                print(f"⚠️  Erro na navegação por disciplina: {e}")
+
+        if not semantic_context and use_semantic and self.sembrain:
+            try:
+                semantic_context = self.sembrain.get_context_for_llm(
+                    navigation_query,
+                    max_notes=navigation_limit,
+                )
                 print(f"🧠 Contexto semântico: {len(semantic_context)} caracteres")
             except Exception as e:
                 print(f"⚠️  Erro obtendo contexto semântico: {e}")
@@ -401,6 +462,7 @@ class LocalLLM:
                 "semantic_context_used": use_semantic and bool(semantic_context),
                 "timestamp": datetime.now().isoformat(),
                 "request_metadata": metadata,
+                "navigation_packet": metadata.get("navigation_packet"),
             }
             
             self.response_cache[cache_key] = (datetime.now().timestamp(), result)
