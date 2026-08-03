@@ -2,6 +2,7 @@
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
+    collect_dynamic_libs,
     collect_submodules,
 )
 
@@ -47,11 +48,13 @@ datas = [
 datas += collect_data_files("litellm")
 datas += collect_data_files("tiktoken")
 
+data_binaries = collect_dynamic_libs("llama_cpp")
+
 
 a = Analysis(
     ["run.py"],
     pathex=[".", "./src", "./ui"],
-    binaries=binaries,
+    binaries=binaries + data_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

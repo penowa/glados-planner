@@ -642,46 +642,18 @@ class BookProcessor:
                 frontmatter=frontmatter
             )
             
-            # 2. Criar notas para cada capítulo
-            for chapter in result.processed_chapters:
-                chapter_number = chapter.get('chapter_num') or chapter.get('number') or 0
-                chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_number}"
-                safe_chapter_title = self._sanitize_filename(chapter_title)
-                chapter_filename = f"{int(chapter_number):03d} - {safe_chapter_title}"
-                chapter_note_path = f"{base_path}/{chapter_filename}.md"
-                
-                chapter_frontmatter = {
-                    'title': chapter_title,
-                    'book': metadata.title,
-                    'author': metadata.author,
-                    'chapter_number': chapter_number,
-                    'pages': chapter.get('pages'),
-                    'tags': ['chapter', 'book', f'book:{metadata.title}']
-                }
-
-                chapter_content = chapter.get('content', '')
-                if not chapter_content.strip().startswith("# "):
-                    chapter_content = (
-                        f"# {chapter_title}\n\n"
-                        f"## 📖 Páginas\n{chapter.get('pages', 'N/A')}\n\n"
-                        f"{chapter_content}"
-                    )
-                
-                create_or_update_note(
-                    chapter_note_path,
-                    content=chapter_content,
-                    frontmatter=chapter_frontmatter
-                )
+            # 2. Não criamos notas individuais para cada capítulo no vault.
+            #    Mantemos apenas a nota principal de metadados do livro.
             
-            # 3. Criar índice de conceitos vazio
-            concepts_path = f"{base_path}/🧠 Conceitos-Chave.md"
+            # 3. Criar nota de conceitos renomeada para Anotações
+            concepts_path = f"{base_path}/Anotações.md"
             
-            concepts_content = f"""# Conceitos-Chave - {metadata.title}
+            concepts_content = f"""# Anotações - {metadata.title}
 
 ## 📚 Livro
 [[{metadata.title}]]
 
-## 🧠 Conceitos
+## 🧠 Conceitos Principais
 <!-- Liste e explique os conceitos principais do livro aqui -->
 
 ## 💬 Citações Importantes
@@ -694,7 +666,7 @@ class BookProcessor:
             create_or_update_note(
                 concepts_path,
                 content=concepts_content,
-                frontmatter={'title': f'Conceitos-Chave - {metadata.title}', 'type': 'concepts'}
+                frontmatter={'title': f'Anotações - {metadata.title}', 'type': 'concepts'}
             )
 
             self._create_discipline_note(metadata, discipline)
@@ -775,8 +747,7 @@ class BookProcessor:
         for chapter in chapters:
             chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
             title = chapter.get('chapter_title') or chapter.get('title') or 'Capítulo sem título'
-            filename = f"{int(chapter_num):03d} - {self._sanitize_filename(title)}"
-            formatted += f"- [[{filename}|{title}]]\n"
+            formatted += f"- Capítulo {chapter_num}: {title}\n"
         
         return formatted
     

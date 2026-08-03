@@ -953,70 +953,10 @@ class BookController(QObject):
             result["directory_created"] = True
             result["directory_path"] = str(book_dir)
             
-            # Criar notas para cada capítulo
-            for chapter in chapters:
-                try:
-                    chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
-                    chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
-                    content = chapter.get('content', '')
-                    
-                    # Nome do arquivo
-                    filename = f"{chapter_num:03d} - {self._sanitize_filename(chapter_title)}.md"
-                    relative_path = f"01-LEITURAS/{safe_author}/{safe_title}/{filename}"
-                    
-                    # Frontmatter
-                    frontmatter = {
-                        'title': chapter_title,
-                        'book': metadata.title,
-                        'author': metadata.author,
-                        'chapter': chapter_num,
-                        'pages': chapter.get('pages') or f"{chapter.get('start_page', 'N/A')}-{chapter.get('end_page', 'N/A')}",
-                        'book_id': book_id,
-                        'tags': ['livro', 'capitulo']
-                    }
-                    
-                    # Conteúdo da nota
-                    note_content = f"""# {chapter_title}
+            # Não criamos notas individuais para cada capítulo.
+            # Apenas garantimos que o diretório do livro exista.
+            result["notes_created"] = 0
 
-## 📚 Livro
-[[{metadata.title}]]
-
-## 📖 Informações
-- **Livro**: {metadata.title}
-- **Autor**: {metadata.author}
-- **Capítulo**: {chapter_num}
-- **Páginas**: {chapter.get('pages', 'N/A')}
-
-## 📝 Conteúdo
-{content}
-
-## 💭 Anotações
-<!-- Adicione suas anotações aqui -->
-
-## 🔗 Links
-[[{metadata.title}]] | [[Índice - {metadata.title}]]
-"""
-                    
-                    # Criar nota
-                    existing_note = self.vault_manager.get_note_by_path(relative_path)
-                    if existing_note:
-                        self.vault_manager.update_note(
-                            relative_path,
-                            content=note_content,
-                            frontmatter=frontmatter
-                        )
-                    else:
-                        self.vault_manager.create_note(
-                            relative_path,
-                            content=note_content,
-                            frontmatter=frontmatter
-                        )
-                    
-                    result["notes_created"] += 1
-                    
-                except Exception as e:
-                    result["errors"].append(f"Erro criando capítulo {chapter_num}: {e}")
-            
             # Emitir sinal
             self.book_structure_created.emit(book_id, result)
             
@@ -1054,15 +994,16 @@ class BookController(QObject):
                 'tags': ['livro', 'indice']
             }
             
-            # Lista de capítulos
+# Lista de capítulos, sem links para notas individuais.
             chapters_list = ""
-            for chapter in chapters:
-                chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
-                chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
-                safe_chapter_title = self._sanitize_filename(chapter_title)
-                
-                chapters_list += f"{chapter_num}. [[{chapter_num:03d} - {safe_chapter_title}|{chapter_title}]]\n"
-            
+            if chapters:
+                for chapter in chapters:
+                    chapter_num = chapter.get('chapter_num') or chapter.get('number') or 0
+                    chapter_title = chapter.get('chapter_title') or chapter.get('title') or f"Capítulo {chapter_num}"
+                    chapters_list += f"- Capítulo {chapter_num}: {chapter_title}\n"
+            else:
+                chapters_list = "- Nenhum capítulo detalhado foi gerado como nota individual.\n"
+
             # Conteúdo do índice
             content = f"""# {metadata.title}
 
@@ -1071,7 +1012,7 @@ class BookController(QObject):
 
 ## 📊 Informações
 - **Total de páginas**: {metadata.total_pages}
-- **Total de capítulos**: {len(chapters)}
+- **Total de capítulos detectados**: {len(chapters)}
 - **ID do livro**: {book_id}
 - **Processado em**: {datetime.now().strftime('%d/%m/%Y %H:%M')}
 
@@ -1159,14 +1100,19 @@ class BookController(QObject):
         """Extrai a primeira página do PDF como capa."""
         try:
             import fitz
+            import io
+            from PIL import Image
 
             with fitz.open(pdf_path) as doc:
                 if len(doc) == 0:
                     return None
                 page = doc.load_page(0)
                 pix = page.get_pixmap(matrix=fitz.Matrix(1.4, 1.4), alpha=False)
-                cover_path = output_dir / "cover.jpg"
-                pix.save(str(cover_path))
+                image_data = pix.tobytes("png")
+
+                cover_path = output_dir / "cover.png"
+                image = Image.open(io.BytesIO(image_data))
+                image.convert("RGB").save(str(cover_path), "PNG")
                 return cover_path
         except Exception as e:
             logger.debug("Não foi possível extrair capa PDF (%s): %s", pdf_path, e)
@@ -1175,6 +1121,9 @@ class BookController(QObject):
     def _extract_epub_cover(self, epub_path: Path, output_dir: Path) -> Optional[Path]:
         """Extrai imagem de capa de EPUB para o diretório do livro."""
         try:
+            import io
+            from PIL import Image
+
             with zipfile.ZipFile(epub_path, "r") as zf:
                 opf_path = self._find_epub_opf_path(zf)
                 if not opf_path:
@@ -1225,17 +1174,9 @@ class BookController(QObject):
                 image_path = self._resolve_epub_item_path(opf_path, selected["href"])
                 image_data = zf.read(image_path)
 
-                media_type = selected.get("media_type", "")
-                ext = {
-                    "image/jpeg": ".jpg",
-                    "image/jpg": ".jpg",
-                    "image/png": ".png",
-                    "image/webp": ".webp",
-                }.get(media_type, Path(selected["href"]).suffix or ".jpg")
-
-                cover_path = output_dir / f"cover{ext}"
-                with open(cover_path, "wb") as f:
-                    f.write(image_data)
+                cover_path = output_dir / "cover.png"
+                image = Image.open(io.BytesIO(image_data))
+                image.convert("RGB").save(str(cover_path), "PNG")
                 return cover_path
         except Exception as e:
             logger.debug("Não foi possível extrair capa EPUB (%s): %s", epub_path, e)
@@ -1420,7 +1361,7 @@ class BookController(QObject):
         return result
     
     def _create_concepts_note(self, book_id: str, metadata) -> Dict:
-        """Cria nota de conceitos-chave do livro"""
+        """Cria nota de anotações do livro"""
         result = {"concepts_note_created": False}
         
         try:
@@ -1430,21 +1371,21 @@ class BookController(QObject):
             safe_author = self._resolve_author_directory_name(metadata.author or "Autor Desconhecido")
             safe_title = self._sanitize_filename(metadata.title)
             
-            # Caminho para a nota de conceitos
-            concepts_path = f"01-LEITURAS/{safe_author}/{safe_title}/🧠 Conceitos-Chave.md"
+            # Caminho para a nota de anotações
+            concepts_path = f"01-LEITURAS/{safe_author}/{safe_title}/Anotações.md"
             
             # Frontmatter
             frontmatter = {
-                'title': f'Conceitos-Chave - {metadata.title}',
+                'title': f'Anotações - {metadata.title}',
                 'book': metadata.title,
                 'author': metadata.author,
                 'type': 'concepts',
                 'book_id': book_id,
-                'tags': ['conceitos', 'livro']
+                'tags': ['anotações', 'livro']
             }
             
             # Conteúdo da nota
-            content = f"""# Conceitos-Chave - {metadata.title}
+            content = f"""# Anotações - {metadata.title}
 
 ## 📚 Livro
 [[{metadata.title}]]

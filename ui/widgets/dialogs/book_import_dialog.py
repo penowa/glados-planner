@@ -371,8 +371,8 @@ class BookImportDialog(QDialog):
         structure_layout.addWidget(QLabel(
             "A estrutura é automática e sempre cria:\n"
             "• Nota completa do livro\n"
-            "• Notas por capítulo\n"
-            "• Nota de metadados/índice"
+            "• Nota de metadados/índice\n"
+            "• Nota de anotações (Anotações.md)"
         ))
         
         structure_group.setLayout(structure_layout)
@@ -866,7 +866,7 @@ class BookImportDialog(QDialog):
             "resume_ocr": self.resume_ocr_checkbox.isChecked(),
             
             # Notas
-            "note_structure": "Automático: completo + capítulos + metadados",
+            "note_structure": "Automático: completo + metadados + anotações",
             "note_template": self.template_combo.currentText(),
             "vault_location": self.vault_location_input.text().strip(),
             "discipline": discipline_name,

@@ -877,7 +877,7 @@ class WeeklyReviewView(QWidget):
                 score += 5
             if note_path.name.startswith("📚 "):
                 score += 3
-            if "Conceitos-Chave" in note_path.name:
+            if "Anotações" in note_path.name or "Conceitos-Chave" in note_path.name:
                 score += 2
             if note_path.name.startswith("📖 "):
                 score += 1

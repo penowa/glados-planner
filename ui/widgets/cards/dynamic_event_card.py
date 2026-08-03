@@ -4,6 +4,8 @@ Minimal, safe implementation matching requested API and signals.
 """
 from datetime import datetime, timedelta, date
 import logging
+import random
+import re
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF, QPropertyAnimation, QEvent
@@ -11,7 +13,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGridLayout, QSizePolicy, QFrame,
-    QMenu, QGraphicsOpacityEffect, QScrollBar, QTextBrowser, QApplication,
+    QMenu, QGraphicsOpacityEffect, QScrollBar, QTextBrowser, QLineEdit, QApplication,
 )
 
 from ui.utils.nerd_icons import NerdIcons, nerd_font
@@ -228,6 +230,7 @@ class DynamicEventCard(QWidget):
         self._intervalo_chat_cursor_visible = True
         self._intervalo_assistant_reply_index = 0
         self._intervalo_pending_assistant_message: dict | None = None
+        self._intervalo_quote_data: dict | None = None
         self._base_rendered = False
         self._intervalo_chat_started_at: datetime | None = None
 
@@ -239,10 +242,6 @@ class DynamicEventCard(QWidget):
         self._intervalo_cursor_timer = QTimer(self)
         self._intervalo_cursor_timer.setInterval(500)
         self._intervalo_cursor_timer.timeout.connect(self._toggle_intervalo_chat_cursor)
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_state)
         self._timer.start(30000)  # 30 seconds
@@ -295,8 +294,18 @@ class DynamicEventCard(QWidget):
         self.intervalo_chat_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.intervalo_chat_view.setOpenExternalLinks(False)
         self.intervalo_chat_view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.intervalo_chat_view.installEventFilter(self)
         right_layout.addWidget(self.intervalo_chat_view, 1)
+
+        self.intervalo_input_line = QLineEdit()
+        self.intervalo_input_line.setPlaceholderText("Digite sua mensagem...")
+        self.intervalo_input_line.setFixedHeight(34)
+        self.intervalo_input_line.setStyleSheet(
+            "QLineEdit { background: #121828; border: 1px solid #31415C; border-radius: 12px; color: #D7DCE6; padding: 8px 10px; }"
+        )
+        self.intervalo_input_line.returnPressed.connect(self._on_intervalo_input_submitted)
+        self.intervalo_input_line.setVisible(False)
+        self.intervalo_input_line.setEnabled(False)
+        right_layout.addWidget(self.intervalo_input_line, 0)
 
         terminal_layout.addWidget(self.intervalo_text_panel, 1)
         b_layout.addWidget(self.intervalo_terminal_frame, 1)
@@ -570,6 +579,9 @@ class DynamicEventCard(QWidget):
     def _render_base(self):
         self._base_rendered = True
         self._render_intervalo(self._current_event)
+        if hasattr(self, "intervalo_input_line"):
+            self.intervalo_input_line.setVisible(False)
+            self.intervalo_input_line.setEnabled(False)
 
     def _progress_value(self, progress, key: str, default=None):
         if isinstance(progress, dict):
@@ -722,6 +734,137 @@ class DynamicEventCard(QWidget):
     def _vault_root(self) -> Path | None:
         roots = self._books_roots()
         return roots[0].parent if roots else None
+
+    def _find_concepts_note_path(self, book_dir: Path) -> Path | None:
+        if not book_dir or not book_dir.exists() or not book_dir.is_dir():
+            return None
+
+        candidates = [
+            book_dir / "Anotações.md",
+            book_dir / "🧠 Conceitos-Chave.md",
+            book_dir / "Conceitos-Chave.md",
+            book_dir / "🧠 Conceitos-Chave.MD",
+            book_dir / "Conceitos-Chave.MD",
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+
+        for candidate in book_dir.glob("*Anotações*.md"):
+            if candidate.is_file():
+                return candidate
+        for candidate in book_dir.glob("*Conceitos-Chave*.md"):
+            if candidate.is_file():
+                return candidate
+
+        return None
+
+    def _extract_quotes_from_concepts_note(self, note_path: Path) -> list[dict]:
+        if not note_path or not note_path.exists() or not note_path.is_file():
+            return []
+
+        try:
+            raw_text = note_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return []
+
+        lines = raw_text.splitlines()
+        start_index = None
+        for index, line in enumerate(lines):
+            normalized = line.strip().lower()
+            if normalized.startswith("##") and "citações importantes" in normalized:
+                start_index = index + 1
+                break
+
+        if start_index is None:
+            return []
+
+        section_lines = []
+        for line in lines[start_index:]:
+            if line.strip().startswith("#"):
+                break
+            section_lines.append(line)
+
+        paragraphs = []
+        current_paragraph = []
+        for line in section_lines:
+            if not line.strip():
+                if current_paragraph:
+                    paragraphs.append(" ".join(current_paragraph).strip())
+                    current_paragraph = []
+                continue
+            current_paragraph.append(line.strip())
+
+        if current_paragraph:
+            paragraphs.append(" ".join(current_paragraph).strip())
+
+        citations = []
+        pattern = re.compile(r'([“"”])(?P<quote>.+?)\1.*?p\.\s*(?P<page>\d+)', re.IGNORECASE)
+        for paragraph in paragraphs:
+            for match in pattern.finditer(paragraph):
+                quote = match.group("quote").strip()
+                page = match.group("page").strip()
+                if quote and page:
+                    citations.append({"text": quote, "page": page})
+
+        return citations
+
+    def _last_read_book_progress(self) -> tuple[str, str, str] | None:
+        manager = getattr(self.reading_controller, "reading_manager", None)
+        if not manager:
+            return None
+
+        readings = getattr(manager, "readings", {}) or {}
+        best_time = None
+        best_entry = None
+        for book_id, progress in readings.items():
+            if not book_id or not progress:
+                continue
+            last_read = getattr(progress, "last_read", "") or ""
+            try:
+                last_read_time = datetime.fromisoformat(str(last_read).replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if best_time is None or last_read_time > best_time:
+                best_time = last_read_time
+                best_entry = (book_id, str(getattr(progress, "title", "") or ""), str(getattr(progress, "author", "") or ""))
+
+        return best_entry
+
+    def _load_intervalo_quote_data(self) -> dict | None:
+        progress = self._last_read_book_progress()
+        if not progress:
+            return None
+
+        book_id, title, author = progress
+        manager = getattr(self.reading_controller, "reading_manager", None)
+        book_dir = None
+        if manager:
+            try:
+                book_dir = book_helpers.find_book_directory(manager, book_id, title=title, author=author)
+            except Exception:
+                book_dir = None
+
+        if not book_dir:
+            return None
+
+        note_path = self._find_concepts_note_path(book_dir)
+        if not note_path:
+            return None
+
+        citations = self._extract_quotes_from_concepts_note(note_path)
+        if not citations:
+            return None
+
+        selected = random.choice(citations)
+        return {
+            "book_id": book_id,
+            "title": title or book_dir.name,
+            "author": author or (book_dir.parent.name if book_dir.parent else "Autor Desconhecido"),
+            "page": selected["page"],
+            "text": selected["text"],
+            "note_path": str(note_path),
+        }
 
     def _find_cover_file(self, book_dir: Path) -> Path | None:
         preferred = [book_dir / "cover.png", book_dir / "capa.png"]
@@ -1015,10 +1158,14 @@ class DynamicEventCard(QWidget):
         user_name = self._user_display_name()
 
         self._intervalo_books_cache = self._collect_intervalo_books()
+        self._intervalo_quote_data = self._load_intervalo_quote_data()
         self._refresh_intervalo_library_content()
         self._start_intervalo_chat_animation(user_name, assistant_name)
-        if hasattr(self, "intervalo_chat_view"):
-            self.intervalo_chat_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        if hasattr(self, "intervalo_input_line"):
+            self.intervalo_input_line.setText("")
+            self.intervalo_input_line.setEnabled(True)
+            self.intervalo_input_line.setVisible(True)
+            self.intervalo_input_line.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _start_intervalo_chat_animation(self, user_name: str, assistant_name: str):
         if not hasattr(self, "intervalo_chat_view"):
@@ -1029,22 +1176,52 @@ class DynamicEventCard(QWidget):
         self._intervalo_chat_messages = []
         self._intervalo_assistant_reply_index = 0
         self._intervalo_chat_started_at = datetime.now()
+
         assistant_text = (
-            "Sessão iniciada. Estou organizando suas leituras e preparando o próximo bloco de citações. "
-            "Se quiser, já pode escrever."
+            "Sessão iniciada. Estou organizando seus livros e preparando o próximo bloco de leituras. "
+            "Enquanto isso, se quiser, vá tomar um sol."
         )
+        if self._intervalo_quote_data:
+            assistant_text = (
+                "Sessão iniciada. Estou organizando seus livros e preparando o próximo bloco de leituras. "
+                "Enquanto isso, deixo uma citação do último livro lido:\n\n"
+                f'"{self._intervalo_quote_data["text"]}" (p. {self._intervalo_quote_data["page"]})\n'
+                f'{self._intervalo_quote_data["author"]} — {self._intervalo_quote_data["title"]}'
+            )
 
         self._intervalo_chat_messages = []
-        self._intervalo_chat_full_text = assistant_text
+        self._intervalo_chat_full_text = "Sessão iniciada. Estou organizando seus livros e preparando o próximo bloco de leituras."
         self._intervalo_chat_index = 0
         self._intervalo_chat_active = True
-        self._intervalo_pending_assistant_message = {"name": assistant_name, "text": assistant_text}
+        self._intervalo_pending_assistant_message = {"name": assistant_name, "text": self._intervalo_chat_full_text}
         self._render_intervalo_chat()
         if hasattr(self, "_intervalo_chat_timer") and self._intervalo_chat_timer.isActive():
             self._intervalo_chat_timer.stop()
         self._intervalo_chat_timer.start()
         if hasattr(self, "_intervalo_cursor_timer") and not self._intervalo_cursor_timer.isActive():
             self._intervalo_cursor_timer.start()
+
+        if self._intervalo_quote_data:
+            self._intervalo_chat_messages.append(
+                {
+                    "role": "assistant",
+                    "html": self._build_terminal_line(
+                        assistant_name,
+                        self._intervalo_chat_full_text,
+                        color="#FFB347",
+                        timestamp=self._terminal_timestamp(),
+                    ),
+                }
+            )
+            quote_text = (
+                f'"{self._intervalo_quote_data["text"]}" (p. {self._intervalo_quote_data["page"]}) - '
+                f'{self._intervalo_quote_data["author"]} — {self._intervalo_quote_data["title"]}'
+            )
+            self._intervalo_chat_full_text = quote_text
+            self._intervalo_chat_index = 0
+            self._intervalo_chat_active = True
+            self._intervalo_pending_assistant_message = {"name": assistant_name, "text": quote_text}
+            self._render_intervalo_chat()
 
     def _render_intervalo_chat(self):
         if not hasattr(self, "intervalo_chat_view"):
@@ -1099,15 +1276,6 @@ class DynamicEventCard(QWidget):
             parts.append(f'<div style="margin-bottom:6px;">{message["html"]}</div>')
         if self._intervalo_chat_active or self._intervalo_chat_full_text:
             parts.append(f'<div style="margin-bottom:6px;">{assistant_line}</div>')
-        prompt_cursor = "<span style='color:#D7DCE6;font-weight:700;'>&gt;</span>" if self._intervalo_chat_cursor_visible else "<span style='color:#D7DCE6;font-weight:700; opacity:0;'>&gt;</span>"
-        prompt_line = (
-            f'<div style="margin-top:2px;">'
-            f'{self._build_terminal_prompt(self._user_display_name())}'
-            f'<span style="color:#D7DCE6;">{self._escape_html(self._intervalo_input_buffer)}</span>'
-            f'{prompt_cursor}'
-            f'</div>'
-        )
-        parts.append(prompt_line)
         return (
             "<html><body style='margin:0; padding:0; background:transparent; font-family: \"DejaVu Sans Mono\", \"Noto Sans Mono\", monospace; font-size: 11px; line-height: 1.4; white-space: pre-wrap;'>"
             + "".join(parts)
@@ -1138,48 +1306,30 @@ class DynamicEventCard(QWidget):
             .replace(">", "&gt;")
         )
 
+    def _on_intervalo_input_submitted(self) -> None:
+        if not hasattr(self, "intervalo_input_line"):
+            return
+
+        submitted = str(self.intervalo_input_line.text() or "").strip()
+        if not submitted:
+            return
+
+        user_name = self._user_display_name()
+        self._intervalo_chat_messages.append(
+            {
+                "role": "user",
+                "html": self._build_terminal_line(
+                    user_name,
+                    submitted,
+                    color="#58A6FF",
+                    timestamp=self._terminal_timestamp(),
+                ),
+            }
+        )
+        self.intervalo_input_line.setText("")
+        self._queue_intervalo_assistant_reply()
+
     def _handle_intervalo_keypress(self, event) -> bool:
-        key = event.key()
-        text = event.text() or ""
-
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            submitted = self._intervalo_input_buffer.strip()
-            if submitted:
-                user_name = self._user_display_name()
-                self._intervalo_chat_messages.append(
-                    {
-                        "role": "user",
-                        "html": (
-                            self._build_terminal_line(
-                                user_name,
-                                submitted,
-                                color="#58A6FF",
-                                timestamp=self._terminal_timestamp(),
-                            )
-                        ),
-                    }
-                )
-                self._intervalo_input_buffer = ""
-                self._queue_intervalo_assistant_reply()
-            else:
-                self._render_intervalo_chat()
-            return True
-
-        if key == Qt.Key.Key_Backspace:
-            self._intervalo_input_buffer = self._intervalo_input_buffer[:-1]
-            self._render_intervalo_chat()
-            return True
-
-        if key == Qt.Key.Key_Escape:
-            self._intervalo_input_buffer = ""
-            self._render_intervalo_chat()
-            return True
-
-        if text and not text.isspace() or key == Qt.Key.Key_Space:
-            self._intervalo_input_buffer += " " if key == Qt.Key.Key_Space else text
-            self._render_intervalo_chat()
-            return True
-
         return False
 
     def _queue_intervalo_assistant_reply(self):
