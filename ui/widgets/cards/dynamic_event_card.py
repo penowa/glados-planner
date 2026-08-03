@@ -866,6 +866,71 @@ class DynamicEventCard(QWidget):
             "note_path": str(note_path),
         }
 
+    def _last_scheduled_session_duration(self, book_id: str) -> int:
+        """Tenta localizar a última sessão agendada para `book_id` no `agenda_backend`.
+
+        Retorna a duração em minutos (inteiro), 0 se não encontrado.
+        """
+        if not book_id or not getattr(self, 'agenda_backend', None):
+            return 0
+
+        try:
+            # procure nos últimos 14 dias por eventos com book_id
+            for days_ago in range(0, 14):
+                day = (date.today() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
+                events = []
+                if hasattr(self.agenda_backend, 'get_day_events'):
+                    events = self.agenda_backend.get_day_events(day) or []
+                elif hasattr(self.agenda_backend, 'agenda_manager') and hasattr(self.agenda_backend.agenda_manager, 'get_day_events'):
+                    events = self.agenda_backend.agenda_manager.get_day_events(day) or []
+
+                for ev in reversed(events):
+                    try:
+                        md = ev.get('metadata') if isinstance(ev.get('metadata'), dict) else {}
+                        ev_book_id = ev.get('book_id') or md.get('book_id')
+                        if not ev_book_id:
+                            continue
+                        if str(ev_book_id).strip() != str(book_id).strip():
+                            continue
+
+                        duration = md.get('duration_minutes') or ev.get('duration_minutes')
+                        if isinstance(duration, (int, float)) and int(duration) > 0:
+                            return int(duration)
+
+                        start = ev.get('start')
+                        end = ev.get('end')
+                        if isinstance(start, str) and isinstance(end, str):
+                            try:
+                                s = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                                e = datetime.fromisoformat(end.replace('Z', '+00:00'))
+                                mins = int(max(0, (e - s).total_seconds() / 60))
+                                if mins > 0:
+                                    return mins
+                            except Exception:
+                                pass
+                    except Exception:
+                        continue
+        except Exception:
+            return 0
+
+        return 0
+
+    def _generate_intervalo_fallback(self, title: str, minutes: int) -> str:
+        """Gera uma mensagem sarcástica de fallback mencionando o título e minutos."""
+        try:
+            m = max(0, int(minutes or 0))
+        except Exception:
+            m = 0
+
+        templates = [
+            'Ah, {title} — que leitura inspiradora. Você passou {minutes} minutos nisso; isso conta como exercício intelectual, eu acho.',
+            'Não achei citações. Vi que você rendeu {minutes} minutos a {title}. Impressionante, quase humano.',
+            'Última sessão: {minutes} minutos com {title}. A biblioteca continua indiferente.',
+            'Sem citações disponíveis. Pelo menos você gastou {minutes} minutos com {title} — finja que foi produtivo.'
+        ]
+        choice = random.choice(templates)
+        return choice.format(title=str(title or '—'), minutes=m)
+
     def _find_cover_file(self, book_dir: Path) -> Path | None:
         preferred = [book_dir / "cover.png", book_dir / "capa.png"]
         for candidate in preferred:
@@ -1200,7 +1265,6 @@ class DynamicEventCard(QWidget):
         self._intervalo_chat_timer.start()
         if hasattr(self, "_intervalo_cursor_timer") and not self._intervalo_cursor_timer.isActive():
             self._intervalo_cursor_timer.start()
-
         if self._intervalo_quote_data:
             self._intervalo_chat_messages.append(
                 {
@@ -1222,6 +1286,29 @@ class DynamicEventCard(QWidget):
             self._intervalo_chat_active = True
             self._intervalo_pending_assistant_message = {"name": assistant_name, "text": quote_text}
             self._render_intervalo_chat()
+        else:
+            # fallback: generate sarcastic message referencing last-read book and last scheduled session
+            progress = self._last_read_book_progress()
+            if progress:
+                book_id, title, author = progress
+                mins = self._last_scheduled_session_duration(book_id)
+                fallback = self._generate_intervalo_fallback(title or author, mins)
+                self._intervalo_chat_messages.append(
+                    {
+                        "role": "assistant",
+                        "html": self._build_terminal_line(
+                            assistant_name,
+                            self._intervalo_chat_full_text,
+                            color="#FFB347",
+                            timestamp=self._terminal_timestamp(),
+                        ),
+                    }
+                )
+                self._intervalo_chat_full_text = fallback
+                self._intervalo_chat_index = 0
+                self._intervalo_chat_active = True
+                self._intervalo_pending_assistant_message = {"name": assistant_name, "text": fallback}
+                self._render_intervalo_chat()
 
     def _render_intervalo_chat(self):
         if not hasattr(self, "intervalo_chat_view"):
