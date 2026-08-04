@@ -541,20 +541,7 @@ try:
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO bookmarks(file, id, page) VALUES (?, ?, ?)",
-            (str(pdf_path), f"gcap-{event_id[:10]}", page),
-        )
-        conn.commit()
-except Exception:
-    pass
-PY
-fi
-
-if [[ "$excerpt_source" == "ocr_area" ]]; then
-  notify "GLaDOS capture" "Trecho OCR (olmOCR) enviado para a nota de citacoes."
-elif [[ "$excerpt_source" == "olmocr_unavailable" ]]; then
-  notify "GLaDOS capture" "olmOCR não encontrado. Instale o CLI para capturar citações."
-elif [[ "$excerpt_source" == "olmocr_failed" ]]; then
-  notify "GLaDOS capture" "olmOCR falhou no recorte. Tente selecionar uma área maior."
+            (str(pdf_path), f"gcap-{{event_id[:10]}}", page),
 else
   notify "GLaDOS capture" "Recorte registrado, sem texto detectável."
 fi

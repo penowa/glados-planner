@@ -6,9 +6,11 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from .obsidian.vault_manager import ObsidianNote, ObsidianVaultManager
 
@@ -38,7 +40,7 @@ class LatexMetadata:
 @dataclass(slots=True)
 class LatexExportRequest:
     main_note_path: str
-    references_note_path: str
+    references_note_path: Optional[str]
     metadata: LatexMetadata
     optional_sections: dict[str, str] = field(default_factory=dict)
 
@@ -147,25 +149,88 @@ def _markdown_fallback_to_latex(markdown: str) -> str:
     return "\n\n".join(block for block in blocks if block is not None)
 
 
-def md_to_latex(md_filepath: str) -> str:
+def _is_remote_path(path: str) -> bool:
+    try:
+        parsed = urlparse(path)
+        return parsed.scheme in ("http", "https", "data")
+    except Exception:
+        return False
+
+
+def _copy_images_and_rewrite_md(md_text: str, md_dir: Path, output_dir: Path) -> Path:
+    """
+    Copies local images referenced in the markdown to `output_dir/images`
+    and returns a Path to a rewritten temporary markdown file inside `output_dir`.
+    """
+    images_dir = output_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    def replace(match: re.Match) -> str:
+        orig = match.group(1).strip()
+        if not orig or _is_remote_path(orig):
+            return match.group(0)
+
+        # Resolve source path relative to the markdown file
+        src_path = (md_dir / orig).resolve()
+        if not src_path.exists():
+            return match.group(0)
+
+        dest_name = src_path.name
+        dest_path = images_dir / dest_name
+        # Avoid overwriting files with same name but different content
+        if dest_path.exists() and dest_path.resolve() != src_path.resolve():
+            base = dest_path.stem
+            suffix = dest_path.suffix
+            i = 1
+            while True:
+                candidate = images_dir / f"{base}_{i}{suffix}"
+                if not candidate.exists():
+                    dest_path = candidate
+                    break
+                i += 1
+
+        shutil.copy2(src_path, dest_path)
+        # Return markdown image with new relative path
+        return match.group(0).replace(orig, f"images/{dest_path.name}")
+
+    rewritten = re.sub(r"!\[[^\]]*\]\(([^)]+)\)", replace, md_text)
+    temp_md = output_dir / "__content_for_pandoc__.md"
+    temp_md.write_text(rewritten, encoding="utf-8")
+    return temp_md
+
+
+def md_to_latex(md_filepath: str, output_dir: Optional[Path] = None, vault_root: Optional[Path] = None) -> str:
     """
     Converte um arquivo Markdown para LaTeX usando Pandoc.
-    Faz fallback para um conversor simples quando Pandoc não está disponível.
+    Se `output_dir` e `vault_root` forem passados, copia imagens locais para
+    `output_dir/images` e reescreve o Markdown para que as imagens apontem para lá.
+    Faz fallback para um conversor simples quando Pandoc não estiver disponível.
     """
     pandoc = shutil.which("pandoc")
+    md_path = Path(md_filepath)
+
+    # If an output dir was provided, copy images and rewrite md for Pandoc
+    if output_dir is not None and vault_root is not None:
+        md_dir = md_path.parent
+        md_text = md_path.read_text(encoding="utf-8")
+        md_for_pandoc = _copy_images_and_rewrite_md(md_text, md_dir, output_dir)
+        md_to_process = str(md_for_pandoc)
+    else:
+        md_to_process = str(md_path)
+
     if pandoc:
         try:
             result = subprocess.run(
-                [pandoc, md_filepath, "-f", "markdown", "-t", "latex"],
+                [pandoc, md_to_process, "-f", "markdown", "-t", "latex"],
                 capture_output=True,
                 check=True,
             )
             return _decode_text_bytes(result.stdout)
         except subprocess.CalledProcessError as exc:
             error_output = _decode_text_bytes(exc.stderr or b"")
-            raise RuntimeError(f"Erro ao converter {md_filepath} com Pandoc: {error_output}") from exc
+            raise RuntimeError(f"Erro ao converter {md_to_process} com Pandoc: {error_output}") from exc
 
-    markdown = Path(md_filepath).read_text(encoding="utf-8")
+    markdown = Path(md_to_process).read_text(encoding="utf-8")
     return _markdown_fallback_to_latex(markdown)
 
 
@@ -252,17 +317,62 @@ def prepare_bib_file(ref_path: str, output_dir: Path) -> str:
     return bib_name
 
 
-def compile_pdf(tex_path: Path) -> tuple[bool, str]:
-    """
-    Compila o arquivo .tex usando latexmk.
-    Retorna um tuple com status e log de compilação.
-    """
+def _ensure_pdflatex_format() -> None:
+    """Garante que o formato pdflatex exista antes de compilar."""
+    if not shutil.which("pdflatex"):
+        return
+
+    fmt = shutil.which("fmtutil") or shutil.which("fmtutil-sys")
+    if fmt:
+        subprocess.run([fmt, "--byfmt", "pdflatex"], capture_output=True)
+
+    kpsewhich = shutil.which("kpsewhich")
+    if not kpsewhich:
+        return
+
+    format_path = subprocess.run(
+        [kpsewhich, "pdflatex.fmt"],
+        capture_output=True,
+        text=True,
+    )
+    if format_path.returncode == 0 and format_path.stdout.strip():
+        return
+
+    pdftex = shutil.which("pdftex")
+    if not pdftex:
+        return
+
+    pdflatex_ini = subprocess.run(
+        [kpsewhich, "pdflatex.ini"],
+        capture_output=True,
+        text=True,
+    )
+    if pdflatex_ini.returncode != 0 or not pdflatex_ini.stdout.strip():
+        return
+
+    latex_ltx = subprocess.run(
+        [kpsewhich, "latex.ltx"],
+        capture_output=True,
+        text=True,
+    )
+    if latex_ltx.returncode != 0 or not latex_ltx.stdout.strip():
+        return
+
+    subprocess.run(
+        [pdftex, "-ini", "-jobname=pdflatex", "-interaction=nonstopmode"],
+        input="\\input pdflatex.ini\n\\dump\n",
+        text=True,
+        capture_output=True,
+    )
+
+
+def _run_latexmk(tex_path: Path, args: list[str]) -> tuple[bool, str]:
     latexmk = shutil.which("latexmk")
     if not latexmk:
         return False, "latexmk não encontrado no sistema."
 
     result = subprocess.run(
-        [latexmk, "-pdf", "-interaction=nonstopmode", tex_path.name],
+        [latexmk, *args, "-interaction=nonstopmode", tex_path.name],
         cwd=str(tex_path.parent),
         capture_output=True,
     )
@@ -270,6 +380,35 @@ def compile_pdf(tex_path: Path) -> tuple[bool, str]:
     stderr = _decode_text_bytes(result.stderr or b"")
     log = "\n".join(part for part in [stdout, stderr] if part).strip()
     return result.returncode == 0, log
+
+
+def compile_pdf(tex_path: Path) -> tuple[bool, str]:
+    """
+    Compila o arquivo .tex usando latexmk.
+    Retorna um tuple com status e log de compilação.
+    """
+    if not shutil.which("latexmk"):
+        return False, "latexmk não encontrado no sistema."
+
+    _ensure_pdflatex_format()
+
+    success, log = _run_latexmk(tex_path, ["-pdf"])
+    if success:
+        return True, log
+
+    if shutil.which("xelatex"):
+        success, xelog = _run_latexmk(tex_path, ["-pdfxe", "-pdf", "-xelatex=xelatex"])
+        if success:
+            return True, xelog
+        log = xelog
+
+    if shutil.which("lualatex"):
+        success, lulog = _run_latexmk(tex_path, ["-pdf", "-lualatex"])
+        if success:
+            return True, lulog
+        log = lulog
+
+    return False, log
 
 
 def extract_latex_error_summary(compiler_log: str) -> str:
@@ -345,23 +484,33 @@ class LatexExporter:
 
     def export_from_request(self, request: LatexExportRequest) -> LatexExportResult:
         main_note = self.get_note(request.main_note_path)
-        ref_note = self.get_note(request.references_note_path)
+        ref_note = None
+        if request.references_note_path:
+            ref_note = self.get_note(request.references_note_path)
         self._validate_request(main_note, ref_note)
 
         title = self.extract_title(main_note)
         output_dir = self._build_output_dir(main_note)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Diretório de trabalho temporário para gerar .tex e arquivos auxiliares.
+        work_dir_path = Path(tempfile.mkdtemp(prefix="latex_build_", dir=str(output_dir)))
+
         main_md_path = self.vault_path / main_note.path
         ref_md_path = self.vault_path / ref_note.path
         warnings: list[str] = []
 
-        conteudo_latex = md_to_latex(str(main_md_path))
-        bib_name = prepare_bib_file(str(ref_md_path), output_dir)
-        bib_path = output_dir / f"{bib_name}.bib"
+        # Converter markdown e copiar imagens/referências para o diretório de trabalho
+        conteudo_latex = md_to_latex(str(main_md_path), output_dir=work_dir_path, vault_root=self.vault_path)
+        bib_name = None
+        bib_path = Path("")
+        if ref_note is not None:
+            ref_md_path = self.vault_path / ref_note.path
+            bib_name = prepare_bib_file(str(ref_md_path), work_dir_path)
+            bib_path = work_dir_path / f"{bib_name}.bib"
 
         optional_sections_latex = {
-            key: self._load_optional_section(path)
+            key: self._load_optional_section(path, output_dir)
             for key, path in (request.optional_sections or {}).items()
         }
 
@@ -373,20 +522,27 @@ class LatexExporter:
             optional_sections=optional_sections_latex,
         )
 
-        tex_path = output_dir / "dissertacao.tex"
+        tex_path = work_dir_path / "dissertacao.tex"
         tex_path.write_text(tex_content, encoding="utf-8")
 
         compiled_pdf, compiler_log = compile_pdf(tex_path)
-        pdf_path = tex_path.with_suffix(".pdf")
-        if compiled_pdf and not pdf_path.exists():
-            warnings.append(
-                "latexmk retornou sucesso, mas o PDF esperado não foi encontrado no caminho padrão."
-            )
-            compiled_pdf = False
-        if not compiled_pdf:
-            error_summary = extract_latex_error_summary(compiler_log)
-            if error_summary:
-                warnings.append(f"Erro de compilação LaTeX: {error_summary}")
+        pdf_in_work = tex_path.with_suffix(".pdf")
+        pdf_path = output_dir / pdf_in_work.name
+
+        if compiled_pdf and pdf_in_work.exists():
+            # Mover PDF final para o diretório de saída e limpar arquivos temporários
+            shutil.move(str(pdf_in_work), str(pdf_path))
+            try:
+                shutil.rmtree(work_dir_path)
+            except Exception:
+                # Não falhar se remoção não for possível
+                pass
+        else:
+            # Em caso de falha, manter os artefatos no diretório de trabalho para debug
+            if not compiled_pdf:
+                error_summary = extract_latex_error_summary(compiler_log)
+                if error_summary:
+                    warnings.append(f"Erro de compilação LaTeX: {error_summary}")
 
         if not compiled_pdf and "pandoc" not in warnings and not shutil.which("pandoc"):
             warnings.append("Pandoc não encontrado; foi usado um conversor Markdown simplificado.")
@@ -406,20 +562,22 @@ class LatexExporter:
     def _validate_request(self, main_note: ObsidianNote, ref_note: ObsidianNote) -> None:
         if not str(main_note.path).replace("\\", "/").startswith(f"{self.production_dir.as_posix()}/"):
             raise LatexExportValidationError("A nota principal precisa estar em 03-PRODUÇÃO.")
-        if not str(ref_note.path).replace("\\", "/").startswith(f"{self.production_dir.as_posix()}/"):
-            raise LatexExportValidationError("A nota de referências precisa estar em 03-PRODUÇÃO.")
+        if ref_note is not None:
+            if not str(ref_note.path).replace("\\", "/").startswith(f"{self.production_dir.as_posix()}/"):
+                raise LatexExportValidationError("A nota de referências precisa estar em 03-PRODUÇÃO.")
+            if not ref_note.path.name.lower().startswith("ref."):
+                raise LatexExportValidationError("A nota de referências precisa ter prefixo ref.")
         if main_note.path.name.lower().startswith("ref."):
             raise LatexExportValidationError("A nota principal não pode ter prefixo ref.")
-        if not ref_note.path.name.lower().startswith("ref."):
-            raise LatexExportValidationError("A nota de referências precisa ter prefixo ref.")
+        
 
     def _build_output_dir(self, main_note: ObsidianNote) -> Path:
         note_dir = main_note.path.parent.relative_to(self.production_dir)
         return self.exports_root / note_dir / main_note.path.stem
 
-    def _load_optional_section(self, relative_path: str) -> str:
+    def _load_optional_section(self, relative_path: str, output_dir: Path) -> str:
         note = self.get_note(relative_path)
-        return md_to_latex(str(self.vault_path / note.path))
+        return md_to_latex(str(self.vault_path / note.path), output_dir=output_dir, vault_root=self.vault_path)
 
     def _render_template(
         self,
@@ -433,7 +591,7 @@ class LatexExporter:
         template = self.template_path.read_text(encoding="utf-8")
         replacements = {
             "__TITULO__": title,
-            "__AUTOR__": metadata.author,
+            "__AUTOR__": metadata.author or " ",
             "__ORIENTADOR__": metadata.advisor,
             "__INSTITUICAO__": metadata.institution,
             "__PROGRAMA__": metadata.program,
@@ -442,7 +600,8 @@ class LatexExporter:
             "__ANO__": metadata.year,
             "__PREAMBULO__": self._build_preambulo(metadata),
             "__CONTEUDO_LATEX__": conteudo_latex,
-            "__ARQUIVO_BIB__": bib_name,
+            "__ARQUIVO_BIB__": bib_name or "",
+            "__BIBLIOGRAPHY_BLOCK__": (f"\\bibliographystyle{{plain}}\\n\\bibliography{{{bib_name}}}" if bib_name else ""),
             "__COORIENTADOR_BLOCK__": self._coadvisor_block(metadata.coadvisor),
             "__VERSAO_BLOCK__": "",
             "__VOLUME_BLOCK__": "",

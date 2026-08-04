@@ -15,7 +15,9 @@ markdown>=3.5.2
 
 # LaTeX Export
 # Requer dependências de sistema para compilação completa do PDF:
-# `latexmk` ou `pdflatex` + (`biber` ou `bibtex`) e a classe `abntex2`.
+# `latexmk`, `pdflatex` + (`biber` ou `bibtex`) e a classe `abntex2`.
+# No Debian/Ubuntu/Fedora instale os pacotes TeX Live correspondentes.
+# No Arch Linux instale `texlive-binextra`, `texlive-latex`, `texlive-publishers` e `biber`.
 
 # LLM & NLP
 litellm>=1.72.0

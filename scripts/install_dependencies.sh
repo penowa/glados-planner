@@ -189,6 +189,11 @@ install_system_dependencies() {
                 qt6-base
                 wl-clipboard
                 xclip
+                texlive-binextra
+                texlive-latex
+                texlive-latexrecommended
+                texlive-publishers
+                biber
             )
             obsidian_packages=(obsidian)
             zathura_packages=(
@@ -227,6 +232,7 @@ install_system_dependencies() {
                 wl-clipboard
                 xclip
                 flatpak
+                latexmk
             )
             zathura_packages=(
                 zathura
@@ -254,6 +260,7 @@ install_system_dependencies() {
                 wl-clipboard
                 xclip
                 flatpak
+                latexmk
             )
             zathura_packages=(
                 zathura

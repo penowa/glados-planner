@@ -4,9 +4,16 @@
     twoside
 ]{abntex2}
 
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{lmodern}
+\usepackage{ifluatex}
+\usepackage{ifxetex}
+\ifnum 0\ifxetex 1\fi\ifluatex 1\fi=0
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\else
+  \usepackage{fontspec}
+  \setmainfont{TeX Gyre Termes}
+\fi
 \usepackage[alf]{abntex2cite}
 \usepackage{hyperref}
 \setcounter{secnumdepth}{0}
@@ -23,11 +30,28 @@ __COORIENTADOR_BLOCK__
 
 \begin{document}
 
+% --- Elementos pré-textuais obrigatórios ---
 \imprimircapa
+\imprimirfolhaderosto
+__IMPRIMIR_FICHA_BLOCK__
 \cleardoublepage
 
+% Resumo / Abstract (se fornecidos)
+__RESUMO_BLOCK__
+
+__ABSTRACT_BLOCK__
+
+% Listas e sumário
+__LISTA_ILUSTRACOES_BLOCK__
+__LISTA_TABELAS_BLOCK__
+\tableofcontents
+\cleardoublepage
+
+% --- Conteúdo principal ---
 __CONTEUDO_LATEX__
 
-\bibliography{__ARQUIVO_BIB__}
+% --- Referências ---
+\cleardoublepage
+__BIBLIOGRAPHY_BLOCK__
 
 \end{document}

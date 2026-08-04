@@ -399,6 +399,20 @@ class SettingsDialog(QDialog):
         ("midnight_lilac", "Lilac Night"),
     ]
 
+    ZATHURA_PRESET_STYLES = {
+        "classic": {"bg": "#1F2937", "fg": "#E5E7EB", "border": "#4B5563", "accent": "#7C3AED"},
+        "pywal": {"bg": "#2E3440", "fg": "#D8DEE9", "border": "#88C0D0", "accent": "#81A1C1"},
+        "focus": {"bg": "#111827", "fg": "#F8FAFC", "border": "#2563EB", "accent": "#60A5FA"},
+        "midnight_lilac": {"bg": "#1E2740", "fg": "#D8B4FE", "border": "#A78BFA", "accent": "#C084FC"},
+    }
+
+    ZATHURA_PRESET_DESCRIPTIONS = {
+        "classic": "Configuração padrão com fundo escuro suave e texto claro para leitura confortável.",
+        "pywal": "Tema baseado em Pywal: cores inspiradas no seu esquema de desktop, com foco em contraste natural.",
+        "focus": "Modo de foco em tela cheia, com recolor automático e interface limpa para concentração.",
+        "midnight_lilac": "Tema noturno lilás, com fundo escuro, texto suave e destaques em roxo para leitura noturna.",
+    }
+
     def __init__(self, parent=None, settings_path: str = "config/settings.yaml"):
         super().__init__(parent)
         self.settings_path = settings_path
@@ -758,14 +772,81 @@ class SettingsDialog(QDialog):
         self.zathura_preset_group = QButtonGroup(self)
         self.zathura_preset_group.setExclusive(True)
 
-        preset_buttons = QHBoxLayout()
-        for preset_id, label in self.ZATHURA_PRESETS:
+        preset_cards = QGridLayout()
+        preset_cards.setSpacing(12)
+        for index, (preset_id, label) in enumerate(self.ZATHURA_PRESETS):
+            card = QWidget()
+            card_layout = QVBoxLayout(card)
+            card_layout.setSpacing(6)
+            card_layout.setContentsMargins(8, 8, 8, 8)
+
             button = QPushButton(label)
             button.setCheckable(True)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            style = self.ZATHURA_PRESET_STYLES.get(preset_id, {})
+            button.setStyleSheet(
+                "QPushButton {"
+                f"background: {style.get('bg', '#2D3748')};"
+                f"color: {style.get('fg', '#F8FAFC')};"
+                f"border: 1px solid {style.get('border', '#4A5568')};"
+                "border-radius: 10px;"
+                "padding: 12px 14px;"
+                "text-align: left;"
+                "}"
+                "QPushButton:checked {"
+                "border-width: 2px;"
+                "border-color: #F59E0B;"
+                "}"
+            )
+            button.clicked.connect(lambda _checked, preset_id=preset_id: self._on_zathura_preset_selected(preset_id))
             self.zathura_preset_group.addButton(button)
             self._zathura_preset_buttons[preset_id] = button
-            preset_buttons.addWidget(button)
-        layout.addLayout(preset_buttons)
+            card_layout.addWidget(button)
+
+            preview_row = QHBoxLayout()
+            for color_key in ("bg", "fg", "accent"):
+                chip = QLabel()
+                chip.setFixedSize(16, 16)
+                chip.setStyleSheet(
+                    f"background: {style.get(color_key, '#444444')}; border-radius: 8px;"
+                )
+                preview_row.addWidget(chip)
+            preview_row.addStretch(1)
+            card_layout.addLayout(preview_row)
+
+            description_label = QLabel(self.ZATHURA_PRESET_DESCRIPTIONS.get(preset_id, ""))
+            description_label.setWordWrap(True)
+            description_label.setStyleSheet("color: #D1D5DB; font-size: 11px;")
+            card_layout.addWidget(description_label)
+
+            card.setStyleSheet("QWidget { background: #111827; border: 1px solid #2C2F39; border-radius: 10px; }")
+            preset_cards.addWidget(card, index // 2, index % 2)
+
+        layout.addLayout(preset_cards)
+
+        self.zathura_preset_legend_label = QLabel(
+            "<b>Legenda:</b> bolinhas mostram Fundo, Fonte e Acento de cada tema. "
+            "Selecione um preset para atualizar os campos abaixo automaticamente."
+        )
+        self.zathura_preset_legend_label.setWordWrap(True)
+        self.zathura_preset_legend_label.setStyleSheet("color: #9CA3AF; font-size: 12px;")
+        layout.addWidget(self.zathura_preset_legend_label)
+
+        display_form = QFormLayout()
+        self.zathura_default_bg_input = QLineEdit()
+        self.zathura_default_bg_input.setPlaceholderText("#000000")
+        self.zathura_default_fg_input = QLineEdit()
+        self.zathura_default_fg_input.setPlaceholderText("#FFFFFF")
+        display_form.addRow("Cor de fundo:", self.zathura_default_bg_input)
+        display_form.addRow("Cor da fonte:", self.zathura_default_fg_input)
+        layout.addLayout(display_form)
+
+        display_hint = QLabel(
+            "Defina cores de exibição do Zathura. Use valores hex como #RRGGBB ou nomes válidos do Zathura."
+        )
+        display_hint.setWordWrap(True)
+        display_hint.setStyleSheet("color: #8F8F8F; font-size: 12px;")
+        layout.addWidget(display_hint)
 
         action_buttons = QHBoxLayout()
         self.zathura_apply_preset_button = QPushButton("Aplicar preset")
@@ -844,6 +925,9 @@ class SettingsDialog(QDialog):
 
         self._zathura_working_model = zathura.model_copy(deep=True)
         self._set_zathura_preset_selection(self._infer_zathura_preset(zathura))
+        extra_options = dict(getattr(zathura, "extra_options", {}) or {})
+        self.zathura_default_bg_input.setText(str(extra_options.get("default-bg", "") or ""))
+        self.zathura_default_fg_input.setText(str(extra_options.get("default-fg", "") or ""))
 
         self.feature_llm.setChecked(features.enable_llm)
         self.feature_obsidian.setChecked(features.enable_obsidian_sync)
@@ -1005,8 +1089,8 @@ class SettingsDialog(QDialog):
                     "notification-error-fg": "#151D31",
                     "notification-warning-bg": "#4C8EC5",
                     "notification-warning-fg": "#151D31",
-                    "recolor-lightcolor": "#1E2740",
-                    "recolor-darkcolor": "#9FC0E5",
+                    "recolor-lightcolor": "#9FC0E5",
+                    "recolor-darkcolor": "#1E2740",
                     "render-loading-bg": "#1E2740",
                     "render-loading-fg": "#4C8EC5",
                     "index-bg": "#1E2740",
@@ -1023,9 +1107,17 @@ class SettingsDialog(QDialog):
         model.session_open_mode = "normal"
         return model
 
+    def _on_zathura_preset_selected(self, preset_id: str):
+        self._set_zathura_preset_selection(preset_id)
+        self._zathura_working_model = self._preset_model(preset_id)
+        self.zathura_default_bg_input.setText(str(self._zathura_working_model.extra_options.get("default-bg", "")))
+        self.zathura_default_fg_input.setText(str(self._zathura_working_model.extra_options.get("default-fg", "")))
+
     def _apply_selected_zathura_preset(self):
         preset_id = self._selected_zathura_preset()
         self._zathura_working_model = self._preset_model(preset_id)
+        self.zathura_default_bg_input.setText(str(self._zathura_working_model.extra_options.get("default-bg", "")))
+        self.zathura_default_fg_input.setText(str(self._zathura_working_model.extra_options.get("default-fg", "")))
         success, message = self._save_zathura_settings_only(self._build_zathura_model_from_form())
         if success:
             QMessageBox.information(self, "Zathura", message)
@@ -1068,6 +1160,22 @@ class SettingsDialog(QDialog):
     def _build_zathura_model_from_form(self):
         model = self._zathura_working_model.model_copy(deep=True)
         model.preset = self._selected_zathura_preset()
+
+        extra_options = dict(getattr(model, "extra_options", {}) or {})
+        default_bg = str(self.zathura_default_bg_input.text().strip() or "")
+        default_fg = str(self.zathura_default_fg_input.text().strip() or "")
+
+        if default_bg:
+            extra_options["default-bg"] = default_bg
+        else:
+            extra_options.pop("default-bg", None)
+
+        if default_fg:
+            extra_options["default-fg"] = default_fg
+        else:
+            extra_options.pop("default-fg", None)
+
+        model.extra_options = extra_options
         return model
 
     def _apply_zathura_form_to_settings_model(self):
